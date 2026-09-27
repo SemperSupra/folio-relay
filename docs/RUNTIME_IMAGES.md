@@ -147,6 +147,8 @@ independent authority envelope.
 | cups | minimized startup exception | IPP + explicitly selected discovery/printer networks | CUPS config + accepted-job spool only | USB only when explicitly enabled | experimentally minimized CUPS set | CUPS-local bootstrap secret only if still required |
 | cups-agent | preferably non-root peer identity | none or local-only | CUPS socket/runtime state + desired queue subset | none | none | none |
 | renderer | non-root | **none by default** | read-only input + bounded output/scratch | none | none | none |
+| inspector-local | non-root | none/local Unix socket only | read-only artifact input + scanner state as required | none | none | scanner-specific only |
+| inspector-external | non-root | explicit inspector endpoint only | read-only artifact stream + result cache | none | none | only that inspector's scoped secret |
 | real sender | non-root | channel-specific egress only | channel outbox + result state | none | none | only that sender's scoped secret |
 
 The CUPS container should not mount the general user document store when a
@@ -185,7 +187,7 @@ automation has resolved the current approved digest.
 At bootstrap time:
 
 - Alpine 3.24 stable is a candidate for the CUPS image;
-- Debian 13 distroless Python `nonroot` is a candidate for the Python core.
+- Debian 13 distroless static `nonroot` is the preferred candidate for role-specific static Go binaries.
 
 Base selection is evidence-driven rather than ideological.  Size, CVE burden,
 architecture support, CUPS/Python compatibility, debugging/operations, and
@@ -198,7 +200,7 @@ Production builds pin/verify:
 - base-image digest;
 - package/repository release;
 - source commit/tag plus checksum when source compilation is unavoidable;
-- Python/application dependency lock if external packages are introduced;
+- Go module/toolchain lock and checksums for application dependencies;
 - build actions by immutable commit SHA.
 
 No `curl | sh`, unverified tarball download, floating Git branch, or
