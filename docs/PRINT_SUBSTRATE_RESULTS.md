@@ -210,3 +210,43 @@ It remains useful as:
 - a negative-space reference for the minimum protocol surface.
 
 It is not a production candidate unless upstream semantics materially change.
+
+## Phase 2 — CUPS and PAPPL upstream pressure baseline
+
+### CUPS 2.4.19
+
+The stripped-build CUPS lane completed its upstream scheduler/unit test suite
+successfully in public GHA.
+
+Result: **survives to deeper FolioRelay-specific qualification**.
+
+This is not yet a production pass: the next CUPS work must use a
+FolioRelay-owned runtime install manifest and real FolioRelay virtual queue
+handoff, then repeat concurrency/failure tests against that exact deployment.
+
+### PAPPL 1.4.11
+
+The first upstream high-load run executed 100 clients x 1,000 requests:
+
+- total requests: 100,000;
+- measured throughput: approximately 945 requests/second;
+- errors: 12;
+- elapsed: approximately 105.84 seconds.
+
+Result: **not rejected, but not yet zero-error qualified**.
+
+This workload is an upstream framework stress test dominated by
+Get-Printer-Attributes requests, not a FolioRelay print-job acceptance test.
+The error rate therefore cannot be directly translated into production print
+failure probability.
+
+The autonomous workflow has been changed to measure a stepped concurrency
+frontier, including a required 100-client/10,000-request zero-error gate, plus
+larger characterization tiers. A minimal FolioRelay PAPPL application is still
+required before product selection.
+
+### Current production-candidate set
+
+- `ippeveprinter`: **rejected** for production ingress; retain as oracle.
+- minimal custom-built `cupsd`: **active candidate**.
+- minimal PAPPL service: **active candidate with concurrency investigation**.
