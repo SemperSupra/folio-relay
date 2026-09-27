@@ -1,4 +1,4 @@
-schema_version: 1
+schema_version: 2
 product: FolioRelay
 experiment: print-substrate-bakeoff
 autonomous: true
@@ -20,49 +20,58 @@ candidates:
     hypothesis: general scheduler can be sufficiently subordinated and stripped
     permanent_fork_allowed: false
     phase0: pass
-    upstream_suite: pass
-    production_status: active-candidate
-    production_status: active-candidate
     upstream_scheduler_suite: pass
+    production_status: active-candidate
+
   ippeveprinter:
     hypothesis: simple upstream IPP Everywhere server is sufficient as ingress
     permanent_fork_allowed: false
     phase0: pass
     production_status: vetoed
-    retain_as_oracle: true
-    veto_reasons:
-      - upstream implementation accepts only one active job at a time
-      - 100-job concurrent burst accepted 6 and returned server-error-busy for 94
-      - fixing queueing would require a source fork or an additional ingress queue that defeats the minimal-substrate goal
-    production_status: rejected
-    rejection_evidence:
-      reason: single-active-job-concurrency
-      attempts: 100
-      successes: 8
-      failures: 92
-      observed_status: server-error-busy
     retained_role: interoperability-and-protocol-oracle
+    veto_reasons:
+      - upstream implementation explicitly accepts only one active job at a time
+      - concurrent bursts return IPP server-error-busy while another job is printing
+      - adding a queue or patching upstream would defeat the no-fork/minimal-substrate objective
+    concurrency_observations:
+      - attempts: 100
+        accepted: 6
+        rejected_or_failed: 94
+        observed_status: server-error-busy
+      - attempts: 100
+        accepted: 8
+        rejected_or_failed: 92
+        observed_status: server-error-busy
+
   pappl:
     hypothesis: production-oriented IPP framework can be constrained to a narrow adapter
     permanent_fork_allowed: false
     phase0: pass
     production_status: active-candidate
-    concurrency_evidence:
-      25x100: pass
-      100x100: pass
-      250x100: pass
-      500x20: pass
-      100x1000:
+    concurrency_observations:
+      - clients: 25
+        requests_per_client: 100
+        status: pass
+        errors: 0
+      - clients: 100
+        requests_per_client: 100
+        status: pass
+        errors: 0
+      - clients: 250
+        requests_per_client: 100
+        status: pass
+        errors: 0
+      - clients: 500
+        requests_per_client: 20
+        status: pass
+        errors: 0
+      - clients: 100
+        requests_per_client: 1000
         status: characterization-degraded
-        errors: 7
-    production_status: active-candidate
-    initial_pressure:
-      clients: 100
-      requests_per_client: 1000
-      total_requests: 100000
-      requests_per_second: 945
-      errors: 12
-      status: requires-characterization
+        observed_errors:
+          - 7
+          - 12
+        note: repeated long-run observations vary and require root-cause characterization
 
 veto_gates:
   - native_ipp_interoperability
