@@ -542,7 +542,10 @@ jobs:
           mkdir -p "$RUNNER_TEMP/evidence" "$RUNNER_TEMP/ingress" "$RUNNER_TEMP/state"
           mkdir -p "$base"/{bin/backend,bin/filter,spool/temp,log,ppd,cache}
 
-          install -m 0755 experiments/print-substrate/cups-backend.sh "$base/bin/backend/foliorelay"
+          # CUPS refuses to execute filters/backends that are not root-owned
+          # or are group/world writable. Keep the qualification backend immutable
+          # to the unprivileged scheduler user while executing it as that user.
+          sudo install -o root -g root -m 0555 experiments/print-substrate/cups-backend.sh "$base/bin/backend/foliorelay"
           install -m 0644 experiments/print-substrate/cups-foliorelay.ppd "$base/ppd/FolioRelay.ppd"
 
           user="$(id -un)"
