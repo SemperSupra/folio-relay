@@ -130,3 +130,32 @@ func TestJournalRejectsEmptyAndOversizedRecord(t *testing.T) {
 		t.Fatalf("expected oversized record rejection, got %v", err)
 	}
 }
+
+func TestJournalAllowsOnlyOneActiveWriter(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "journal.frj")
+	first, err := OpenJournal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+
+	second, err := OpenJournal(path)
+	if second != nil {
+		second.Close()
+		t.Fatal("second writer unexpectedly acquired journal")
+	}
+	if !errors.Is(err, ErrJournalLocked) {
+		t.Fatalf("expected active-writer lock error, got %v", err)
+	}
+
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	first = nil
+
+	reopened, err := OpenJournal(path)
+	if err != nil {
+		t.Fatalf("journal lock was not released on close: %v", err)
+	}
+	reopened.Close()
+}
