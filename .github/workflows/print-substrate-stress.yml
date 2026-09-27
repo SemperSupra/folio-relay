@@ -139,13 +139,26 @@ jobs:
             sleep 1
           done
           curl -fsS http://127.0.0.1:18080/v1/stats | tee "$RUNNER_TEMP/evidence/concurrent-stats.json"
-          python3 - "$RUNNER_TEMP/evidence/concurrent-stats.json" "$RUNNER_TEMP/evidence/concurrent-client-results.json" <<'PY'
+          python3 - "$RUNNER_TEMP/evidence/concurrent-stats.json" "$RUNNER_TEMP/evidence/concurrent-client-results.json" "$RUNNER_TEMP/evidence/concurrent-failures.txt" <<'PY'
           import json, pathlib, sys
           stats=json.loads(pathlib.Path(sys.argv[1]).read_text())
           clients=json.loads(pathlib.Path(sys.argv[2]).read_text())
+          failures=pathlib.Path(sys.argv[3]).read_text(errors="replace") if pathlib.Path(sys.argv[3]).exists() else ""
           assert stats["accepted"] == clients["successes"], (stats, clients)
           assert stats["conflicts"] == 0, stats
-          assert clients["successes"] == 100, clients
+          assert clients["successes"] > 0, clients
+          assert clients["failures"] > 0, clients
+          assert "server-error-busy" in failures or "Currently printing another job" in failures, failures
+          status={
+              "candidate":"ippeveprinter",
+              "production_status":"vetoed",
+              "reason":"upstream accepts only one active job at a time",
+              "attempts":clients["attempts"],
+              "accepted":clients["successes"],
+              "busy_or_failed":clients["failures"],
+          }
+          pathlib.Path(sys.argv[2]).with_name("ippeve-candidate-status.json").write_text(json.dumps(status, indent=2)+"\n")
+          print(json.dumps(status, indent=2))
           PY
           test "$(find "$RUNNER_TEMP/ingress/sha256" -type f | wc -l)" -eq 1
 
