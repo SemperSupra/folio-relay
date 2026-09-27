@@ -396,14 +396,7 @@ jobs:
             [ "$accepted" -ge 1 ] && break
             sleep 1
           done
-          if [ "$accepted" -lt 1 ]; then
-            echo "CUPS accepted the IPP job but FolioRelay observed no committed ingest" >&2
-            cp "$RUNNER_TEMP/cups-runtime/log/error_log" "$RUNNER_TEMP/evidence/cups-error.log" 2>/dev/null || true
-            cat "$RUNNER_TEMP/evidence/cups-error.log" >&2 2>/dev/null || true
-            lpstat -h 127.0.0.1:8634 -W all -o >"$RUNNER_TEMP/evidence/lpstat-jobs.txt" 2>&1 || true
-            cat "$RUNNER_TEMP/evidence/lpstat-jobs.txt" >&2 || true
-            exit 1
-          fi
+          test "$accepted" -ge 1
 
           expected="$(sha256sum "$RUNNER_TEMP/sample.pdf" | awk '{print $1}')"
           object="$RUNNER_TEMP/ingress/sha256/${expected:0:2}/$expected"
@@ -579,7 +572,7 @@ jobs:
           Listen 127.0.0.1:8634
           Listen $base/cups.sock
           MaxLogSize 0
-          LogLevel warn
+          LogLevel debug2
           PreserveJobFiles Off
           PreserveJobHistory 30
           <Location />
@@ -674,7 +667,14 @@ jobs:
             [ "$accepted" -ge 1 ] && break
             sleep 1
           done
-          test "$accepted" -ge 1
+          if [ "$accepted" -lt 1 ]; then
+            echo "CUPS accepted the IPP job but FolioRelay observed no committed ingest" >&2
+            cp "$RUNNER_TEMP/cups-runtime/log/error_log" "$RUNNER_TEMP/evidence/cups-error.log" 2>/dev/null || true
+            cat "$RUNNER_TEMP/evidence/cups-error.log" >&2 2>/dev/null || true
+            lpstat -h 127.0.0.1:8634 -W all -o >"$RUNNER_TEMP/evidence/lpstat-jobs.txt" 2>&1 || true
+            cat "$RUNNER_TEMP/evidence/lpstat-jobs.txt" >&2 || true
+            exit 1
+          fi
 
           expected="$(sha256sum "$RUNNER_TEMP/sample.pdf" | awk '{print $1}')"
           prefix="$(printf %.2s "$expected")"
