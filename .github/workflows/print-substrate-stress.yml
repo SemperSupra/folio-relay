@@ -88,7 +88,7 @@ jobs:
           echo $! >"$RUNNER_TEMP/evidence/state.pid"
 
           mkdir -p "$RUNNER_TEMP/ippeve-spool"
-          FOLIORELAY_STATE_URL=http://127.0.0.1:18080           FOLIORELAY_INGRESS_STORE="$RUNNER_TEMP/ingress"           FOLIORELAY_MAX_INGRESS_BYTES=104857600           "$RUNNER_TEMP/cups/tools/ippeveprinter-static"             -r off -p 8632 -d "$RUNNER_TEMP/ippeve-spool" -k             -f application/pdf,image/pwg-raster             -c "$RUNNER_TEMP/bin/foliorelay-ipp-ingest"             "FolioRelay Stress"             >"$RUNNER_TEMP/evidence/ippeve.log" 2>&1 &
+          FOLIORELAY_STATE_URL=http://127.0.0.1:18080           FOLIORELAY_INGRESS_STORE="$RUNNER_TEMP/ingress"           FOLIORELAY_MAX_INGRESS_BYTES=104857600           FOLIORELAY_SUBSTRATE_INSTANCE="gha-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"           "$RUNNER_TEMP/cups/tools/ippeveprinter-static"             -r off -p 8632 -d "$RUNNER_TEMP/ippeve-spool" -k             -f application/pdf,image/pwg-raster             -c "$RUNNER_TEMP/bin/foliorelay-ipp-ingest"             "FolioRelay Stress"             >"$RUNNER_TEMP/evidence/ippeve.log" 2>&1 &
           echo $! >"$RUNNER_TEMP/evidence/ippeve.pid"
 
           for i in $(seq 1 45); do
