@@ -84,7 +84,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          "$RUNNER_TEMP/bin/foliorelay-state-fixture" -listen 127.0.0.1:18080             >"$RUNNER_TEMP/evidence/state.log" 2>&1 &
+          mkdir -p "$RUNNER_TEMP/state"
+          "$RUNNER_TEMP/bin/foliorelay-state-fixture" -listen 127.0.0.1:18080             -journal "$RUNNER_TEMP/state/journal.frj"             >"$RUNNER_TEMP/evidence/state.log" 2>&1 &
           echo $! >"$RUNNER_TEMP/evidence/state.pid"
 
           mkdir -p "$RUNNER_TEMP/ippeve-spool"
@@ -156,6 +157,7 @@ jobs:
           IPP_COPIES: "1000000"
           FOLIORELAY_STATE_URL: http://127.0.0.1:18080
           FOLIORELAY_INGRESS_STORE: ${{ runner.temp }}/ingress
+          FOLIORELAY_SUBSTRATE_INSTANCE: gha-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           set -euo pipefail
           if "$RUNNER_TEMP/bin/foliorelay-ipp-ingest" "$RUNNER_TEMP/sample.pdf"               >"$RUNNER_TEMP/evidence/million-copy.out"               2>"$RUNNER_TEMP/evidence/million-copy.err"; then
@@ -199,29 +201,78 @@ jobs:
           ipptool -q ipp://127.0.0.1:8632/ipp/print             "$RUNNER_TEMP/cups/examples/get-printer-attributes.test"
           curl -fsS http://127.0.0.1:18080/health -o /dev/null
 
-      - name: State-authority outage fails closed
+      - name: State-authority outage fails closed and restart recovers
         shell: bash
+        env:
+          FOLIORELAY_SUBSTRATE_INSTANCE: gha-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           set -euo pipefail
+
+          # Establish a deterministic durable command before the crash.
+          CONTENT_TYPE=application/pdf \
+          IPP_JOB_ID=restart-probe \
+          FOLIORELAY_STATE_URL=http://127.0.0.1:18080 \
+          FOLIORELAY_INGRESS_STORE="$RUNNER_TEMP/ingress" \
+          "$RUNNER_TEMP/bin/foliorelay-ipp-ingest" "$RUNNER_TEMP/sample.pdf" \
+            >"$RUNNER_TEMP/evidence/restart-probe-before.out" \
+            2>"$RUNNER_TEMP/evidence/restart-probe-before.err"
+
           kill "$(cat "$RUNNER_TEMP/evidence/state.pid")"
           wait "$(cat "$RUNNER_TEMP/evidence/state.pid")" || true
 
-          CONTENT_TYPE=application/pdf           IPP_JOB_ID=authority-down           FOLIORELAY_STATE_URL=http://127.0.0.1:18080           FOLIORELAY_INGRESS_STORE="$RUNNER_TEMP/ingress"           "$RUNNER_TEMP/bin/foliorelay-ipp-ingest" "$RUNNER_TEMP/sample.pdf"             >"$RUNNER_TEMP/evidence/authority-down.out"             2>"$RUNNER_TEMP/evidence/authority-down.err" && {
+          # With the authority unavailable, the adapter may stage immutable
+          # bytes but must not optimistically accept a state transition.
+          CONTENT_TYPE=application/pdf \
+          IPP_JOB_ID=authority-down \
+          FOLIORELAY_STATE_URL=http://127.0.0.1:18080 \
+          FOLIORELAY_INGRESS_STORE="$RUNNER_TEMP/ingress" \
+          "$RUNNER_TEMP/bin/foliorelay-ipp-ingest" "$RUNNER_TEMP/sample.pdf" \
+            >"$RUNNER_TEMP/evidence/authority-down.out" \
+            2>"$RUNNER_TEMP/evidence/authority-down.err" && {
               echo "adapter accepted work with authority unavailable" >&2
               exit 1
             }
           grep -q "state authority unavailable" "$RUNNER_TEMP/evidence/authority-down.err"
 
-          "$RUNNER_TEMP/bin/foliorelay-state-fixture" -listen 127.0.0.1:18080             >>"$RUNNER_TEMP/evidence/state.log" 2>&1 &
+          "$RUNNER_TEMP/bin/foliorelay-state-fixture" -listen 127.0.0.1:18080 \
+            -journal "$RUNNER_TEMP/state/journal.frj" \
+            >>"$RUNNER_TEMP/evidence/state.log" 2>&1 &
           echo $! >"$RUNNER_TEMP/evidence/state.pid"
           for i in $(seq 1 30); do
             curl -fsS -o /dev/null http://127.0.0.1:18080/health && break
             sleep 1
           done
-          curl -fsS http://127.0.0.1:18080/health -o /dev/null
-          # Current fixture is intentionally ephemeral; production journal recovery
-          # is qualified separately. Here we prove no optimistic acceptance.
-          ipptool -q ipp://127.0.0.1:8632/ipp/print             "$RUNNER_TEMP/cups/examples/get-printer-attributes.test"
+          curl -fsS -o /dev/null http://127.0.0.1:18080/health
+
+          # Same durable command must replay, not create a second transition.
+          CONTENT_TYPE=application/pdf \
+          IPP_JOB_ID=restart-probe \
+          FOLIORELAY_STATE_URL=http://127.0.0.1:18080 \
+          FOLIORELAY_INGRESS_STORE="$RUNNER_TEMP/ingress" \
+          "$RUNNER_TEMP/bin/foliorelay-ipp-ingest" "$RUNNER_TEMP/sample.pdf" \
+            >"$RUNNER_TEMP/evidence/restart-probe-after.out" \
+            2>"$RUNNER_TEMP/evidence/restart-probe-after.err"
+
+          stats="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+          printf '%s\n' "$stats" >"$RUNNER_TEMP/evidence/post-restart-stats.json"
+          python3 -c 'import json,sys; s=json.load(sys.stdin); assert s["accepted"] == 0 and s["replayed"] == 1, s' <<<"$stats"
+
+          # The outage command was never accepted. Retrying after recovery is a
+          # first acceptance, not a replay.
+          CONTENT_TYPE=application/pdf \
+          IPP_JOB_ID=authority-down \
+          FOLIORELAY_STATE_URL=http://127.0.0.1:18080 \
+          FOLIORELAY_INGRESS_STORE="$RUNNER_TEMP/ingress" \
+          "$RUNNER_TEMP/bin/foliorelay-ipp-ingest" "$RUNNER_TEMP/sample.pdf" \
+            >"$RUNNER_TEMP/evidence/authority-down-retry.out" \
+            2>"$RUNNER_TEMP/evidence/authority-down-retry.err"
+
+          stats="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+          printf '%s\n' "$stats" >"$RUNNER_TEMP/evidence/post-outage-retry-stats.json"
+          python3 -c 'import json,sys; s=json.load(sys.stdin); assert s["accepted"] == 1 and s["replayed"] == 1, s' <<<"$stats"
+
+          ipptool -q ipp://127.0.0.1:8632/ipp/print \
+            "$RUNNER_TEMP/cups/examples/get-printer-attributes.test"
 
       - name: Bounded spool exhaustion remains local
         shell: bash
