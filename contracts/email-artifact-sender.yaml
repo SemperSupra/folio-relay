@@ -1,0 +1,30 @@
+schema_version: 1
+plugin:
+  id: email-artifact
+  abi: foliorelay.sender.email-artifact/v1
+  type: sender
+semantics:
+  fanout_leg_independent: true
+  default_artifact: canonical-page-faithful-derived
+  raw_printer_payload_default: prohibited
+  single_recipient_per_leg: true
+  recipient_source: authorized-command-field-only
+  recipient_from_document_content: prohibited
+  ambiguous_delivery_auto_retry: prohibited
+authority:
+  root_allowed: false
+  capabilities: []
+  devices: []
+  network: configured-mail-endpoint-only
+  credentials:
+    - email-sender-only
+  artifact_access: selected-artifact-read-only
+  route_management: prohibited
+address:
+  header_injection_controls: required
+  multiple_mailboxes_in_single_field: prohibited
+  internationalized_address: sender-capability-dependent
+state:
+  uses_common_route_leg_machine: true
+  uses_common_effect_machine: true
+  terminal_transport_acceptance_means_human_read: false
