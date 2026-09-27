@@ -16,11 +16,13 @@ principles:
   mixed_stable_and_edge_repositories: prohibited
 images:
   core:
-    purpose: control-normalizer-small-workers
-    preferred_runtime: distroless-python3-debian13-nonroot
+    purpose: control-normalizer-small-workers-and-shared-foliorelay-binary
+    preferred_runtime: distroless-static-debian13-nonroot
     root_allowed: false
     shell_allowed: false
     package_manager_allowed: false
+    language_runtime_interpreter_allowed: false
+    preferred_application_runtime: static-go-binary
     network_default: none
     capabilities: []
     writable:
