@@ -367,7 +367,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends             autoconf build-essential pkg-config git ca-certificates             libssl-dev zlib1g-dev libavahi-client-dev libcups2-dev             libpng-dev libjpeg-dev
+          sudo apt-get install -y --no-install-recommends             autoconf build-essential pkg-config git ca-certificates             libssl-dev zlib1g-dev libavahi-client-dev libcups2-dev cups-ipp-utils             libpng-dev libjpeg-dev
           git clone --depth 1 --branch v1.4.11 https://github.com/michaelrsweet/pappl.git "$RUNNER_TEMP/pappl"
           cd "$RUNNER_TEMP/pappl"
           ./configure             --with-dnssd=avahi             --with-tls=openssl             --disable-libpam             --disable-libusb             --disable-shared
@@ -428,6 +428,87 @@ jobs:
           print(json.dumps(rows, indent=2))
           PY
           exit "$overall"
+
+      - name: Independently characterize minimal PAPPL client pressure
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+          mkdir -p "$RUNNER_TEMP/bin" "$RUNNER_TEMP/pappl-external-spool"
+
+          cc -D_GNU_SOURCE \
+            -I"$RUNNER_TEMP/pappl" -I"$RUNNER_TEMP/pappl/pappl" \
+            $(cups-config --cflags) \
+            -o "$RUNNER_TEMP/bin/foliorelay-pappl-ingress" \
+            experiments/print-substrate/pappl-ingress.c \
+            "$RUNNER_TEMP/pappl/pappl/libpappl.a" \
+            $(cups-config --image --libs) \
+            $(pkg-config --libs openssl libjpeg libpng zlib) \
+            -lpthread -lm
+
+          FOLIORELAY_INGEST_BIN=/bin/true \
+          FOLIORELAY_PAPPL_SPOOL="$RUNNER_TEMP/pappl-external-spool" \
+          FOLIORELAY_PAPPL_PORT=8633 \
+            "$RUNNER_TEMP/bin/foliorelay-pappl-ingress" \
+            >"$RUNNER_TEMP/evidence/pappl-external.log" 2>&1 &
+          pappl_pid=$!
+          echo "$pappl_pid" >"$RUNNER_TEMP/evidence/pappl-external.pid"
+          trap 'kill "$pappl_pid" 2>/dev/null || true; wait "$pappl_pid" 2>/dev/null || true' EXIT
+
+          testfile="$(find /usr/share/cups -type f -name get-printer-attributes.test -print -quit)"
+          test -n "$testfile"
+          for i in $(seq 1 30); do
+            if ipptool -q ipp://127.0.0.1:8633/ipp/print "$testfile"; then
+              break
+            fi
+            sleep 1
+          done
+          ipptool -q ipp://127.0.0.1:8633/ipp/print "$testfile"
+
+          run_tier() {
+            repeats="$1"
+            label="$2"
+            dir="$RUNNER_TEMP/pappl-external-$label"
+            rm -rf "$dir"
+            mkdir -p "$dir"
+            export FOLIORELAY_PAPPL_TESTFILE="$testfile"
+            export FOLIORELAY_PAPPL_TESTDIR="$dir"
+            export FOLIORELAY_PAPPL_REPEATS="$repeats"
+
+            seq 1 100 | xargs -P 100 -I{} bash -c '
+              set +e
+              timeout 240 ipptool -I -q -T 15 -n "$FOLIORELAY_PAPPL_REPEATS" \
+                ipp://127.0.0.1:8633/ipp/print "$FOLIORELAY_PAPPL_TESTFILE" \
+                >"$FOLIORELAY_PAPPL_TESTDIR/{}.out" \
+                2>"$FOLIORELAY_PAPPL_TESTDIR/{}.err"
+              rc=$?
+              echo "$rc" >"$FOLIORELAY_PAPPL_TESTDIR/{}.rc"
+              exit 0
+            '
+
+            failures="$(awk '$0 != "0" { n++ } END { print n + 0 }' "$dir"/*.rc)"
+            timeouts="$(awk '$0 == "124" { n++ } END { print n + 0 }' "$dir"/*.rc)"
+            printf '{"clients":100,"requests_per_client":%s,"failed_clients":%s,"timed_out_clients":%s}\n' \
+              "$repeats" "$failures" "$timeouts" \
+              | tee "$RUNNER_TEMP/evidence/pappl-external-$label.json"
+          }
+
+          # Match the existing 100x100 operational gate using independent
+          # client processes against the actual minimal FolioRelay PAPPL fixture.
+          run_tier 100 100x100
+          python3 - "$RUNNER_TEMP/evidence/pappl-external-100x100.json" <<'PY'
+          import json, pathlib, sys
+          result = json.loads(pathlib.Path(sys.argv[1]).read_text())
+          assert result["failed_clients"] == 0, result
+          PY
+
+          # The longer 100k-request tier remains characterization evidence:
+          # record degradation without silently promoting it to a hard gate.
+          run_tier 1000 100x1000
+
+          kill "$pappl_pid"
+          wait "$pappl_pid" 2>/dev/null || true
+          trap - EXIT
 
       - name: Upload PAPPL evidence
         if: always()
