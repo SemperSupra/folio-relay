@@ -37,18 +37,23 @@ These are migration inputs, not accepted product behavior.
 
 ## Target image graph
 
-Keep the image graph small.  Do not make one image per process merely because
-there are multiple services.
+Keep the build graph small, but optimize **deployed executable surface** rather
+than image-count aesthetics.
 
-### `ghcr.io/sempersupra/folio-relay-core`
+A shared source tree and shared distroless base produce role-specific final
+images/binaries. OCI layer deduplication means this does not imply large storage
+duplication.
 
-Shared by the control API/WebUI backend, normalizer, null senders, and other
-small stdlib-only workers.
+### Core role images
+
+The control API/WebUI backend, normalizer, null senders, and other small workers
+are built from the same Go source revision but receive separate static binaries.
+No role image contains dormant implementations for another authority class.
 
 Target properties:
 
-- Python runtime only while the core remains Python;
-- distroless/non-root runtime is the preferred candidate;
+- static Go role binary only;
+- distroless-static/non-root runtime is the preferred candidate;
 - no shell;
 - no package manager;
 - no compiler/build toolchain;
@@ -66,9 +71,9 @@ Target properties:
 - renderer/normalizer workers use `network_mode=none` when network is not part
   of their contract.
 
-Using one core image for several small processes is deliberate: identical
-runtime/dependency layers reduce build and patching complexity without
-increasing per-process authority.  Authority is restricted at deployment time.
+Role images reuse identical base layers and build provenance, but each final
+image contains only its role binary. Runtime authority is also restricted
+independently at deployment time.
 
 ### `ghcr.io/sempersupra/folio-relay-cups`
 
@@ -94,7 +99,8 @@ real requirement:
 - compiler/linker/build toolchains;
 - git/cmake;
 - generic download/debug tools;
-- Python after CUPS/gateway separation is complete.
+- Python after CUPS/gateway separation is complete;
+- control/normalizer/sender code not required by the CUPS agent.
 
 Modern physical printers use IPP Everywhere. Legacy printer support, if it
 earns its keep, becomes an explicit optional image/profile rather than silently
@@ -126,6 +132,37 @@ credential/egress authority necessary for their channel.
 
 The `null` senders remain in the core image because they perform no network
 side effects.
+
+## Role authority matrix
+
+The binary is not the security boundary by itself. Each deployed role has an
+independent authority envelope.
+
+| Role | User | Network | Persistent mounts | Devices | Linux capabilities | Credentials |
+|---|---|---|---|---|---|---|
+| control | non-root | management/API only | desired-state store; minimal document metadata access | none | none | scoped control-plane auth material |
+| normalizer | non-root | **none** | spool + document/artifact store | none | none | none |
+| fax-null | non-root | **none** | fax outbox/status only | none | none | none |
+| email-null | non-root | **none** | email outbox/status only | none | none | none |
+| cups | minimized startup exception | IPP + explicitly selected discovery/printer networks | CUPS config + accepted-job spool only | USB only when explicitly enabled | experimentally minimized CUPS set | CUPS-local bootstrap secret only if still required |
+| cups-agent | preferably non-root peer identity | none or local-only | CUPS socket/runtime state + desired queue subset | none | none | none |
+| renderer | non-root | **none by default** | read-only input + bounded output/scratch | none | none | none |
+| real sender | non-root | channel-specific egress only | channel outbox + result state | none | none | only that sender's scoped secret |
+
+The CUPS container should not mount the general user document store when a
+narrow spool handoff is sufficient.
+
+No FolioRelay Go binary carries Linux **file capabilities**. Capabilities are
+assigned only in the deployment manifest so the authority is visible,
+materializer-specific, testable, and removable without rebuilding the binary.
+
+Use `no-new-privileges` everywhere unless a documented startup path
+demonstrates that it cannot function with it.
+
+After the basic role boundaries pass, public CI should derive syscall evidence
+for each role and evaluate tighter seccomp/AppArmor/SELinux profiles. Do not
+blindly copy one syscall allowlist between roles; Go runtime syscalls plus each
+role's I/O pattern must be measured.
 
 ## Build policy
 
