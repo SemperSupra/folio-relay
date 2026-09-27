@@ -553,8 +553,12 @@ jobs:
           AccessLog $base/log/access_log
           ErrorLog $base/log/error_log
           PageLog $base/log/page_log
-          Printcap
           FileDevice No
+          PassEnv FOLIORELAY_INGEST_BIN
+          PassEnv FOLIORELAY_STATE_URL
+          PassEnv FOLIORELAY_INGRESS_STORE
+          PassEnv FOLIORELAY_MAX_INGRESS_BYTES
+          PassEnv FOLIORELAY_SUBSTRATE_INSTANCE
           EOF
 
           cat >"$base/cupsd.conf" <<EOF
