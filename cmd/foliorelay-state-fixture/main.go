@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"sync/atomic"
 
+	frsecurity "github.com/SemperSupra/folio-relay/internal/security"
 	frstate "github.com/SemperSupra/folio-relay/internal/state"
 )
 
@@ -21,12 +22,14 @@ type ingestRequest struct {
 	MediaType           string `json:"media_type"`
 	Substrate           string `json:"substrate"`
 	SubstrateJobID      string `json:"substrate_job_id"`
+	Copies              int64  `json:"copies"`
 }
 
 type stats struct {
 	Accepted  atomic.Uint64
 	Replayed  atomic.Uint64
 	Conflicts atomic.Uint64
+	Rejected  atomic.Uint64
 }
 
 func main() {
@@ -53,8 +56,17 @@ func main() {
 		}
 		if req.AggregateID == "" || req.IdempotencyKey == "" ||
 			req.SemanticFingerprint == "" || req.ArtifactSHA256 == "" ||
-			req.ArtifactBytes < 0 || req.MediaType == "" || req.Substrate == "" {
-			http.Error(w, "missing required field", http.StatusBadRequest)
+			req.ArtifactBytes < 0 || req.MediaType == "" || req.Substrate == "" ||
+			req.Copies < 1 {
+			http.Error(w, "missing or invalid required field", http.StatusBadRequest)
+			return
+		}
+		if err := frsecurity.ValidateAdmission(
+			frsecurity.AdmissionRequest{Bytes: req.ArtifactBytes, Copies: req.Copies},
+			frsecurity.AdmissionLimits{MaxBytes: 100 << 20, MaxCopies: 1000},
+		); err != nil {
+			counters.Rejected.Add(1)
+			http.Error(w, "resource policy rejected ingest", http.StatusUnprocessableEntity)
 			return
 		}
 
@@ -111,6 +123,7 @@ func main() {
 			"accepted":  counters.Accepted.Load(),
 			"replayed":  counters.Replayed.Load(),
 			"conflicts": counters.Conflicts.Load(),
+			"rejected":  counters.Rejected.Load(),
 		})
 	})
 
