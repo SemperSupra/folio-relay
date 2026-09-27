@@ -332,6 +332,54 @@ Requirements:
 
 Do not introduce distributed consensus into the first release.
 
+## Durable journal and single-writer enforcement
+
+The first production state store should use one authoritative append-only journal
+plus derived snapshots/checkpoints.
+
+The journal record contains enough information to replay:
+
+- accepted command identity/fingerprint;
+- previous and resulting generation;
+- transition/event data;
+- effect intents created by the transition;
+- integrity/version metadata.
+
+Requirements:
+
+- framed records with length/version/checksum so a torn tail is detectable;
+- fsync before acknowledging an accepted mutating command;
+- invalid/incomplete crash tail is discarded or quarantined on recovery;
+- snapshots are optimization only and can be rebuilt from the journal;
+- effect intents are reconstructed from the same committed record, so an effect
+  cannot exist without the state transition that authorized it;
+- compaction/checkpointing preserves audit/provenance and idempotency keys for
+  their required retention window.
+
+The state-authority persistent store must support the durability primitives we
+qualify. For the first release this means a local POSIX-like durable volume,
+such as a TrueNAS ixVolume or Docker/Podman local volume, rather than assuming
+arbitrary SMB/NFS semantics for the state journal.
+
+Large document/artifact storage may use other qualified storage backends; the
+small control-state journal does not need to share their consistency model.
+
+### Active writer lease
+
+Exactly one state-authority instance may write a journal.
+
+At startup it acquires an exclusive store/writer lease before accepting
+commands. Failure to establish exclusive authority is a fail-closed startup
+error.
+
+This lease prevents accidental dual writers; it is not a distributed consensus
+algorithm.
+
+The first release therefore does **not** support active-active state-authority
+replicas. If high availability later earns its keep, the persistence backend
+must be replaced/extended with a transactional/consensus mechanism whose
+semantics are separately modeled and qualified.
+
 ## Formal verification strategy
 
 Safety-critical transitions should have three layers of evidence:
