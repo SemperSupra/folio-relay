@@ -63,3 +63,26 @@ func TestPositiveIntEnv(t *testing.T) {
 		t.Fatal("expected absurd copy count to be rejected at adapter bound")
 	}
 }
+
+func TestStableJobIdentityPrefersIPPJobUUID(t *testing.T) {
+	got, err := stableJobIdentity("urn:uuid:abc", "1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "urn:uuid:abc" {
+		t.Fatalf("unexpected identity %q", got)
+	}
+}
+
+func TestStableJobIdentityRequiresInstanceWhenUUIDMissing(t *testing.T) {
+	if _, err := stableJobIdentity("", "1", ""); err == nil {
+		t.Fatal("expected substrate instance requirement")
+	}
+	got, err := stableJobIdentity("", "1", "boot-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "instance-boot-a/job-1" {
+		t.Fatalf("unexpected fallback identity %q", got)
+	}
+}
