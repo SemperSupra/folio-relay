@@ -1,0 +1,63 @@
+schema_version: 1
+product: FolioRelay
+status: candidate
+principles:
+  stateless_disposable_runtime: required
+  persistent_state_external: required
+  multi_stage_builds: required
+  immutable_release_inputs: required
+  sbom_attestation: required
+  provenance_attestation: required
+  read_only_rootfs: required
+  no_new_privileges: required
+  drop_all_capabilities_by_default: required
+  build_secrets_in_layers: prohibited
+  floating_source_inputs: prohibited
+  mixed_stable_and_edge_repositories: prohibited
+images:
+  core:
+    purpose: control-normalizer-small-workers
+    preferred_runtime: distroless-python3-debian13-nonroot
+    root_allowed: false
+    shell_allowed: false
+    package_manager_allowed: false
+    network_default: none
+    capabilities: []
+    writable:
+      persistent:
+        - /spool
+        - /data
+      ephemeral:
+        - /tmp
+  cups:
+    purpose: ipp-cups-and-qualified-lan-discovery
+    preferred_runtime: purpose-built-stable-linux
+    root_allowed: exception-documented-and-minimized
+    shell_allowed: startup-only-if-required
+    build_toolchain_in_runtime: false
+    legacy_driver_bundles_default: false
+    persistent:
+      - /config
+      - /spool
+    cups_request_root_must_be_external: true
+  renderer:
+    purpose: artifact-transformation
+    root_allowed: false
+    network_default: none
+    capabilities: []
+  sender:
+    purpose: external-delivery
+    root_allowed: false
+    network_default: plugin-specific-egress-only
+    capabilities: []
+release_evidence:
+  - oci_digest
+  - multiarch_manifest
+  - sbom
+  - provenance
+  - vulnerability_scan
+  - package_inventory
+  - executable_inventory
+  - runtime_security_inspection
+  - disposable_runtime_recovery
+  - chaos_stress_results
