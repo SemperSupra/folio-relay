@@ -84,6 +84,24 @@ option set.
 
 ## Blue team
 
+### Cross-candidate ingress findings
+
+Two controls are substrate-independent and are now mandatory:
+
+1. **Ingress spool is bounded hostile scratch.** An IPP server necessarily
+   receives bytes before FolioRelay's artifact admission code can inspect the
+   complete object. Therefore the substrate spool must live on an independently
+   bounded filesystem/quota and must not share capacity with the FolioRelay
+   state journal or user artifact store. Spool exhaustion may reject/abort data
+   plane jobs but must not make the control/state plane unavailable.
+2. **Substrate job state is projection state.** A print substrate may keep its
+   own short-lived job objects for IPP status/cancellation, but that state is not
+   FolioRelay's durable authority. Restarting the substrate may lose projection
+   state without losing the durable FolioRelay job/artifact/effect history.
+
+Admission limits such as byte count and copies are enforced again by the
+FolioRelay state authority even if the IPP substrate advertises its own limits.
+
 Common controls for every candidate:
 
 - exact upstream tag/commit pinned;
