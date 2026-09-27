@@ -444,7 +444,7 @@ jobs:
           FOLIORELAY_COPIES: "1"
         run: |
           set -euo pipefail
-          job_id="$(awk '/job-id \\(integer\\)/ {print $NF; exit}' "$RUNNER_TEMP/evidence/print-job.txt")"
+          job_id="$(awk '$1 == "job-id" && $2 == "(integer)" { print $NF; exit }' "$RUNNER_TEMP/evidence/print-job.txt")"
           [[ "$job_id" =~ ^[0-9]+$ ]]
           export FOLIORELAY_SOURCE_JOB_ID="$job_id"
 
@@ -799,7 +799,7 @@ jobs:
           FOLIORELAY_COPIES: "1"
         run: |
           set -euo pipefail
-          job_id="$(awk '/job-id \\(integer\\)/ {print $NF; exit}' "$RUNNER_TEMP/evidence/print-job.txt")"
+          job_id="$(awk '$1 == "job-id" && $2 == "(integer)" { print $NF; exit }' "$RUNNER_TEMP/evidence/print-job.txt")"
           [[ "$job_id" =~ ^[0-9]+$ ]]
           export FOLIORELAY_SOURCE_JOB_ID="$job_id"
 
