@@ -658,10 +658,10 @@ jobs:
             sleep 1
           done
           printf '%s\n' "$final" >"$RUNNER_TEMP/evidence/pappl-post-recovery-submit-stats.json"
-          python3 - "$base_accepted" <<'PY' <<<"$final"
+          python3 - "$base_accepted" "$final" <<'PY'
           import json, sys
           baseline = int(sys.argv[1])
-          stats = json.load(sys.stdin)
+          stats = json.loads(sys.argv[2])
           assert stats["accepted"] > baseline, (baseline, stats)
           assert stats["conflicts"] == 0, stats
           PY
@@ -1173,10 +1173,10 @@ jobs:
             sleep 1
           done
           printf '%s\n' "$final" >"$RUNNER_TEMP/evidence/cups-post-recovery-submit-stats.json"
-          python3 - "$base_accepted" <<'PY' <<<"$final"
+          python3 - "$base_accepted" "$final" <<'PY'
           import json, sys
           baseline = int(sys.argv[1])
-          stats = json.load(sys.stdin)
+          stats = json.loads(sys.argv[2])
           assert stats["accepted"] > baseline, (baseline, stats)
           assert stats["conflicts"] == 0, stats
           PY
