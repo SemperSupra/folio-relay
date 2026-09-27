@@ -52,3 +52,14 @@ func TestStoreBlobRejectsOversize(t *testing.T) {
 		t.Fatal("expected oversize rejection")
 	}
 }
+
+func TestPositiveIntEnv(t *testing.T) {
+	t.Setenv("IPP_COPIES", "1000000")
+	if value, err := positiveIntEnv("IPP_COPIES", 1, 10_000_000); err != nil || value != 1000000 {
+		t.Fatalf("adapter should carry bounded value to state authority: value=%d err=%v", value, err)
+	}
+	t.Setenv("IPP_COPIES", "10000001")
+	if _, err := positiveIntEnv("IPP_COPIES", 1, 10_000_000); err == nil {
+		t.Fatal("expected absurd copy count to be rejected at adapter bound")
+	}
+}
