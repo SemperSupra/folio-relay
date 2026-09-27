@@ -48,3 +48,13 @@ availability:
   bounded_worker_pools: required
   backpressure: required
   control_plane_must_remain_responsive_under_data_plane_load: required
+
+external_delivery:
+  user_specified_email:
+    enabled_capability: true
+    recipient_source: authorized-command-field
+    recipient_from_content: prohibited
+    default_attachment: canonical-page-faithful-derived-artifact
+    raw_printer_payload_attachment: prohibited
+    independent_route_leg: true
+    ambiguous_delivery_auto_retry: prohibited
