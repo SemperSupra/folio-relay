@@ -61,6 +61,10 @@ Cancel ==
     /\ state' = "cancelled"
     /\ UNCHANGED <<ambiguous, resolved>>
 
+TerminalStutter ==
+    /\ state \in {"succeeded", "cancelled"}
+    /\ UNCHANGED vars
+
 Next ==
     \/ Lease
     \/ Execute
@@ -71,6 +75,7 @@ Next ==
     \/ ResolveUnknownSucceeded
     \/ ResolveUnknownFailed
     \/ Cancel
+    \/ TerminalStutter
 
 TypeOK ==
     /\ state \in States
