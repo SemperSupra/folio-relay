@@ -433,6 +433,97 @@ jobs:
           printf '%s\n' "$stats" | tee "$RUNNER_TEMP/evidence/concurrent-stats.json"
           python3 -c 'import json,sys; s=json.load(sys.stdin); assert s["accepted"] >= 26 and s["conflicts"] == 0, s' <<<"$stats"
 
+      - name: Phase 2 PAPPL malformed and abusive-request pressure
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Slow/truncated and malformed clients must not kill either the
+          # substrate control surface or FolioRelay's state authority.
+          python3 - <<'PY' >"$RUNNER_TEMP/evidence/pappl-malformed-clients.txt"
+          import socket, threading, time
+          errors=[]
+          def slow(i):
+              try:
+                  s=socket.create_connection(("127.0.0.1",8633), timeout=3)
+                  s.sendall(b"POST /ipp/print HTTP/1.1\r\nHost: localhost\r\nContent-Length: 999999999\r\nContent-Type: application/ipp\r\n")
+                  time.sleep(1.0)
+                  s.close()
+              except Exception as e:
+                  errors.append((i,repr(e)))
+          threads=[threading.Thread(target=slow,args=(i,)) for i in range(32)]
+          for t in threads: t.start()
+          time.sleep(.2)
+          for payload in [b"GARBAGE\r\n\r\n", b"POST /ipp/print HTTP/1.1\r\nContent-Length: nope\r\n\r\n"]:
+              try:
+                  s=socket.create_connection(("127.0.0.1",8633), timeout=3)
+                  s.sendall(payload); s.close()
+              except Exception as e:
+                  errors.append(("malformed",repr(e)))
+          for t in threads: t.join()
+          print(errors)
+          PY
+
+          getattr="$(find /usr/share/cups -type f -name get-printer-attributes.test -print -quit)"
+          test -n "$getattr"
+          ipptool -q ipp://127.0.0.1:8633/ipp/print "$getattr"
+          curl -fsS -o /dev/null http://127.0.0.1:18080/health
+
+          # Stabilize accepted-count observations before the abusive job so
+          # completions from the preceding concurrency tier cannot be mistaken
+          # for this request.
+          previous=""
+          stable=0
+          for i in $(seq 1 30); do
+            stats="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+            accepted="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["accepted"])' <<<"$stats")"
+            if [ "$accepted" = "$previous" ]; then
+              stable=$((stable+1))
+            else
+              stable=0
+            fi
+            previous="$accepted"
+            [ "$stable" -ge 2 ] && break
+            sleep 1
+          done
+          before="$accepted"
+
+          cat >"$RUNNER_TEMP/pappl-million-copies.test" <<'IPP'
+          {
+            NAME "Reject absurd copies"
+            OPERATION Print-Job
+            GROUP operation-attributes-tag
+            ATTR charset attributes-charset utf-8
+            ATTR language attributes-natural-language en
+            ATTR uri printer-uri $uri
+            ATTR name requesting-user-name $user
+            ATTR mimeMediaType document-format application/pdf
+            GROUP job-attributes-tag
+            ATTR integer copies 1000000
+            FILE $filename
+          }
+          IPP
+
+          set +e
+          ipptool -tv -f "$RUNNER_TEMP/sample.pdf" \
+            ipp://127.0.0.1:8633/ipp/print "$RUNNER_TEMP/pappl-million-copies.test" \
+            >"$RUNNER_TEMP/evidence/pappl-million-copies.out" \
+            2>"$RUNNER_TEMP/evidence/pappl-million-copies.err"
+          echo "$?" >"$RUNNER_TEMP/evidence/pappl-million-copies.rc"
+          set -e
+
+          # Whether the substrate rejects synchronously or its worker reports
+          # failure, the abusive request must never become accepted durable
+          # FolioRelay state.
+          sleep 3
+          stats="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+          printf '%s\n' "$stats" >"$RUNNER_TEMP/evidence/pappl-post-million-copy-stats.json"
+          after="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["accepted"])' <<<"$stats")"
+          test "$after" -eq "$before"
+
+          ipptool -q ipp://127.0.0.1:8633/ipp/print "$getattr"
+          curl -fsS -o /dev/null http://127.0.0.1:18080/health
+
       - name: Prove PAPPL FolioRelay replay, conflict, and restart semantics
         shell: bash
         env:
@@ -787,6 +878,97 @@ jobs:
           done
           printf '%s\n' "$stats" | tee "$RUNNER_TEMP/evidence/concurrent-stats.json"
           python3 -c 'import json,sys; s=json.load(sys.stdin); assert s["accepted"] >= 26 and s["conflicts"] == 0, s' <<<"$stats"
+
+      - name: Phase 2 CUPS malformed and abusive-request pressure
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Slow/truncated and malformed clients must not kill either the
+          # substrate control surface or FolioRelay's state authority.
+          python3 - <<'PY' >"$RUNNER_TEMP/evidence/cups-malformed-clients.txt"
+          import socket, threading, time
+          errors=[]
+          def slow(i):
+              try:
+                  s=socket.create_connection(("127.0.0.1",8634), timeout=3)
+                  s.sendall(b"POST /ipp/print HTTP/1.1\r\nHost: localhost\r\nContent-Length: 999999999\r\nContent-Type: application/ipp\r\n")
+                  time.sleep(1.0)
+                  s.close()
+              except Exception as e:
+                  errors.append((i,repr(e)))
+          threads=[threading.Thread(target=slow,args=(i,)) for i in range(32)]
+          for t in threads: t.start()
+          time.sleep(.2)
+          for payload in [b"GARBAGE\r\n\r\n", b"POST /ipp/print HTTP/1.1\r\nContent-Length: nope\r\n\r\n"]:
+              try:
+                  s=socket.create_connection(("127.0.0.1",8634), timeout=3)
+                  s.sendall(payload); s.close()
+              except Exception as e:
+                  errors.append(("malformed",repr(e)))
+          for t in threads: t.join()
+          print(errors)
+          PY
+
+          getattr="$(find /usr/share/cups -type f -name get-printer-attributes.test -print -quit)"
+          test -n "$getattr"
+          ipptool -q ipp://127.0.0.1:8634/printers/FolioRelay "$getattr"
+          curl -fsS -o /dev/null http://127.0.0.1:18080/health
+
+          # Stabilize accepted-count observations before the abusive job so
+          # completions from the preceding concurrency tier cannot be mistaken
+          # for this request.
+          previous=""
+          stable=0
+          for i in $(seq 1 30); do
+            stats="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+            accepted="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["accepted"])' <<<"$stats")"
+            if [ "$accepted" = "$previous" ]; then
+              stable=$((stable+1))
+            else
+              stable=0
+            fi
+            previous="$accepted"
+            [ "$stable" -ge 2 ] && break
+            sleep 1
+          done
+          before="$accepted"
+
+          cat >"$RUNNER_TEMP/cups-million-copies.test" <<'IPP'
+          {
+            NAME "Reject absurd copies"
+            OPERATION Print-Job
+            GROUP operation-attributes-tag
+            ATTR charset attributes-charset utf-8
+            ATTR language attributes-natural-language en
+            ATTR uri printer-uri $uri
+            ATTR name requesting-user-name $user
+            ATTR mimeMediaType document-format application/pdf
+            GROUP job-attributes-tag
+            ATTR integer copies 1000000
+            FILE $filename
+          }
+          IPP
+
+          set +e
+          ipptool -tv -f "$RUNNER_TEMP/sample.pdf" \
+            ipp://127.0.0.1:8634/printers/FolioRelay "$RUNNER_TEMP/cups-million-copies.test" \
+            >"$RUNNER_TEMP/evidence/cups-million-copies.out" \
+            2>"$RUNNER_TEMP/evidence/cups-million-copies.err"
+          echo "$?" >"$RUNNER_TEMP/evidence/cups-million-copies.rc"
+          set -e
+
+          # Whether the substrate rejects synchronously or its worker reports
+          # failure, the abusive request must never become accepted durable
+          # FolioRelay state.
+          sleep 3
+          stats="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+          printf '%s\n' "$stats" >"$RUNNER_TEMP/evidence/cups-post-million-copy-stats.json"
+          after="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["accepted"])' <<<"$stats")"
+          test "$after" -eq "$before"
+
+          ipptool -q ipp://127.0.0.1:8634/printers/FolioRelay "$getattr"
+          curl -fsS -o /dev/null http://127.0.0.1:18080/health
 
       - name: Prove CUPS FolioRelay replay, conflict, and restart semantics
         shell: bash
