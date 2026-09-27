@@ -6,6 +6,7 @@ on:
       - 'cmd/foliorelay-ipp-ingest/**'
       - 'cmd/foliorelay-state-fixture/**'
       - 'internal/state/**'
+      - 'experiments/print-substrate/**'
       - '.github/workflows/ipp-ingress-phase1.yml'
   push:
     branches: [main]
@@ -13,6 +14,7 @@ on:
       - 'cmd/foliorelay-ipp-ingest/**'
       - 'cmd/foliorelay-state-fixture/**'
       - 'internal/state/**'
+      - 'experiments/print-substrate/**'
       - '.github/workflows/ipp-ingress-phase1.yml'
   workflow_dispatch:
 
@@ -256,3 +258,210 @@ jobs:
           path: ${{ runner.temp }}/evidence
           if-no-files-found: error
           retention-days: 14
+
+  pappl:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout FolioRelay
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Setup Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: '1.27.1'
+          cache: false
+
+      - name: Build FolioRelay state and ingress binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./cmd/foliorelay-ipp-ingest ./internal/state
+          mkdir -p "$RUNNER_TEMP/bin"
+          CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' \
+            -o "$RUNNER_TEMP/bin/foliorelay-state-fixture" ./cmd/foliorelay-state-fixture
+          CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' \
+            -o "$RUNNER_TEMP/bin/foliorelay-ipp-ingest" ./cmd/foliorelay-ipp-ingest
+
+      - name: Build pinned PAPPL and minimal FolioRelay bridge
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            autoconf build-essential pkg-config git ca-certificates curl \
+            libssl-dev zlib1g-dev libcups2-dev cups-client cups-ipp-utils \
+            libpng-dev libjpeg-dev
+
+          git clone --depth 1 --branch v1.4.11 \
+            https://github.com/michaelrsweet/pappl.git "$RUNNER_TEMP/pappl"
+          cd "$RUNNER_TEMP/pappl"
+          ./configure \
+            --with-dnssd=no \
+            --with-tls=openssl \
+            --disable-libpam \
+            --disable-libusb \
+            --disable-shared
+          make -j"$(nproc)"
+
+          cd "$GITHUB_WORKSPACE"
+          cc -D_GNU_SOURCE \
+            -I"$RUNNER_TEMP/pappl" -I"$RUNNER_TEMP/pappl/pappl" \
+            $(cups-config --cflags) \
+            -o "$RUNNER_TEMP/bin/foliorelay-pappl-ingress" \
+            experiments/print-substrate/pappl-ingress.c \
+            "$RUNNER_TEMP/pappl/pappl/libpappl.a" \
+            $(cups-config --image --libs) \
+            $(pkg-config --libs openssl libjpeg libpng zlib) \
+            -lpthread -lm
+
+          file "$RUNNER_TEMP/bin/foliorelay-pappl-ingress"
+          ldd "$RUNNER_TEMP/bin/foliorelay-pappl-ingress" \
+            | tee "$RUNNER_TEMP/pappl-bridge-ldd.txt"
+
+      - name: Start durable FolioRelay state authority
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/evidence" "$RUNNER_TEMP/ingress" "$RUNNER_TEMP/state"
+          "$RUNNER_TEMP/bin/foliorelay-state-fixture" \
+            -listen 127.0.0.1:18080 \
+            -journal "$RUNNER_TEMP/state/journal.frj" \
+            >"$RUNNER_TEMP/evidence/state.log" 2>&1 &
+          echo $! >"$RUNNER_TEMP/evidence/state.pid"
+          for i in $(seq 1 30); do
+            curl -fsS -o /dev/null http://127.0.0.1:18080/health && exit 0
+            sleep 1
+          done
+          exit 1
+
+      - name: Start minimal PAPPL IPP ingress
+        shell: bash
+        env:
+          FOLIORELAY_INGEST_BIN: ${{ runner.temp }}/bin/foliorelay-ipp-ingest
+          FOLIORELAY_STATE_URL: http://127.0.0.1:18080
+          FOLIORELAY_INGRESS_STORE: ${{ runner.temp }}/ingress
+          FOLIORELAY_MAX_INGRESS_BYTES: "104857600"
+          FOLIORELAY_SUBSTRATE_INSTANCE: gha-${{ github.run_id }}-${{ github.run_attempt }}
+          FOLIORELAY_PAPPL_SPOOL: ${{ runner.temp }}/pappl-spool
+          FOLIORELAY_PAPPL_PORT: "8633"
+        run: |
+          set -euo pipefail
+          mkdir -p "$FOLIORELAY_PAPPL_SPOOL"
+          "$RUNNER_TEMP/bin/foliorelay-pappl-ingress" \
+            >"$RUNNER_TEMP/evidence/pappl.log" 2>&1 &
+          echo $! >"$RUNNER_TEMP/evidence/pappl.pid"
+
+          testfile="$(find /usr/share/cups -type f -name get-printer-attributes.test -print -quit)"
+          test -n "$testfile"
+          for i in $(seq 1 30); do
+            if ipptool -q ipp://127.0.0.1:8633/ipp/print "$testfile"; then
+              printf '%s\n' "$testfile" >"$RUNNER_TEMP/evidence/get-printer-test-path.txt"
+              exit 0
+            fi
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/evidence/pappl.log" >&2 || true
+          exit 1
+
+      - name: Submit PDF and prove original-byte handoff
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat >"$RUNNER_TEMP/sample.pdf" <<'PDF'
+          %PDF-1.1
+          1 0 obj
+          << /Type /Catalog /Pages 2 0 R >>
+          endobj
+          2 0 obj
+          << /Type /Pages /Kids [3 0 R] /Count 1 >>
+          endobj
+          3 0 obj
+          << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>
+          endobj
+          trailer
+          << /Root 1 0 R >>
+          %%EOF
+          PDF
+
+          printtest="$(find /usr/share/cups -type f -name print-job.test -print -quit)"
+          test -n "$printtest"
+          ipptool -tv -f "$RUNNER_TEMP/sample.pdf" \
+            ipp://127.0.0.1:8633/ipp/print "$printtest" \
+            | tee "$RUNNER_TEMP/evidence/print-job.txt"
+
+          for i in $(seq 1 30); do
+            accepted="$(curl -fsS http://127.0.0.1:18080/v1/stats \
+              | python3 -c 'import json,sys; print(json.load(sys.stdin)["accepted"])')"
+            [ "$accepted" -ge 1 ] && break
+            sleep 1
+          done
+          test "$accepted" -ge 1
+
+          expected="$(sha256sum "$RUNNER_TEMP/sample.pdf" | awk '{print $1}')"
+          object="$RUNNER_TEMP/ingress/sha256/${expected:0:2}/$expected"
+          test -f "$object"
+          cmp "$RUNNER_TEMP/sample.pdf" "$object"
+          printf '{"substrate":"pappl","sha256":"%s","object":"%s"}\n' "$expected" "$object" \
+            >"$RUNNER_TEMP/evidence/artifact.json"
+
+      - name: Prove PAPPL queues concurrent jobs into FolioRelay
+        shell: bash
+        run: |
+          set -euo pipefail
+          printtest="$(find /usr/share/cups -type f -name print-job.test -print -quit)"
+          mkdir -p "$RUNNER_TEMP/concurrent"
+          export SAMPLE="$RUNNER_TEMP/sample.pdf"
+          export PRINTTEST="$printtest"
+          seq 1 25 | xargs -P 25 -I{} sh -c '
+            if ipptool -q -f "$SAMPLE" ipp://127.0.0.1:8633/ipp/print "$PRINTTEST"; then
+              echo 0 >"$0/{}.rc"
+            else
+              echo 1 >"$0/{}.rc"
+            fi
+          ' "$RUNNER_TEMP/concurrent"
+
+          failures="$(grep -l '^1$' "$RUNNER_TEMP"/concurrent/*.rc 2>/dev/null | wc -l)"
+          test "$failures" -eq 0
+
+          for i in $(seq 1 60); do
+            stats="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+            accepted="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["accepted"])' <<<"$stats")"
+            [ "$accepted" -ge 26 ] && break
+            sleep 1
+          done
+          printf '%s\n' "$stats" | tee "$RUNNER_TEMP/evidence/concurrent-stats.json"
+          python3 -c 'import json,sys; s=json.load(sys.stdin); assert s["accepted"] >= 26 and s["conflicts"] == 0, s' <<<"$stats"
+
+      - name: Record PAPPL transient-state surface
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "spool files:"
+            find "$RUNNER_TEMP/pappl-spool" -maxdepth 3 -type f -printf '%p %s\n' | sort || true
+            echo "listeners:"
+            ss -lntup || true
+            echo "bridge dependencies:"
+            cat "$RUNNER_TEMP/pappl-bridge-ldd.txt"
+          } >"$RUNNER_TEMP/evidence/pappl-surface.txt"
+
+      - name: Stop PAPPL fixtures
+        if: always()
+        shell: bash
+        run: |
+          for name in pappl state; do
+            if [ -f "$RUNNER_TEMP/evidence/$name.pid" ]; then
+              kill "$(cat "$RUNNER_TEMP/evidence/$name.pid")" 2>/dev/null || true
+            fi
+          done
+
+      - name: Upload PAPPL evidence
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: ipp-ingress-phase1-pappl
+          path: ${{ runner.temp }}/evidence
+          if-no-files-found: error
+          retention-days: 14
+
