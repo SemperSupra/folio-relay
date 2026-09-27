@@ -443,7 +443,7 @@ jobs:
             experiments/print-substrate/pappl-ingress.c \
             "$RUNNER_TEMP/pappl/pappl/libpappl.a" \
             $(cups-config --image --libs) \
-            $(pkg-config --libs openssl libjpeg libpng zlib) \
+            $(pkg-config --libs openssl libjpeg libpng zlib avahi-client) \
             -lpthread -lm
 
           FOLIORELAY_INGEST_BIN=/bin/true \
