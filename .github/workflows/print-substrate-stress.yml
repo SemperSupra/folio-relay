@@ -105,6 +105,25 @@ jobs:
           done
           exit 1
 
+      - name: Prove exclusive durable-state writer lease
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          timeout 5 "$RUNNER_TEMP/bin/foliorelay-state-fixture" \
+            -listen 127.0.0.1:18081 \
+            -journal "$RUNNER_TEMP/state/journal.frj" \
+            >"$RUNNER_TEMP/evidence/second-writer.out" 2>&1
+          rc=$?
+          set -e
+          echo "$rc" >"$RUNNER_TEMP/evidence/second-writer.rc"
+          if [ "$rc" -eq 0 ] || [ "$rc" -eq 124 ]; then
+            echo "second state authority did not fail closed on the active journal lease" >&2
+            cat "$RUNNER_TEMP/evidence/second-writer.out" >&2 || true
+            exit 1
+          fi
+          grep -q "journal already has an active writer" "$RUNNER_TEMP/evidence/second-writer.out"
+
       - name: Concurrent real Print-Job submissions
         shell: bash
         run: |
