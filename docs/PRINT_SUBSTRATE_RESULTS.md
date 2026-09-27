@@ -171,3 +171,42 @@ filesystem/quota. Filling that bounded scratch area must not consume the
 FolioRelay state journal or user artifact store.
 
 This is now a Phase 2 qualification requirement.
+
+## Phase 2 — ippeveprinter concurrency veto
+
+Public GHA stress evidence showed:
+
+```json
+{"attempts":100,"successes":8,"failures":92}
+```
+
+Representative failed requests returned:
+
+```
+status-code = server-error-busy (Currently printing another job.)
+```
+
+This matches upstream source behavior: `create_job()` explicitly refuses a new
+job while a previous `active_job` remains non-terminal.
+
+### Decision
+
+`ippeveprinter` is **rejected as the FolioRelay production ingress substrate**
+for the current requirements.
+
+Reason:
+
+- FolioRelay requires robust concurrent submissions from many devices;
+- upstream intentionally supports only one active job at a time;
+- adding a durable/concurrent scheduler around or inside it would duplicate the
+  very functionality FolioRelay is trying not to fork/maintain;
+- relying on every native client to implement sufficient retry/backoff would
+  make robustness client-dependent.
+
+It remains useful as:
+
+- an IPP Everywhere behavior oracle;
+- a tiny client-interoperability fixture;
+- a negative-space reference for the minimum protocol surface.
+
+It is not a production candidate unless upstream semantics materially change.
