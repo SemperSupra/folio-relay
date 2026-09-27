@@ -233,3 +233,67 @@ PWG plus native Windows/Linux/macOS and Android/iOS hosted clients.
 Adopt the lowest-surface survivor. Keep the others as qualification oracles
 where useful; do not ship multiple production substrates without a distinct
 required capability.
+
+
+## Evidence update — concurrent acceptance
+
+The first autonomous stress run changed candidate status.
+
+### ippeveprinter
+
+Observed 100 concurrent real `Print-Job` submissions:
+
+- accepted: 6;
+- rejected/busy: 94;
+- FolioRelay state-authority conflicts: 0.
+
+The rejected requests returned IPP `server-error-busy` with
+"Currently printing another job."
+
+Upstream CUPS 2.4.19 source confirms this is intentional in
+`tools/ippeveprinter.c:create_job`:
+
+- if an active job exists and has not reached a terminal state, creation
+  returns `NULL`;
+- the source comment states that the implementation accepts a single job at a
+  time.
+
+This is therefore not an adapter/state-authority defect.
+
+**Disposition:** production substrate vetoed under the no-fork/minimal-system
+rules. Retain `ippeveprinter` as a useful IPP Everywhere/client interoperability
+oracle and lightweight test fixture.
+
+### PAPPL
+
+Upstream concurrency characterization:
+
+- 25 clients × 100 requests: PASS, 0 errors;
+- 100 × 100: PASS, 0 errors;
+- 250 × 100: PASS, 0 errors;
+- 500 × 20: PASS, 0 errors;
+- 100 × 1000: completed with 7 errors.
+
+The 100 × 100 operational gate is green. The longer 100k-request run remains a
+characterization finding requiring root-cause analysis before production
+selection.
+
+### CUPS
+
+The selectively configured CUPS 2.4.19 build completed the upstream scheduler
+test suite successfully in the public runner.
+
+This does not yet prove FolioRelay handoff/state-authority integration, but it
+keeps CUPS in the active candidate set.
+
+## Active production candidate set
+
+After the first stress round:
+
+1. minimal upstream CUPS scheduler — active;
+2. PAPPL — active;
+3. ippeveprinter — oracle only, production-vetoed.
+
+Do not spend engineering effort adding queueing to `ippeveprinter`; that would
+create exactly the maintenance fork/duplicate queue authority this bake-off is
+intended to avoid.
