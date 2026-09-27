@@ -27,6 +27,7 @@ type ingestRequest struct {
 	MediaType           string `json:"media_type"`
 	Substrate           string `json:"substrate"`
 	SubstrateJobID      string `json:"substrate_job_id"`
+	Copies              int64  `json:"copies"`
 }
 
 func main() {
@@ -48,6 +49,10 @@ func main() {
 	}
 	if strings.ContainsAny(mediaType, "\r\n\x00") {
 		fail("invalid content type")
+	}
+	copies, err := positiveIntEnv("IPP_COPIES", 1, 10_000_000)
+	if err != nil {
+		fail(err.Error())
 	}
 
 	maxBytes := defaultMaxBytes
@@ -78,6 +83,7 @@ func main() {
 
 	fingerprintInput := strings.Join([]string{
 		"v1", aggregate, digest, strconv.FormatInt(size, 10), mediaType,
+		strconv.FormatInt(copies, 10),
 	}, "\x00")
 	fpSum := sha256.Sum256([]byte(fingerprintInput))
 
@@ -90,6 +96,7 @@ func main() {
 		MediaType:           mediaType,
 		Substrate:           "ippeveprinter",
 		SubstrateJobID:      jobID,
+		Copies:              copies,
 	}
 	payload, _ := json.Marshal(req)
 
@@ -122,6 +129,18 @@ func boundedEnv(name string, max int, required bool) (string, error) {
 		if r == 0 || r == '\r' || r == '\n' || r < 0x20 || r == 0x7f {
 			return "", fmt.Errorf("%s contains control characters", name)
 		}
+	}
+	return value, nil
+}
+
+func positiveIntEnv(name string, fallback, max int64) (int64, error) {
+	raw := os.Getenv(name)
+	if raw == "" {
+		return fallback, nil
+	}
+	value, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || value < 1 || value > max {
+		return 0, fmt.Errorf("%s is outside accepted bounds", name)
 	}
 	return value, nil
 }
