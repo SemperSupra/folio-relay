@@ -24,4 +24,5 @@ See:
 - [Go core ADR](docs/ADR-GO-CORE.md)
 - [Hostile-document threat model](docs/THREAT_MODEL.md)
 - [Security inspector ABI](docs/INSPECTOR_ABI.md)
+- [Email artifact sender](docs/EMAIL_ARTIFACT_SENDER.md)
 - [Red/blue team and global concept sweep](docs/RED_BLUE_GLOBAL_SWEEP.md)
