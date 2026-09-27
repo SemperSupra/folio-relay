@@ -32,11 +32,33 @@ type stats struct {
 	Rejected  atomic.Uint64
 }
 
+type applyEngine interface {
+	Apply(frstate.Command, frstate.Transition) (frstate.ApplyResult, error)
+}
+
 func main() {
 	listen := flag.String("listen", "127.0.0.1:18080", "listen address")
+	journalPath := flag.String("journal", "", "optional durable journal path")
 	flag.Parse()
 
-	var engine frstate.Engine
+	var engine applyEngine
+	var closeEngine func() error
+	if *journalPath != "" {
+		durable, err := frstate.OpenDurableEngine(*journalPath)
+		if err != nil {
+			log.Fatal(fmt.Errorf("open durable state: %w", err))
+		}
+		engine = durable
+		closeEngine = durable.Close
+		defer func() {
+			if err := closeEngine(); err != nil {
+				log.Printf("close durable state: %v", err)
+			}
+		}()
+	} else {
+		engine = &frstate.Engine{}
+	}
+
 	var counters stats
 	mux := http.NewServeMux()
 
@@ -136,7 +158,11 @@ func main() {
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * 1e9,
 	}
-	log.Printf("state fixture listening on %s", *listen)
+	if *journalPath != "" {
+		log.Printf("state fixture listening on %s with durable journal %s", *listen, *journalPath)
+	} else {
+		log.Printf("state fixture listening on %s with ephemeral state", *listen)
+	}
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(fmt.Errorf("serve: %w", err))
 	}
