@@ -91,6 +91,7 @@ jobs:
           FOLIORELAY_STATE_URL: http://127.0.0.1:18080
           FOLIORELAY_INGRESS_STORE: ${{ runner.temp }}/ingress
           FOLIORELAY_MAX_INGRESS_BYTES: "104857600"
+          FOLIORELAY_SUBSTRATE_INSTANCE: gha-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/ippeve-spool"
