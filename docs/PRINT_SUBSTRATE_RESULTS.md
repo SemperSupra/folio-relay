@@ -117,3 +117,57 @@ A permanent upstream fork is still a veto.
 
 The eventual choice is the lowest-surface **survivor of all required gates**,
 not the lowest number in this Phase 0 table.
+
+## Phase 1 — ippeveprinter FolioRelay handoff
+
+Public GitHub Actions run: `IPP Ingress Phase 1 #1`, run ID
+`36341337776`.
+
+Result: **PASS**.
+
+Evidence:
+
+- a real PDF was submitted with IPP `Print-Job`;
+- upstream IPP response was `successful-ok`;
+- exact input bytes were committed to the content-addressed ingress store;
+- the stored object's SHA-256 matched the submitted file;
+- one real substrate job plus one synthetic job produced exactly two accepted
+  transitions;
+- replay of the synthetic substrate job produced exactly one replay and did not
+  advance state again;
+- same substrate identity with different bytes/fingerprint produced exactly one
+  idempotency conflict and failed closed;
+- the ingest helper was built as a statically linked Go executable;
+- dependency inspection found no CUPS/PDF/PostScript/image/renderer libraries in
+  the helper.
+
+Observed fixture stats:
+
+```json
+{"accepted":2,"conflicts":1,"replayed":1}
+```
+
+### Architectural finding
+
+The upstream `ippeveprinter` implementation invokes the fixed job command with
+`execve`, passing the spool filename as an argument and IPP/job metadata as
+environment variables. This avoids an implicit shell but still requires strict
+metadata validation.
+
+Its local completed-job list is short-lived projection state; completed jobs are
+cleaned after roughly 60 seconds. FolioRelay therefore must not rely on this job
+list for durable history or idempotency.
+
+### Resource-risk finding
+
+The FolioRelay ingest helper can reject an artifact after the substrate hands it
+off, but the substrate has already spooled the request by then.
+
+Therefore application-level artifact-size checks are **not sufficient** against
+disk exhaustion.
+
+The substrate's untrusted ingress spool must have an independently bounded
+filesystem/quota. Filling that bounded scratch area must not consume the
+FolioRelay state journal or user artifact store.
+
+This is now a Phase 2 qualification requirement.
