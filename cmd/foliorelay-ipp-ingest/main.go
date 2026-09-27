@@ -74,13 +74,13 @@ func main() {
 		fail(err.Error())
 	}
 
-	stableJob := jobUUID
-	if stableJob == "" {
-		instanceID, envErr := boundedEnv("FOLIORELAY_SUBSTRATE_INSTANCE", 128, true)
-		if envErr != nil {
-			fail("IPP_JOB_UUID absent and " + envErr.Error())
-		}
-		stableJob = "instance-" + instanceID + "/job-" + jobID
+	instanceID, err := boundedEnv("FOLIORELAY_SUBSTRATE_INSTANCE", 128, false)
+	if err != nil {
+		fail(err.Error())
+	}
+	stableJob, err := stableJobIdentity(jobUUID, jobID, instanceID)
+	if err != nil {
+		fail(err.Error())
 	}
 	aggregate := "ipp/ippeveprinter/" + stableJob
 	key := aggregate
@@ -119,6 +119,19 @@ func main() {
 		fail(fmt.Sprintf("state authority rejected ingest: status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body))))
 	}
 	fmt.Fprintf(os.Stderr, "INFO: FolioRelay accepted artifact sha256:%s (%d bytes)\n", digest, size)
+}
+
+func stableJobIdentity(jobUUID, jobID, instanceID string) (string, error) {
+	if jobUUID != "" {
+		return jobUUID, nil
+	}
+	if jobID == "" {
+		return "", errors.New("IPP_JOB_ID is required")
+	}
+	if instanceID == "" {
+		return "", errors.New("IPP_JOB_UUID absent and FOLIORELAY_SUBSTRATE_INSTANCE is required")
+	}
+	return "instance-" + instanceID + "/job-" + jobID, nil
 }
 
 func boundedEnv(name string, max int, required bool) (string, error) {
