@@ -1,0 +1,107 @@
+schema_version: 1
+product: FolioRelay
+architecture:
+  durable_state_authority: single-active-writer
+  actuator_mutation_model: commands-only
+  transition_functions: deterministic-pure
+  persistence:
+    state_event_effect_commit: atomic
+    effects_visible_after_commit_only: true
+  concurrency:
+    serialization_scope: aggregate
+    generation_monotonic: true
+    last_writer_wins: prohibited
+  idempotency:
+    scope: aggregate
+    same_key_same_semantics: replay-original-result
+    same_key_different_semantics: conflict
+    generation_conflict_consumes_key: false
+
+invariants:
+  - id: INV-STATE-001
+    statement: Durable product state changes only through the state authority.
+  - id: INV-STATE-002
+    statement: Transition functions perform no external side effects.
+  - id: INV-STATE-003
+    statement: State, events, and effect intents commit atomically.
+  - id: INV-STATE-004
+    statement: Every accepted changing transition increments generation by exactly one.
+  - id: INV-STATE-005
+    statement: Replayed accepted commands return their original result without repeating effects.
+  - id: INV-STATE-006
+    statement: Immutable artifact bytes are never overwritten.
+  - id: INV-STATE-007
+    statement: Required trust gates must succeed before an untrusted artifact can become ready.
+  - id: INV-STATE-008
+    statement: delivery_unknown cannot automatically transition to another submission attempt.
+  - id: INV-STATE-009
+    statement: Delivery effect creation requires an approved usable destination and qualified immutable plugin identity.
+  - id: INV-STATE-010
+    statement: A worker reports outcomes using result commands and cannot mutate owning aggregate state directly.
+  - id: INV-STATE-011
+    statement: Successful terminal effects are never automatically re-executed.
+  - id: INV-STATE-012
+    statement: Document content and inspector text cannot grant control-plane authority.
+
+machines:
+  route_leg:
+    initial: pending
+    terminal: [delivered, cancelled]
+    states:
+      pending: [preparing, cancelled]
+      preparing: [ready, blocked, failed, cancelled]
+      ready: [dispatching, blocked, cancelled]
+      dispatching: [delivered, failed, delivery_unknown, blocked]
+      failed: [pending, cancelled]
+      blocked: [pending, cancelled]
+      delivery_unknown: [delivered, failed]
+      delivered: []
+      cancelled: []
+    guards:
+      failed_to_pending: explicit_retry_policy
+      blocked_to_pending: blocker_resolved
+      delivery_unknown_to_failed: reconciliation_evidence_or_manual_resolution
+      delivery_unknown_to_delivered: reconciliation_evidence
+      delivery_unknown_to_pending: prohibited
+
+  effect:
+    initial: pending
+    states:
+      pending: [leased, cancelled]
+      leased: [executing, pending, cancelled]
+      executing: [succeeded, failed, unknown]
+      failed: [pending, cancelled]
+      unknown: [succeeded, failed]
+      succeeded: []
+      cancelled: []
+    guards:
+      leased_to_pending: lease_expired_before_external_submission
+      failed_to_pending: explicit_retry_policy
+      unknown_to_pending: prohibited
+      unknown_resolution: reconciliation_evidence_or_manual_resolution
+
+  destination:
+    initial: discovered
+    states:
+      discovered: [observed, revoked]
+      observed: [approved, revoked]
+      approved: [active, disabled, revoked]
+      active: [drifted, disabled, revoked]
+      drifted: [approved, disabled, revoked]
+      disabled: [approved, revoked]
+      revoked: []
+    guards:
+      active_required_for_delivery_effect: true
+
+  plugin:
+    initial: candidate
+    states:
+      candidate: [qualifying, rejected]
+      qualifying: [qualified, rejected]
+      qualified: [active, quarantined, revoked]
+      active: [quarantined, revoked]
+      quarantined: [qualifying, revoked]
+      rejected: []
+      revoked: []
+    guards:
+      active_requires_qualified_immutable_digest: true
