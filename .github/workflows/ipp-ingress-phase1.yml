@@ -72,8 +72,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/evidence" "$RUNNER_TEMP/ingress"
+          mkdir -p "$RUNNER_TEMP/evidence" "$RUNNER_TEMP/ingress" "$RUNNER_TEMP/state"
           "$RUNNER_TEMP/bin/foliorelay-state-fixture" -listen 127.0.0.1:18080 \
+            -journal "$RUNNER_TEMP/state/journal.frj" \
             >"$RUNNER_TEMP/evidence/state-fixture.log" 2>&1 &
           echo $! >"$RUNNER_TEMP/evidence/state.pid"
           for i in $(seq 1 30); do
@@ -162,6 +163,7 @@ jobs:
           IPP_JOB_ID: "9001"
           FOLIORELAY_STATE_URL: http://127.0.0.1:18080
           FOLIORELAY_INGRESS_STORE: ${{ runner.temp }}/ingress
+          FOLIORELAY_SUBSTRATE_INSTANCE: gha-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           set -euo pipefail
           "$RUNNER_TEMP/bin/foliorelay-ipp-ingest" "$RUNNER_TEMP/sample.pdf" \
@@ -185,6 +187,45 @@ jobs:
           assert stats["accepted"] == 2, stats
           assert stats["replayed"] == 1, stats
           assert stats["conflicts"] == 1, stats
+          PY
+
+      - name: Prove state-authority restart preserves idempotency
+        shell: bash
+        env:
+          CONTENT_TYPE: application/pdf
+          IPP_JOB_ID: "9001"
+          FOLIORELAY_STATE_URL: http://127.0.0.1:18080
+          FOLIORELAY_INGRESS_STORE: ${{ runner.temp }}/ingress
+          FOLIORELAY_SUBSTRATE_INSTANCE: gha-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          kill "$(cat "$RUNNER_TEMP/evidence/state.pid")"
+          wait "$(cat "$RUNNER_TEMP/evidence/state.pid")" || true
+
+          "$RUNNER_TEMP/bin/foliorelay-state-fixture" -listen 127.0.0.1:18080 \
+            -journal "$RUNNER_TEMP/state/journal.frj" \
+            >>"$RUNNER_TEMP/evidence/state-fixture.log" 2>&1 &
+          echo $! >"$RUNNER_TEMP/evidence/state.pid"
+
+          for i in $(seq 1 30); do
+            if curl -fsS -o /dev/null http://127.0.0.1:18080/health; then
+              break
+            fi
+            sleep 1
+          done
+          curl -fsS -o /dev/null http://127.0.0.1:18080/health
+
+          "$RUNNER_TEMP/bin/foliorelay-ipp-ingest" "$RUNNER_TEMP/sample.pdf" \
+            2>>"$RUNNER_TEMP/evidence/adapter.log"
+
+          curl -fsS http://127.0.0.1:18080/v1/stats \
+            | tee "$RUNNER_TEMP/evidence/post-restart-stats.json"
+          python3 - "$RUNNER_TEMP/evidence/post-restart-stats.json" <<'PY'
+          import json, pathlib, sys
+          stats = json.loads(pathlib.Path(sys.argv[1]).read_text())
+          assert stats["accepted"] == 0, stats
+          assert stats["replayed"] == 1, stats
+          assert stats["conflicts"] == 0, stats
           PY
 
       - name: Verify no parser responsibilities leaked into adapter
