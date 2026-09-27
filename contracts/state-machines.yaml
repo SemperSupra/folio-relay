@@ -47,6 +47,12 @@ invariants:
     statement: Successful terminal effects are never automatically re-executed.
   - id: INV-STATE-012
     statement: Document content and inspector text cannot grant control-plane authority.
+  - id: INV-STATE-013
+    statement: Email recipients and other external-delivery targets are authorized control fields and cannot be inferred from document content.
+  - id: INV-STATE-014
+    statement: Failure or retry of one route leg cannot replay a different route leg that already reached a successful terminal state.
+  - id: INV-STATE-015
+    statement: An email-artifact effect binds immutable artifact identity, recipient identity, route-leg identity, and immutable sender plugin identity before dispatch.
 
 machines:
   route_leg:
