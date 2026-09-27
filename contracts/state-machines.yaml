@@ -5,8 +5,13 @@ architecture:
   actuator_mutation_model: commands-only
   transition_functions: deterministic-pure
   persistence:
+    authority: append-only-checksummed-journal
     state_event_effect_commit: atomic
     effects_visible_after_commit_only: true
+    fsync_before_ack: required
+    snapshots_are_rebuildable_cache: true
+    exclusive_active_writer: required
+    active_active_first_release: prohibited
   concurrency:
     serialization_scope: aggregate
     generation_monotonic: true
@@ -105,3 +110,51 @@ machines:
       revoked: []
     guards:
       active_requires_qualified_immutable_digest: true
+
+  artifact:
+    initial: quarantined
+    states:
+      quarantined: [inspecting, render_pending, policy_rejected, malformed, resource_rejected]
+      inspecting: [render_pending, policy_rejected, malformed, resource_rejected, quarantined]
+      render_pending: [rendering, policy_rejected, resource_rejected]
+      rendering: [validating, malformed, resource_rejected, quarantined]
+      validating: [ready, malformed, policy_rejected, quarantined]
+      ready: []
+      policy_rejected: []
+      malformed: []
+      resource_rejected: []
+    guards:
+      untrusted_to_ready_requires_all_policy_gates: true
+      transforms_create_new_artifact_identity: true
+
+  job:
+    initial: submitted
+    states:
+      submitted: [admitted, policy_rejected, resource_rejected, malformed, cancelled]
+      admitted: [active, cancelled]
+      active: [completed, partially_completed, failed, cancelled]
+      completed: []
+      partially_completed: []
+      failed: []
+      policy_rejected: []
+      resource_rejected: []
+      malformed: []
+      cancelled: []
+    guards:
+      terminal_status_should_be_derived_from_route_legs: true
+
+  inspector:
+    initial: requested
+    states:
+      requested: [running, cancelled]
+      running: [clean, malicious, suspicious, unknown, error, timeout, cancelled]
+      clean: []
+      malicious: []
+      suspicious: []
+      unknown: []
+      error: []
+      timeout: []
+      cancelled: []
+    guards:
+      inspector_result_cannot_directly_promote_artifact: true
+      inspector_result_cannot_change_route_authority: true
