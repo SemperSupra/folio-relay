@@ -76,7 +76,11 @@ func main() {
 
 	stableJob := jobUUID
 	if stableJob == "" {
-		stableJob = "job-" + jobID
+		instanceID, envErr := boundedEnv("FOLIORELAY_SUBSTRATE_INSTANCE", 128, true)
+		if envErr != nil {
+			fail("IPP_JOB_UUID absent and " + envErr.Error())
+		}
+		stableJob = "instance-" + instanceID + "/job-" + jobID
 	}
 	aggregate := "ipp/ippeveprinter/" + stableJob
 	key := aggregate
