@@ -7,21 +7,28 @@ Status: proposed and favored; to be confirmed by public-GHA A/B qualification.
 Rewrite the FolioRelay **core runtime** from the current prototype Python into Go
 before the public API/ABI reaches 1.0 stability.
 
-The preferred production shape is one statically linked `foliorelay` binary
-with role/subcommand entrypoints, for example:
+The preferred production shape is **one Go codebase compiled into role-specific
+static binaries**, not one all-capability multicall executable.
+
+Candidate commands:
 
 ```
-foliorelay control
-foliorelay normalize
-foliorelay fax-null
-foliorelay email-null
-foliorelay cups-reconcile
-foliorelay doctor
+cmd/foliorelay-control
+cmd/foliorelay-normalizer
+cmd/foliorelay-fax-null
+cmd/foliorelay-email-null
+cmd/foliorelay-cups-agent
+cmd/foliorelay-doctor
 ```
 
-The same source revision may be compiled into one binary and copied into both
-the minimal core image and the purpose-built CUPS image.  Deployment still runs
-separate containers/processes for authority and failure-domain isolation.
+Shared implementation lives under internal packages, but each `cmd/*` imports
+only the packages required by that role. Go's linker can then eliminate
+unreferenced code, and each final runtime image receives only the binary it
+actually executes.
+
+Deployment still runs separate containers/processes for authority and
+failure-domain isolation. Shared source and shared build tooling do not imply a
+shared deployed executable.
 
 ## Why Go fits the current product
 
@@ -48,7 +55,7 @@ dominant executable surface.
 
 Target:
 
-- static `foliorelay` binary;
+- exactly the role-specific static FolioRelay binary required by that container;
 - CA certificates only where network TLS is actually needed;
 - timezone data only where runtime-local zone rules are needed;
 - non-root user;
@@ -64,8 +71,9 @@ The CUPS image still exists because the CUPS/IPP/Avahi/Ghostscript dependency
 boundary is fundamentally different from the core.
 
 However, the Go shift removes the reason for Python to exist in the CUPS image.
-The same `foliorelay` binary can perform bootstrap/reconciliation without
-embedding a language interpreter.
+The CUPS image receives only the minimal `foliorelay-cups-agent` binary needed
+for FolioRelay bootstrap/reconciliation, not the control API, normalizer, or
+sender implementations.
 
 The size reduction will therefore be large for the core image and modest for
 the CUPS image, where CUPS and document-processing dependencies dominate.
@@ -83,15 +91,23 @@ Changing language does not change the authority boundaries:
 A single all-purpose image would carry unnecessary CUPS/parser/network
 dependencies into every role even if only one binary is used.
 
-Two primary images remain the smallest useful split:
+The packaging split and the executable split are independent.
+
+The preferred runtime images are small role images/layers produced from the same
+build graph:
 
 ```
-folio-relay-core   = static Go binary only
-folio-relay-cups   = CUPS stack + same Go binary for reconciliation
+folio-relay-control     = distroless-static + control binary
+folio-relay-normalizer  = distroless-static + normalizer binary
+folio-relay-fax-null    = distroless-static + null-fax binary
+folio-relay-email-null  = distroless-static + null-email binary
+folio-relay-cups        = CUPS stack + cups-agent binary
 ```
 
-Additional images are created only when a plugin dependency/trust boundary
-earns one.
+These share the same tiny base layers and source revision, so storage/build
+deduplication remains high while executable attack surface is minimized.
+Additional renderer/sender images are created only when a dependency/trust
+boundary earns one.
 
 ## Renderer/plugin implication
 
