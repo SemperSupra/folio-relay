@@ -35,22 +35,27 @@ func main() {
 		fail("expected exactly one spool file argument")
 	}
 	source := os.Args[1]
-	jobID, err := boundedEnv("IPP_JOB_ID", 64, true)
+	substrate, err := firstBoundedEnv(64, true, "FOLIORELAY_SUBSTRATE")
+	if err != nil {
+		// Compatibility default for the first qualified ingress substrate.
+		substrate = "ippeveprinter"
+	}
+	jobID, err := firstBoundedEnv(128, true, "FOLIORELAY_SOURCE_JOB_ID", "IPP_JOB_ID")
 	if err != nil {
 		fail(err.Error())
 	}
-	jobUUID, err := boundedEnv("IPP_JOB_UUID", 256, false)
+	jobUUID, err := firstBoundedEnv(256, false, "FOLIORELAY_SOURCE_JOB_UUID", "IPP_JOB_UUID")
 	if err != nil {
 		fail(err.Error())
 	}
-	mediaType, err := boundedEnv("CONTENT_TYPE", 128, true)
+	mediaType, err := firstBoundedEnv(128, true, "FOLIORELAY_MEDIA_TYPE", "CONTENT_TYPE")
 	if err != nil {
 		fail(err.Error())
 	}
 	if strings.ContainsAny(mediaType, "\r\n\x00") {
 		fail("invalid content type")
 	}
-	copies, err := positiveIntEnv("IPP_COPIES", 1, 10_000_000)
+	copies, err := positiveIntEnvs(1, 10_000_000, "FOLIORELAY_COPIES", "IPP_COPIES")
 	if err != nil {
 		fail(err.Error())
 	}
@@ -82,7 +87,7 @@ func main() {
 	if err != nil {
 		fail(err.Error())
 	}
-	aggregate := "ipp/ippeveprinter/" + stableJob
+	aggregate := "ingress/" + substrate + "/" + stableJob
 	key := aggregate
 
 	fingerprintInput := strings.Join([]string{
@@ -98,7 +103,7 @@ func main() {
 		ArtifactSHA256:      digest,
 		ArtifactBytes:       size,
 		MediaType:           mediaType,
-		Substrate:           "ippeveprinter",
+		Substrate:           substrate,
 		SubstrateJobID:      jobID,
 		Copies:              copies,
 	}
@@ -121,6 +126,30 @@ func main() {
 	fmt.Fprintf(os.Stderr, "INFO: FolioRelay accepted artifact sha256:%s (%d bytes)\n", digest, size)
 }
 
+func firstBoundedEnv(max int, required bool, names ...string) (string, error) {
+	for _, name := range names {
+		if value := os.Getenv(name); value != "" {
+			return validateBoundedValue(name, value, max)
+		}
+	}
+	if required {
+		return "", fmt.Errorf("%s is required", strings.Join(names, " or "))
+	}
+	return "", nil
+}
+
+func validateBoundedValue(name, value string, max int) (string, error) {
+	if len(value) > max {
+		return "", fmt.Errorf("%s exceeds limit", name)
+	}
+	for _, r := range value {
+		if r == 0 || r == '\r' || r == '\n' || r < 0x20 || r == 0x7f {
+			return "", fmt.Errorf("%s contains control characters", name)
+		}
+	}
+	return value, nil
+}
+
 func stableJobIdentity(jobUUID, jobID, instanceID string) (string, error) {
 	if jobUUID != "" {
 		return jobUUID, nil
@@ -136,30 +165,32 @@ func stableJobIdentity(jobUUID, jobID, instanceID string) (string, error) {
 
 func boundedEnv(name string, max int, required bool) (string, error) {
 	value := os.Getenv(name)
-	if required && value == "" {
-		return "", fmt.Errorf("%s is required", name)
-	}
-	if len(value) > max {
-		return "", fmt.Errorf("%s exceeds limit", name)
-	}
-	for _, r := range value {
-		if r == 0 || r == '\r' || r == '\n' || r < 0x20 || r == 0x7f {
-			return "", fmt.Errorf("%s contains control characters", name)
+	if value == "" {
+		if required {
+			return "", fmt.Errorf("%s is required", name)
 		}
+		return "", nil
 	}
-	return value, nil
+	return validateBoundedValue(name, value, max)
 }
 
 func positiveIntEnv(name string, fallback, max int64) (int64, error) {
-	raw := os.Getenv(name)
-	if raw == "" {
-		return fallback, nil
+	return positiveIntEnvs(fallback, max, name)
+}
+
+func positiveIntEnvs(fallback, max int64, names ...string) (int64, error) {
+	for _, name := range names {
+		raw := os.Getenv(name)
+		if raw == "" {
+			continue
+		}
+		value, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || value < 1 || value > max {
+			return 0, fmt.Errorf("%s is outside accepted bounds", name)
+		}
+		return value, nil
 	}
-	value, err := strconv.ParseInt(raw, 10, 64)
-	if err != nil || value < 1 || value > max {
-		return 0, fmt.Errorf("%s is outside accepted bounds", name)
-	}
-	return value, nil
+	return fallback, nil
 }
 
 func storeBlob(source, store string, maxBytes int64) (string, int64, error) {
