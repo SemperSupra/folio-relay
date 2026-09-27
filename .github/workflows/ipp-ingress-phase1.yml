@@ -533,7 +533,11 @@ jobs:
           set -euo pipefail
           base="$RUNNER_TEMP/cups-runtime"
           mkdir -p "$RUNNER_TEMP/evidence" "$RUNNER_TEMP/ingress" "$RUNNER_TEMP/state"
-          mkdir -p "$base"/{bin/backend,bin/filter,spool/temp,log,ppd,cache}
+          mkdir -p "$base"/{bin/backend,bin/daemon,bin/filter,spool/temp,log,ppd,cache}
+
+          # cupsd dispatches filters/backends through its upstream cups-exec
+          # helper under ServerBin/daemon, even when the scheduler runs unprivileged.
+          install -m 0755 "$RUNNER_TEMP/cups-stage/usr/lib/cups/daemon/cups-exec" "$base/bin/daemon/cups-exec"
 
           # CUPS refuses to execute filters/backends that are not root-owned
           # or are group/world writable. Keep the qualification backend immutable
