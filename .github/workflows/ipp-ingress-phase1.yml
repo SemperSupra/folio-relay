@@ -597,6 +597,75 @@ jobs:
           assert stats["conflicts"] == 0, stats
           PY
 
+      - name: Phase 2 PAPPL authority-outage fail-closed recovery
+        shell: bash
+        run: |
+          set -euo pipefail
+          journal="$RUNNER_TEMP/state/journal.frj"
+          printtest="$(find /usr/share/cups -type f -name print-job.test -print -quit)"
+          getattr="$(find /usr/share/cups -type f -name get-printer-attributes.test -print -quit)"
+          test -n "$printtest"
+          test -n "$getattr"
+
+          # Stop the sole durable authority, then prove a real substrate
+          # submission cannot mutate the journal behind its back.
+          kill "$(cat "$RUNNER_TEMP/evidence/state.pid")"
+          wait "$(cat "$RUNNER_TEMP/evidence/state.pid")" 2>/dev/null || true
+          before_size="$(stat -c %s "$journal")"
+
+          set +e
+          timeout 20 ipptool -q -f "$RUNNER_TEMP/sample.pdf" \
+            ipp://127.0.0.1:8633/ipp/print "$printtest" \
+            >"$RUNNER_TEMP/evidence/pappl-authority-down.out" \
+            2>"$RUNNER_TEMP/evidence/pappl-authority-down.err"
+          outage_rc=$?
+          set -e
+          echo "$outage_rc" >"$RUNNER_TEMP/evidence/pappl-authority-down.rc"
+          sleep 2
+
+          after_size="$(stat -c %s "$journal")"
+          if [ "$after_size" -ne "$before_size" ]; then
+            echo "durable journal changed while FolioRelay authority was down" >&2
+            exit 1
+          fi
+
+          "$RUNNER_TEMP/bin/foliorelay-state-fixture" \
+            -listen 127.0.0.1:18080 \
+            -journal "$journal" \
+            >>"$RUNNER_TEMP/evidence/state.log" 2>&1 &
+          echo $! >"$RUNNER_TEMP/evidence/state.pid"
+          for i in $(seq 1 30); do
+            curl -fsS -o /dev/null http://127.0.0.1:18080/health && break
+            sleep 1
+          done
+          curl -fsS -o /dev/null http://127.0.0.1:18080/health
+
+          # A substrate may retry its transient projection after authority
+          # recovery; that is allowed. It must remain usable and must not create
+          # idempotency conflicts.
+          ipptool -q ipp://127.0.0.1:8633/ipp/print "$getattr"
+          sleep 3
+          baseline="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+          printf '%s\n' "$baseline" >"$RUNNER_TEMP/evidence/pappl-post-authority-restart-stats.json"
+          base_accepted="$(python3 -c 'import json,sys; s=json.load(sys.stdin); assert s["conflicts"] == 0, s; print(s["accepted"])' <<<"$baseline")"
+
+          ipptool -q -f "$RUNNER_TEMP/sample.pdf" ipp://127.0.0.1:8633/ipp/print "$printtest"
+          final="$baseline"
+          for i in $(seq 1 30); do
+            final="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+            accepted="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["accepted"])' <<<"$final")"
+            [ "$accepted" -gt "$base_accepted" ] && break
+            sleep 1
+          done
+          printf '%s\n' "$final" >"$RUNNER_TEMP/evidence/pappl-post-recovery-submit-stats.json"
+          python3 - "$base_accepted" <<'PY' <<<"$final"
+          import json, sys
+          baseline = int(sys.argv[1])
+          stats = json.load(sys.stdin)
+          assert stats["accepted"] > baseline, (baseline, stats)
+          assert stats["conflicts"] == 0, stats
+          PY
+
       - name: Record PAPPL transient-state surface
         shell: bash
         run: |
@@ -1040,6 +1109,75 @@ jobs:
           stats = json.loads(pathlib.Path(sys.argv[1]).read_text())
           assert stats["accepted"] == 0, stats
           assert stats["replayed"] == 1, stats
+          assert stats["conflicts"] == 0, stats
+          PY
+
+      - name: Phase 2 CUPS authority-outage fail-closed recovery
+        shell: bash
+        run: |
+          set -euo pipefail
+          journal="$RUNNER_TEMP/state/journal.frj"
+          printtest="$(find /usr/share/cups -type f -name print-job.test -print -quit)"
+          getattr="$(find /usr/share/cups -type f -name get-printer-attributes.test -print -quit)"
+          test -n "$printtest"
+          test -n "$getattr"
+
+          # Stop the sole durable authority, then prove a real substrate
+          # submission cannot mutate the journal behind its back.
+          kill "$(cat "$RUNNER_TEMP/evidence/state.pid")"
+          wait "$(cat "$RUNNER_TEMP/evidence/state.pid")" 2>/dev/null || true
+          before_size="$(stat -c %s "$journal")"
+
+          set +e
+          timeout 20 ipptool -q -f "$RUNNER_TEMP/sample.pdf" \
+            ipp://127.0.0.1:8634/printers/FolioRelay "$printtest" \
+            >"$RUNNER_TEMP/evidence/cups-authority-down.out" \
+            2>"$RUNNER_TEMP/evidence/cups-authority-down.err"
+          outage_rc=$?
+          set -e
+          echo "$outage_rc" >"$RUNNER_TEMP/evidence/cups-authority-down.rc"
+          sleep 2
+
+          after_size="$(stat -c %s "$journal")"
+          if [ "$after_size" -ne "$before_size" ]; then
+            echo "durable journal changed while FolioRelay authority was down" >&2
+            exit 1
+          fi
+
+          "$RUNNER_TEMP/bin/foliorelay-state-fixture" \
+            -listen 127.0.0.1:18080 \
+            -journal "$journal" \
+            >>"$RUNNER_TEMP/evidence/state.log" 2>&1 &
+          echo $! >"$RUNNER_TEMP/evidence/state.pid"
+          for i in $(seq 1 30); do
+            curl -fsS -o /dev/null http://127.0.0.1:18080/health && break
+            sleep 1
+          done
+          curl -fsS -o /dev/null http://127.0.0.1:18080/health
+
+          # A substrate may retry its transient projection after authority
+          # recovery; that is allowed. It must remain usable and must not create
+          # idempotency conflicts.
+          ipptool -q ipp://127.0.0.1:8634/printers/FolioRelay "$getattr"
+          sleep 3
+          baseline="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+          printf '%s\n' "$baseline" >"$RUNNER_TEMP/evidence/cups-post-authority-restart-stats.json"
+          base_accepted="$(python3 -c 'import json,sys; s=json.load(sys.stdin); assert s["conflicts"] == 0, s; print(s["accepted"])' <<<"$baseline")"
+
+          ipptool -q -f "$RUNNER_TEMP/sample.pdf" ipp://127.0.0.1:8634/printers/FolioRelay "$printtest"
+          final="$baseline"
+          for i in $(seq 1 30); do
+            final="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+            accepted="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["accepted"])' <<<"$final")"
+            [ "$accepted" -gt "$base_accepted" ] && break
+            sleep 1
+          done
+          printf '%s\n' "$final" >"$RUNNER_TEMP/evidence/cups-post-recovery-submit-stats.json"
+          python3 - "$base_accepted" <<'PY' <<<"$final"
+          import json, sys
+          baseline = int(sys.argv[1])
+          stats = json.load(sys.stdin)
+          assert stats["accepted"] > baseline, (baseline, stats)
           assert stats["conflicts"] == 0, stats
           PY
 
