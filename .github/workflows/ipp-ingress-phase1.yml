@@ -421,7 +421,7 @@ jobs:
             fi
           ' "$RUNNER_TEMP/concurrent"
 
-          failures="$(grep -l '^1$' "$RUNNER_TEMP"/concurrent/*.rc 2>/dev/null | wc -l)"
+          failures="$(awk '$0 == "1" { n++ } END { print n + 0 }' "$RUNNER_TEMP"/concurrent/*.rc)"
           test "$failures" -eq 0
 
           for i in $(seq 1 60); do
@@ -690,7 +690,7 @@ jobs:
             fi
           ' "$RUNNER_TEMP/concurrent"
 
-          failures="$(grep -l '^1$' "$RUNNER_TEMP"/concurrent/*.rc 2>/dev/null | wc -l)"
+          failures="$(awk '$0 == "1" { n++ } END { print n + 0 }' "$RUNNER_TEMP"/concurrent/*.rc)"
           test "$failures" -eq 0
           for i in $(seq 1 60); do
             stats="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
