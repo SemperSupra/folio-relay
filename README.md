@@ -18,4 +18,10 @@ portable deployment models, and product-level qualification.
 - humans, automation, and agents operate on the same underlying state through
   audience-appropriate surfaces.
 
-See [Runtime image and hardening policy](docs/RUNTIME_IMAGES.md).
+See:
+
+- [Runtime image and hardening policy](docs/RUNTIME_IMAGES.md)
+- [Go core ADR](docs/ADR-GO-CORE.md)
+- [Hostile-document threat model](docs/THREAT_MODEL.md)
+- [Security inspector ABI](docs/INSPECTOR_ABI.md)
+- [Red/blue team and global concept sweep](docs/RED_BLUE_GLOBAL_SWEEP.md)
