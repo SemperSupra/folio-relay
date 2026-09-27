@@ -19,12 +19,30 @@ candidates:
   cups-minimal:
     hypothesis: general scheduler can be sufficiently subordinated and stripped
     permanent_fork_allowed: false
+    production_status: active-candidate
+    upstream_scheduler_suite: pass
   ippeveprinter:
     hypothesis: simple upstream IPP Everywhere server is sufficient as ingress
     permanent_fork_allowed: false
+    production_status: rejected
+    rejection_evidence:
+      reason: single-active-job-concurrency
+      attempts: 100
+      successes: 8
+      failures: 92
+      observed_status: server-error-busy
+    retained_role: interoperability-and-protocol-oracle
   pappl:
     hypothesis: production-oriented IPP framework can be constrained to a narrow adapter
     permanent_fork_allowed: false
+    production_status: active-candidate
+    initial_pressure:
+      clients: 100
+      requests_per_client: 1000
+      total_requests: 100000
+      requests_per_second: 945
+      errors: 12
+      status: requires-characterization
 
 veto_gates:
   - native_ipp_interoperability
