@@ -19,7 +19,10 @@ const (
 	maxJournalRecord = 4 << 20
 )
 
-var ErrJournalCorrupt = errors.New("journal corrupt")
+var (
+	ErrJournalCorrupt = errors.New("journal corrupt")
+	ErrJournalLocked  = errors.New("journal already has an active writer")
+)
 
 type Journal struct {
 	mu   sync.Mutex
@@ -38,8 +41,13 @@ func OpenJournal(path string) (*Journal, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open journal: %w", err)
 	}
+	if err := lockJournalFile(f); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("%w: %v", ErrJournalLocked, err)
+	}
 	j := &Journal{file: f, path: path}
 	if _, err := j.Recover(); err != nil {
+		_ = unlockJournalFile(f)
 		f.Close()
 		return nil, err
 	}
@@ -56,9 +64,13 @@ func (j *Journal) Close() error {
 	if j.file == nil {
 		return nil
 	}
-	err := j.file.Close()
+	unlockErr := unlockJournalFile(j.file)
+	closeErr := j.file.Close()
 	j.file = nil
-	return err
+	if unlockErr != nil {
+		return unlockErr
+	}
+	return closeErr
 }
 
 func (j *Journal) Append(payload []byte) error {
