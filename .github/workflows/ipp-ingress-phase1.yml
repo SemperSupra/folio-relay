@@ -433,6 +433,79 @@ jobs:
           printf '%s\n' "$stats" | tee "$RUNNER_TEMP/evidence/concurrent-stats.json"
           python3 -c 'import json,sys; s=json.load(sys.stdin); assert s["accepted"] >= 26 and s["conflicts"] == 0, s' <<<"$stats"
 
+      - name: Prove PAPPL FolioRelay replay, conflict, and restart semantics
+        shell: bash
+        env:
+          FOLIORELAY_SUBSTRATE: pappl
+          FOLIORELAY_STATE_URL: http://127.0.0.1:18080
+          FOLIORELAY_INGRESS_STORE: ${{ runner.temp }}/ingress
+          FOLIORELAY_SUBSTRATE_INSTANCE: gha-${{ github.run_id }}-${{ github.run_attempt }}
+          FOLIORELAY_MEDIA_TYPE: application/pdf
+          FOLIORELAY_COPIES: "1"
+        run: |
+          set -euo pipefail
+          job_id="$(awk '/job-id \\(integer\\)/ {print $NF; exit}' "$RUNNER_TEMP/evidence/print-job.txt")"
+          [[ "$job_id" =~ ^[0-9]+$ ]]
+          export FOLIORELAY_SOURCE_JOB_ID="$job_id"
+
+          curl -fsS http://127.0.0.1:18080/v1/stats \
+            | tee "$RUNNER_TEMP/evidence/pappl-pre-parity-stats.json"
+          "$RUNNER_TEMP/bin/foliorelay-ipp-ingest" "$RUNNER_TEMP/sample.pdf" \
+            2>>"$RUNNER_TEMP/evidence/pappl-adapter.log"
+          curl -fsS http://127.0.0.1:18080/v1/stats \
+            | tee "$RUNNER_TEMP/evidence/pappl-replay-stats.json"
+
+          cp "$RUNNER_TEMP/sample.pdf" "$RUNNER_TEMP/pappl-conflict.pdf"
+          printf '\n%% conflicting bytes\n' >>"$RUNNER_TEMP/pappl-conflict.pdf"
+          if "$RUNNER_TEMP/bin/foliorelay-ipp-ingest" "$RUNNER_TEMP/pappl-conflict.pdf" \
+              2>>"$RUNNER_TEMP/evidence/pappl-adapter.log"; then
+            echo "conflicting PAPPL idempotency replay unexpectedly succeeded" >&2
+            exit 1
+          fi
+          curl -fsS http://127.0.0.1:18080/v1/stats \
+            | tee "$RUNNER_TEMP/evidence/pappl-conflict-stats.json"
+
+          python3 - \
+            "$RUNNER_TEMP/evidence/pappl-pre-parity-stats.json" \
+            "$RUNNER_TEMP/evidence/pappl-replay-stats.json" \
+            "$RUNNER_TEMP/evidence/pappl-conflict-stats.json" <<'PY'
+          import json, pathlib, sys
+          before, replay, conflict = [
+              json.loads(pathlib.Path(path).read_text()) for path in sys.argv[1:]
+          ]
+          assert replay["accepted"] == before["accepted"], (before, replay)
+          assert replay["replayed"] == before["replayed"] + 1, (before, replay)
+          assert replay["conflicts"] == before["conflicts"], (before, replay)
+          assert conflict["accepted"] == replay["accepted"], (replay, conflict)
+          assert conflict["replayed"] == replay["replayed"], (replay, conflict)
+          assert conflict["conflicts"] == replay["conflicts"] + 1, (replay, conflict)
+          PY
+
+          kill "$(cat "$RUNNER_TEMP/evidence/state.pid")"
+          wait "$(cat "$RUNNER_TEMP/evidence/state.pid")" 2>/dev/null || true
+          "$RUNNER_TEMP/bin/foliorelay-state-fixture" \
+            -listen 127.0.0.1:18080 \
+            -journal "$RUNNER_TEMP/state/journal.frj" \
+            >>"$RUNNER_TEMP/evidence/state.log" 2>&1 &
+          echo $! >"$RUNNER_TEMP/evidence/state.pid"
+          for i in $(seq 1 30); do
+            curl -fsS -o /dev/null http://127.0.0.1:18080/health && break
+            sleep 1
+          done
+          curl -fsS -o /dev/null http://127.0.0.1:18080/health
+
+          "$RUNNER_TEMP/bin/foliorelay-ipp-ingest" "$RUNNER_TEMP/sample.pdf" \
+            2>>"$RUNNER_TEMP/evidence/pappl-adapter.log"
+          curl -fsS http://127.0.0.1:18080/v1/stats \
+            | tee "$RUNNER_TEMP/evidence/pappl-post-restart-stats.json"
+          python3 - "$RUNNER_TEMP/evidence/pappl-post-restart-stats.json" <<'PY'
+          import json, pathlib, sys
+          stats = json.loads(pathlib.Path(sys.argv[1]).read_text())
+          assert stats["accepted"] == 0, stats
+          assert stats["replayed"] == 1, stats
+          assert stats["conflicts"] == 0, stats
+          PY
+
       - name: Record PAPPL transient-state surface
         shell: bash
         run: |
@@ -714,6 +787,79 @@ jobs:
           done
           printf '%s\n' "$stats" | tee "$RUNNER_TEMP/evidence/concurrent-stats.json"
           python3 -c 'import json,sys; s=json.load(sys.stdin); assert s["accepted"] >= 26 and s["conflicts"] == 0, s' <<<"$stats"
+
+      - name: Prove CUPS FolioRelay replay, conflict, and restart semantics
+        shell: bash
+        env:
+          FOLIORELAY_SUBSTRATE: cups
+          FOLIORELAY_STATE_URL: http://127.0.0.1:18080
+          FOLIORELAY_INGRESS_STORE: ${{ runner.temp }}/ingress
+          FOLIORELAY_SUBSTRATE_INSTANCE: gha-${{ github.run_id }}-${{ github.run_attempt }}
+          FOLIORELAY_MEDIA_TYPE: application/pdf
+          FOLIORELAY_COPIES: "1"
+        run: |
+          set -euo pipefail
+          job_id="$(awk '/job-id \\(integer\\)/ {print $NF; exit}' "$RUNNER_TEMP/evidence/print-job.txt")"
+          [[ "$job_id" =~ ^[0-9]+$ ]]
+          export FOLIORELAY_SOURCE_JOB_ID="$job_id"
+
+          curl -fsS http://127.0.0.1:18080/v1/stats \
+            | tee "$RUNNER_TEMP/evidence/cups-pre-parity-stats.json"
+          "$RUNNER_TEMP/bin/foliorelay-ipp-ingest" "$RUNNER_TEMP/sample.pdf" \
+            2>>"$RUNNER_TEMP/evidence/cups-adapter.log"
+          curl -fsS http://127.0.0.1:18080/v1/stats \
+            | tee "$RUNNER_TEMP/evidence/cups-replay-stats.json"
+
+          cp "$RUNNER_TEMP/sample.pdf" "$RUNNER_TEMP/cups-conflict.pdf"
+          printf '\n%% conflicting bytes\n' >>"$RUNNER_TEMP/cups-conflict.pdf"
+          if "$RUNNER_TEMP/bin/foliorelay-ipp-ingest" "$RUNNER_TEMP/cups-conflict.pdf" \
+              2>>"$RUNNER_TEMP/evidence/cups-adapter.log"; then
+            echo "conflicting CUPS idempotency replay unexpectedly succeeded" >&2
+            exit 1
+          fi
+          curl -fsS http://127.0.0.1:18080/v1/stats \
+            | tee "$RUNNER_TEMP/evidence/cups-conflict-stats.json"
+
+          python3 - \
+            "$RUNNER_TEMP/evidence/cups-pre-parity-stats.json" \
+            "$RUNNER_TEMP/evidence/cups-replay-stats.json" \
+            "$RUNNER_TEMP/evidence/cups-conflict-stats.json" <<'PY'
+          import json, pathlib, sys
+          before, replay, conflict = [
+              json.loads(pathlib.Path(path).read_text()) for path in sys.argv[1:]
+          ]
+          assert replay["accepted"] == before["accepted"], (before, replay)
+          assert replay["replayed"] == before["replayed"] + 1, (before, replay)
+          assert replay["conflicts"] == before["conflicts"], (before, replay)
+          assert conflict["accepted"] == replay["accepted"], (replay, conflict)
+          assert conflict["replayed"] == replay["replayed"], (replay, conflict)
+          assert conflict["conflicts"] == replay["conflicts"] + 1, (replay, conflict)
+          PY
+
+          kill "$(cat "$RUNNER_TEMP/evidence/state.pid")"
+          wait "$(cat "$RUNNER_TEMP/evidence/state.pid")" 2>/dev/null || true
+          "$RUNNER_TEMP/bin/foliorelay-state-fixture" \
+            -listen 127.0.0.1:18080 \
+            -journal "$RUNNER_TEMP/state/journal.frj" \
+            >>"$RUNNER_TEMP/evidence/state.log" 2>&1 &
+          echo $! >"$RUNNER_TEMP/evidence/state.pid"
+          for i in $(seq 1 30); do
+            curl -fsS -o /dev/null http://127.0.0.1:18080/health && break
+            sleep 1
+          done
+          curl -fsS -o /dev/null http://127.0.0.1:18080/health
+
+          "$RUNNER_TEMP/bin/foliorelay-ipp-ingest" "$RUNNER_TEMP/sample.pdf" \
+            2>>"$RUNNER_TEMP/evidence/cups-adapter.log"
+          curl -fsS http://127.0.0.1:18080/v1/stats \
+            | tee "$RUNNER_TEMP/evidence/cups-post-restart-stats.json"
+          python3 - "$RUNNER_TEMP/evidence/cups-post-restart-stats.json" <<'PY'
+          import json, pathlib, sys
+          stats = json.loads(pathlib.Path(sys.argv[1]).read_text())
+          assert stats["accepted"] == 0, stats
+          assert stats["replayed"] == 1, stats
+          assert stats["conflicts"] == 0, stats
+          PY
 
       - name: Record CUPS transient-state surface
         shell: bash
