@@ -158,3 +158,25 @@ machines:
     guards:
       inspector_result_cannot_directly_promote_artifact: true
       inspector_result_cannot_change_route_authority: true
+
+  state_authority:
+    initial: starting
+    states:
+      starting: [recovering, safe_stop]
+      recovering: [active, read_only, safe_stop]
+      active: [draining, read_only, safe_stop]
+      draining: [stopped, read_only, safe_stop]
+      read_only: [recovering, draining, safe_stop]
+      safe_stop: [recovering, stopped]
+      stopped: []
+    guards:
+      active_requires:
+        - exclusive_writer_lease
+        - journal_integrity_verified
+        - supported_schema_version
+        - persistent_store_writable_and_fsynced
+      mutating_commands_allowed_only_in: [active]
+      read_only_queries_allowed_in: [active, draining, read_only]
+      invariant_violation_enters: safe_stop
+      journal_corruption_beyond_recoverable_tail_enters: safe_stop
+      storage_write_or_fsync_failure_enters: read_only
