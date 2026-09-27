@@ -1,0 +1,69 @@
+schema_version: 1
+product: FolioRelay
+experiment: print-substrate-bakeoff
+autonomous: true
+user_manual_steps: prohibited
+
+sources:
+  cups:
+    repository: OpenPrinting/cups
+    version: v2.4.19
+  ippeveprinter:
+    repository: OpenPrinting/cups
+    version: v2.4.19
+  pappl:
+    repository: michaelrsweet/pappl
+    version: v1.4.11
+
+candidates:
+  cups-minimal:
+    hypothesis: general scheduler can be sufficiently subordinated and stripped
+    permanent_fork_allowed: false
+  ippeveprinter:
+    hypothesis: simple upstream IPP Everywhere server is sufficient as ingress
+    permanent_fork_allowed: false
+  pappl:
+    hypothesis: production-oriented IPP framework can be constrained to a narrow adapter
+    permanent_fork_allowed: false
+
+veto_gates:
+  - native_ipp_interoperability
+  - ipp_everywhere_engineering_conformance
+  - canonical_artifact_handoff
+  - stable_job_effect_correlation
+  - bounded_concurrency
+  - bounded_input_resources
+  - crash_restart_safety
+  - no_duplicate_effects
+  - tls
+  - discovery_when_enabled
+  - least_privilege
+  - malformed_request_resilience
+  - no_competing_durable_authority
+  - amd64
+  - arm64
+  - upstream_security_update_path
+
+metrics:
+  - executable_bytes
+  - runtime_dependency_bytes
+  - dynamic_library_count
+  - executable_count
+  - package_count
+  - cve_surface
+  - startup_latency
+  - idle_rss
+  - loaded_rss
+  - throughput
+  - concurrent_clients
+  - capabilities
+  - writable_paths
+  - listening_sockets
+  - duplicated_state
+  - folio_relay_glue_loc
+  - carried_patch_count
+
+selection:
+  rule: smallest-upstream-maintained-substrate-that-passes-all-required-gates
+  size_alone_can_select: false
+  permanent_source_fork_is_veto: true
