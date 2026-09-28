@@ -424,10 +424,10 @@ jobs:
 
           getattr="$(find /usr/share/cups -type f -name get-printer-attributes.test -print -quit)"
           test -n "$getattr"
-          ipptool -S -q ipps://localhost:8636/ipp/print "$getattr"
+          timeout 20 ipptool -S -q ipps://localhost:8636/ipp/print "$getattr"
 
           set +e
-          ipptool -q ipp://127.0.0.1:8636/ipp/print "$getattr" \
+          timeout 20 ipptool -q ipp://127.0.0.1:8636/ipp/print "$getattr" \
             >"$RUNNER_TEMP/evidence/pappl-plaintext-on-tls-only.out" \
             2>"$RUNNER_TEMP/evidence/pappl-plaintext-on-tls-only.err"
           plaintext_rc=$?
@@ -1131,10 +1131,10 @@ jobs:
 
           getattr="$(find /usr/share/cups -type f -name get-printer-attributes.test -print -quit)"
           test -n "$getattr"
-          ipptool -S -q ipps://localhost:8635/printers/FolioRelay "$getattr"
+          timeout 20 ipptool -S -q ipps://localhost:8635/printers/FolioRelay "$getattr"
 
           set +e
-          ipptool -q ipp://127.0.0.1:8635/printers/FolioRelay "$getattr" \
+          timeout 20 ipptool -q ipp://127.0.0.1:8635/printers/FolioRelay "$getattr" \
             >"$RUNNER_TEMP/evidence/cups-plaintext-on-tls-port.out" \
             2>"$RUNNER_TEMP/evidence/cups-plaintext-on-tls-port.err"
           plaintext_rc=$?
