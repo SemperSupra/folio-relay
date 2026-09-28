@@ -1,4 +1,4 @@
-schema_version: 2
+schema_version: 3
 product: FolioRelay
 experiment: print-substrate-bakeoff
 autonomous: true
@@ -72,6 +72,68 @@ candidates:
           - 7
           - 12
         note: repeated long-run observations vary and require root-cause characterization
+
+
+operating_envelope:
+  interpretation:
+    measured_throughput_is_characterization_not_capacity_limit: true
+    passing_concurrency_is_minimum_proven_envelope_not_capacity_claim: true
+    github_hosted_runner_results_are_not_production_sizing: true
+  qualified_gates:
+    real_print_job_concurrency:
+      cups-minimal:
+        concurrent_submissions: 25
+        status: pass
+      pappl:
+        concurrent_submissions: 25
+        status: pass
+    pappl_minimal_external_client_pressure:
+      - clients: 100
+        requests_per_client: 100
+        failed_clients: 0
+        timed_out_clients: 0
+        status: pass
+      - clients: 100
+        requests_per_client: 1000
+        failed_clients: 0
+        timed_out_clients: 0
+        status: pass
+    authority_outage:
+      cups-minimal: pass
+      pappl: pass
+  hard_product_limits:
+    artifact_bytes: 104857600
+    copies_per_job: 1000
+    state_journal_record_bytes: 4194304
+    substrate_spool: deployment-bounded-separate-filesystem
+
+flow_control:
+  throttle_basis: resource-budget-and-work-pressure
+  throughput_rps_limit_derived_from_ci_measurement: prohibited
+  admission:
+    hard_budget_exhaustion: retryable-backpressure-before-durable-accept
+    permanent_policy_violation: resource-rejected
+    backpressure_consumes_idempotency_key: false
+    backpressure_creates_effect_intent: false
+  retries:
+    finite_budget_required: true
+    stable_identity_preserved: true
+    unbounded_retry: prohibited
+  observability:
+    structured_warning_events: required
+    external_event_bus: optional
+    warning_delivery_required_for_correctness: false
+    rate_limited: true
+    recommended_signals:
+      - substrate_spool_utilization
+      - durable_store_free_capacity
+      - pending_or_active_work
+      - oldest_pending_age
+      - state_authority_unavailable
+      - retry_budget_consumption
+      - resource_rejections
+      - idempotency_conflicts
+      - journal_fsync_latency
 
 veto_gates:
   - native_ipp_interoperability

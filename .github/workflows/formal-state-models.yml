@@ -48,3 +48,9 @@ jobs:
         run: |
           set -euo pipefail
           java -jar "$RUNNER_TEMP/tla2tools.jar"             -workers auto             -config formal/DeliveryAmbiguity.cfg             formal/DeliveryAmbiguity.tla
+
+      - name: Check resource backpressure model
+        shell: bash
+        run: |
+          set -euo pipefail
+          java -jar "$RUNNER_TEMP/tla2tools.jar"             -workers auto             -config formal/ResourceBackpressure.cfg             formal/ResourceBackpressure.tla

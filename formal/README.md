@@ -8,7 +8,10 @@ Current models:
 - `CommandIdempotency.tla` — repeated/reordered commands cannot create extra
   generation advances or duplicate effect intents;
 - `DeliveryAmbiguity.tla` — an ambiguous external delivery cannot blindly
-  return to a retryable state.
+  return to a retryable state;
+- `ResourceBackpressure.tla` — saturation cannot overrun a hard capacity
+  budget, and a retryable pressure response cannot consume the command's
+  idempotency identity or become an accepted command.
 
 TLC is pinned by content digest in CI.
 

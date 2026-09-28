@@ -53,6 +53,16 @@ invariants:
     statement: Failure or retry of one route leg cannot replay a different route leg that already reached a successful terminal state.
   - id: INV-STATE-015
     statement: An email-artifact effect binds immutable artifact identity, recipient identity, route-leg identity, and immutable sender plugin identity before dispatch.
+  - id: INV-STATE-016
+    statement: Retryable admission backpressure cannot consume an idempotency key, advance generation, or create an effect intent.
+  - id: INV-STATE-017
+    statement: New work cannot be durably accepted when any required hard resource budget is exhausted.
+  - id: INV-STATE-018
+    statement: Automatic retries have an explicit finite attempt or time budget and preserve stable command identity.
+  - id: INV-STATE-019
+    statement: Substrate spool and queue state are bounded disposable projection state and cannot consume the state journal's reserved capacity.
+  - id: INV-STATE-020
+    statement: Operational warning delivery is advisory and cannot be required for correctness or durable state safety.
 
 machines:
   route_leg:
@@ -164,6 +174,24 @@ machines:
     guards:
       inspector_result_cannot_directly_promote_artifact: true
       inspector_result_cannot_change_route_authority: true
+
+  resource_admission:
+    initial: normal
+    states:
+      normal: [pressure, saturated]
+      pressure: [normal, saturated]
+      saturated: [recovering]
+      recovering: [normal, pressure, saturated]
+    guards:
+      accepts_allowed_only_when_hard_budgets_available: true
+      pressure_may_reduce_worker_concurrency: true
+      saturated_new_work_disposition: retryable_backpressure_before_durable_accept
+      retryable_backpressure_consumes_idempotency_key: false
+      retryable_backpressure_creates_effect_intent: false
+      automatic_retry_requires_finite_budget: true
+      thresholds_are_deployment_configured: true
+      recovery_requires_hysteresis: true
+      warnings_are_rate_limited_and_advisory: true
 
   state_authority:
     initial: starting

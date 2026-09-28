@@ -120,6 +120,58 @@ Common controls for every candidate:
   runtime surface;
 - physical-printer transport is separable from virtual-printer ingress.
 
+
+## Operating envelope, throttling, backpressure, and warnings
+
+The stress results are sufficient to define a **qualified envelope**, but not a
+production RPS ceiling. GitHub-hosted runner throughput is environment-specific,
+so FolioRelay must not hard-code a requests-per-second throttle from CI
+measurements.
+
+The control rule is resource-driven:
+
+- preserve protocol/control-plane responsiveness while bounded ingress scratch
+  absorbs normal bursts;
+- reduce worker concurrency when a deployment-defined pressure watermark is
+  crossed;
+- before a hard resource budget is exhausted, stop admitting new durable work
+  and return a retryable/backpressure disposition;
+- a retryable pressure response occurs before durable acceptance, consumes no
+  idempotency key, advances no generation, and creates no effect intent;
+- permanent policy/resource violations remain distinguishable from transient
+  pressure;
+- every automatic retry loop has an explicit finite attempt/time budget and
+  preserves stable job/command identity;
+- recovery from saturation uses hysteresis so the system does not oscillate at
+  a threshold.
+
+The initial proven envelope is evidence, not a capacity claim:
+
+- CUPS and PAPPL each passed 25 simultaneous real Print-Job submissions into
+  the same FolioRelay state/idempotency semantics;
+- the minimal PAPPL fixture passed 100 independent clients x 100 requests and
+  100 x 1000 requests with zero failed or timed-out clients;
+- both active candidates pass authority-outage fail-closed/recovery semantics.
+
+### Warning/eventing policy
+
+Warnings should be emitted as structured, rate-limited operational events and
+metrics. They are advisory: an unavailable log collector or event sink must
+never change state-machine correctness.
+
+Useful signals include substrate-spool utilization, durable-store free
+capacity, pending/active work, oldest pending age, authority unavailability,
+retry-budget consumption, resource rejections, idempotency conflicts, and
+journal fsync latency.
+
+Do **not** introduce a mandatory event broker for this. Structured local events
+and metrics are the minimal first implementation; external routing can remain
+a replaceable observer.
+
+Hard safety belongs in invariants and admission control. Warning thresholds,
+worker concurrency, and pressure watermarks are deployment-tunable policy and
+must remain below the hard safety boundary.
+
 ## Veto gates
 
 A candidate is rejected regardless of size if any required gate cannot be met
