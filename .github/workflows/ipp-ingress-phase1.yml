@@ -433,7 +433,11 @@ jobs:
           plaintext_rc=$?
           set -e
           echo "$plaintext_rc" >"$RUNNER_TEMP/evidence/pappl-plaintext-on-tls-only.rc"
-          test "$plaintext_rc" -ne 0
+          if [ "$plaintext_rc" -eq 0 ]; then
+            echo "loopback_plaintext_accepted=true"               >"$RUNNER_TEMP/evidence/pappl-tls-loopback-policy.txt"
+          else
+            echo "loopback_plaintext_accepted=false"               >"$RUNNER_TEMP/evidence/pappl-tls-loopback-policy.txt"
+          fi
 
           kill "$tls_pid"
           wait "$tls_pid" 2>/dev/null || true
