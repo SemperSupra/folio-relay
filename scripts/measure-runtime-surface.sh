@@ -90,7 +90,7 @@ docker inspect -f '{{json .HostConfig.Tmpfs}}' "$cid" >"$output_dir/tmpfs.json"
 : >"$output_dir/mount-usage.tsv"
 for destination in $(docker inspect -f '{{range .Mounts}}{{println .Destination}}{{end}}' "$cid"); do
   bytes="$(docker compose -f "$compose_file" exec -T "$service" \
-    sh -c 'du -sb "$1" 2>/dev/null | awk "{print \\$1}"' sh "$destination" \
+    sh -c 'du -sb "$1" 2>/dev/null | cut -f1' sh "$destination" \
     | tr -d '\r' | tail -1)"
   [ -n "$bytes" ] || bytes=0
   printf '%s\t%s\n' "$destination" "$bytes" >>"$output_dir/mount-usage.tsv"
