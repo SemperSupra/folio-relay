@@ -218,11 +218,11 @@ operating_envelope:
       normalized_against_pinned_minimal_libcups: true
       immutable_input_tuple: true
       cups-minimal:
-        image_size_bytes: 90321940
-        rootfs_accessible_file_count: 2745
-        rootfs_accessible_file_bytes: 93324056
-        executable_file_count: 507
-        executable_file_bytes: 41583958
+        image_size_bytes: 90336412
+        rootfs_accessible_file_count: 2746
+        rootfs_accessible_file_bytes: 93338528
+        executable_file_count: 508
+        executable_file_bytes: 41598430
         package_count: 94
         package_installed_size_kib: 96801
         measured_dynamic_dependency_count: 8
@@ -331,34 +331,40 @@ platform_client_matrix:
           artifact_store: /private/var/spool/foliorelay-ingress-<run>
           rationale: honor upstream process-exec and writable-path policy
   windows_2025:
-    status: capability-interview-pass
-    mutation_allowed: false
+    status: pass
+    native_path: printmanagement-add-printer-ippurl-plus-out-printer
+    runner: windows-2025
+    host_strategy:
+      candidate_host: imported-pinned-wsl2-rootfs
+      networking: nat-direct-ip
+      localhost_forwarding_required: false
+      hyperv_firewall_bounded_to_candidate_ports: true
     observed:
       spooler: running
       print_management_module: present
-      add_printer: present
-      msft_printer_cim_class: present
-      microsoft_ipp_class_driver: present
-    host_strategy_census:
-      wsl_present: true
-      wsl_status_probe: pass
-      wsl_version_probe: pass
-      windows_subsystem_for_linux_feature: enabled
-      virtual_machine_platform_feature: enabled
-      vmcompute_service: running
-      hns_service: running
-      docker_service: running
-      virtualization_firmware_enabled: true
       add_printer_ipp_url_parameter: present
-    next_rep:
-      status: wsl2-import-and-localhost-forwarding-qualification-in-progress
-      strategy: imported-pinned-ubuntu-rootfs
-      qualification_probe: real-foliorelay-state-authority
-      then:
-        - host-real-pappl-or-cups-candidate-in-qualified-wsl
-        - create-windows-native-ipp-printer
-        - submit-through-windows-spooler
-        - require-durable-foliorelay-acceptance
+      microsoft_ipp_class_driver: present
+      wsl2_import: pass
+      windows_to_wsl_direct_ip: pass
+    candidates:
+      pappl:
+        status: pass
+        exact_source_commit: 6db8e137557ad84662e78d24fdb2a591c621f4ac
+        native_submission: pass
+        durable_acceptance: pass
+        idempotency_conflicts: 0
+        evidence_run: 36441803876
+      cups-minimal:
+        status: pass
+        exact_source_commit: 6ba0487abb05afc93d639f37676add8fd65d3756
+        native_submission: pass
+        durable_acceptance: pass
+        idempotency_conflicts: 0
+        evidence_run: 36441803876
+        windows_transport_requirement:
+          upstream_filter: gziptoany
+          rationale: Microsoft IPP Class Driver submits gzip-encoded IPP document data
+          broader_legacy_filter_stack_required: false
   android:
     status: unqualified
     requirement: faithful-native-print-service-path
@@ -403,6 +409,60 @@ metrics:
   - duplicated_state
   - folio_relay_glue_loc
   - carried_patch_count
+
+selection_characterization:
+  evidence_head: 253edbfc3ae1605a17a767c46c78ae3aff384d26
+  windows_native_parity: pass
+  operating_footprint:
+    cups-minimal:
+      process_vm_rss_kib: 5668
+      cgroup_memory_current_bytes: 6094848
+      cgroup_memory_peak_bytes: 14684160
+      process_open_fd_count: 11
+      process_socket_fd_count: 2
+      listening_tcp_ports:
+        - 8634
+        - 8635
+      persistent_projection_bytes: 3781
+      restart_to_ipp_ready_ms:
+        min: 227
+        median: 228
+        max: 235
+    pappl:
+      process_vm_rss_kib: 9160
+      cgroup_memory_current_bytes: 7217152
+      cgroup_memory_peak_bytes: 14630912
+      process_open_fd_count: 5
+      process_socket_fd_count: 2
+      listening_tcp_ports:
+        - 8633
+      persistent_projection_bytes: 2371
+      restart_to_ipp_ready_ms:
+        min: 166
+        median: 171
+        max: 178
+    interpretation: characterization-only-ci-runtime-not-capacity-limit
+  maintenance_surface:
+    cups-minimal:
+      folio_relay_glue_loc: 34
+      candidate_configuration_loc: 249
+      carried_patch_count: 0
+    pappl:
+      folio_relay_glue_loc: 258
+      candidate_configuration_loc: 182
+      carried_patch_count: 0
+  minimal_cups_runtime_policy:
+    required_upstream_filters:
+      - gziptoany
+    excluded_surfaces_proven_absent:
+      - /usr/lib/cups/filter/pstops
+      - /usr/lib/cups/filter/rastertopwg
+      - /usr/lib/cups/filter/foomatic-rip
+      - /usr/lib/cups/backend/ipp
+      - /usr/lib/cups/backend/snmp
+      - /usr/lib/cups/notifier/mailto
+      - /usr/sbin/sendmail
+    only_installed_backend: /usr/lib/cups/backend/foliorelay
 
 selection:
   rule: smallest-upstream-maintained-substrate-that-passes-all-required-gates

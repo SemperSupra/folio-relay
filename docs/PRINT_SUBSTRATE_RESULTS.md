@@ -594,3 +594,53 @@ private libcups closure are applied symmetrically:
 The image-size difference is about 0.008%. Surface size is therefore not a
 meaningful selector between the two survivors. Broader native-platform
 interoperability remains a separate Phase-3 work item.
+
+
+## Windows parity and current selection characterization
+
+Commit `253edbfc3ae1605a17a767c46c78ae3aff384d26` closes the remaining hosted
+desktop-native parity gate.
+
+`Windows Native Client Qualification #27` passes for both active candidates
+using the real Windows Server 2025 PrintManagement/Spooler path,
+`Add-Printer -IppURL`, Microsoft IPP Class Driver, and candidate processes
+running from the exact pinned engineering rootfs under WSL2.
+
+For minimal CUPS, the Windows rep discovered one upstream transport dependency:
+`gziptoany`. Windows submits gzip-encoded IPP document data, and upstream
+`cupsd` inserts that filter before the FolioRelay backend. Retaining only
+`gziptoany` is sufficient. Engineering CUPS Runtime #69 passes with explicit
+negative assertions that legacy `pstops`, `rastertopwg`,
+`foomatic-rip`, generic `ipp`/SNMP backends, `mailto`, and `sendmail`
+are absent.
+
+### Current packaged and operating footprint
+
+| Metric | CUPS | PAPPL |
+|---|---:|---:|
+| Image size | 90,336,412 B | 90,328,920 B |
+| Accessible rootfs files | 2,746 | 2,756 |
+| Executable files | 508 | 505 |
+| Dynamic dependency paths | 8 | 9 |
+| PID 1 RSS | 5,668 KiB | 9,160 KiB |
+| Cgroup current memory | 6,094,848 B | 7,217,152 B |
+| Cgroup peak memory | 14,684,160 B | 14,630,912 B |
+| PID 1 open FDs | 11 | 5 |
+| Candidate TCP listener ports | 8634, 8635 | 8633 |
+| Persistent projection bytes in this rep | 3,781 B | 2,371 B |
+| Restart-to-IPP-ready median | 228 ms | 171 ms |
+| FolioRelay executable glue | 34 effective LOC | 258 effective LOC |
+| Candidate configuration | 249 effective LOC | 182 effective LOC |
+| Carried upstream source patches | 0 | 0 |
+
+These are characterization values, not independent selection verdicts. The image
+surfaces and peak memory remain effectively tied. CUPS currently has lower idle
+RSS and substantially less executable integration glue; PAPPL uses fewer open
+FDs/listeners, less substrate projection state, and a smaller declarative
+configuration surface. Restart timing is runner-sensitive and remains
+characterization only.
+
+Hosted desktop native-client parity is now symmetric on Linux, macOS, and
+Windows. Android and iOS/iPadOS remain deliberately unqualified until a hosted
+or HIL path can exercise their actual native print service/AirPrint behavior
+without substituting a generic protocol client.

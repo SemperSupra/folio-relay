@@ -15,7 +15,7 @@ does not count as that platform's native-print qualification.
 | Linux Ubuntu 24.04 native libcups direct Print-Job | PASS | PASS | qualified |
 | Ubuntu local CUPS `-m everywhere` + `lp` conversion | host filter crash | host filter crash | negative-space evidence; not a candidate gate |
 | macOS 15 native print subsystem | PASS | PASS | qualified through system CUPS `lpadmin -m everywhere` + native `lp` |
-| Windows Server 2025 native print subsystem | — | — | capability interview passed; candidate-host strategy required |
+| Windows Server 2025 native print subsystem | PASS | PASS | qualified through PrintManagement/Spooler + Microsoft IPP Class Driver |
 | Android print service / Mopria-compatible path | — | — | unqualified; require faithful hosted execution |
 | iOS/iPadOS AirPrint path | — | — | unqualified; require faithful simulator/device execution |
 
@@ -168,3 +168,41 @@ acceptance advances and the idempotency-conflict counter remains unchanged.
 
 macOS native-client parity is therefore closed for both active substrate
 candidates.
+
+
+### Windows native parity result
+
+`Windows Native Client Qualification #27` (run ID `36441803876`) closes
+Windows parity for both active candidates on the public Windows Server 2025
+runner.
+
+The qualified path is the operating system's real print stack:
+
+1. the exact packaged candidate rootfs is exported from the pinned Ubuntu build;
+2. Windows imports it into WSL2;
+3. Windows reaches the candidate through the qualified NAT direct-IP path;
+4. `Add-Printer -IppURL` creates the queue using Microsoft IPP Class Driver;
+5. `Out-Printer` submits through PrintManagement/Spooler;
+6. FolioRelay durable acceptance must advance without an idempotency conflict.
+
+Both PAPPL v1.4.12 and minimal CUPS v2.4.19 pass.
+
+The CUPS qualification exposed one genuine minimization requirement. Windows
+sends the IPP document with gzip transport encoding, and upstream `cupsd`
+automatically inserts its `gziptoany` filter before the FolioRelay backend.
+The minimized image had intentionally removed all stock filters, so the first
+native Windows rep stopped the job with `gziptoany` missing. The repair retains
+only upstream CUPS `gziptoany`; it does not add cups-filters or a broader
+legacy driver stack.
+
+Engineering CUPS Runtime #69 proves that the retained transport filter is
+present while `pstops`, `rastertopwg`, `foomatic-rip`, the generic CUPS
+`ipp` and `snmp` backends, the `mailto` notifier, and `sendmail` remain
+absent. The only installed backend is the bounded FolioRelay backend.
+
+The passing Windows CUPS evidence records:
+
+- driver: `Microsoft IPP Class Driver`;
+- native job state: Complete/Retained, one page;
+- durable FolioRelay stats: accepted `0 -> 1`;
+- idempotency conflicts: `0`.
