@@ -410,6 +410,35 @@ metrics:
   - folio_relay_glue_loc
   - carried_patch_count
 
+security_surface_characterization:
+  reviewed_at: 2026-09-28
+  raw_advisory_count_can_select: false
+  cups_minimal:
+    upstream_version: v2.4.19
+    scheduler_present: true
+    required_upstream_filters:
+      - gziptoany
+    only_backend: foliorelay
+    absent_advisory_surfaces:
+      - pstops
+      - rastertopwg
+      - foomatic-rip
+      - generic-ipp-backend
+      - snmp-backend
+      - mailto-notifier
+      - banner-data-tree
+      - sendmail
+    runtime_printer_management_operations_admitted: false
+    runtime_subscription_operations_admitted: false
+    residual_scheduler_code_requires_monitoring: true
+  pappl:
+    upstream_version: v1.4.12
+    cupsd_present: false
+    shared_minimized_libcups_present: true
+    cups_scheduler_backend_advisories_directly_applicable: false
+    shared_libcups_call_path_review_required: true
+  evidence_document: docs/PRINT_SUBSTRATE_SECURITY_SURFACE.md
+
 selection_characterization:
   evidence_head: 253edbfc3ae1605a17a767c46c78ae3aff384d26
   windows_native_parity: pass

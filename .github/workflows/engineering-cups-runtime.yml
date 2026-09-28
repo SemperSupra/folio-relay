@@ -140,6 +140,7 @@ jobs:
             /usr/lib/cups/backend/ipp \
             /usr/lib/cups/backend/snmp \
             /usr/lib/cups/notifier/mailto \
+            /usr/share/cups/banners \
             /usr/sbin/sendmail
           do
             if docker compose -f "$compose" exec -T cups test -e "$path"; then
@@ -152,6 +153,22 @@ jobs:
             sh -c 'find /usr/lib/cups/backend -maxdepth 1 -type f -printf "%f\\n" | sort' \
             | tee "$RUNNER_TEMP/engineering-runtime/cups-backends.txt"
           test "$(cat "$RUNNER_TEMP/engineering-runtime/cups-backends.txt")" = "foliorelay"
+
+          docker compose -f "$compose" exec -T cups \
+            grep -Fxq 'Browsing Off' /etc/cups/cupsd.conf
+          docker compose -f "$compose" exec -T cups \
+            grep -Fxq 'WebInterface No' /etc/cups/cupsd.conf
+          docker compose -f "$compose" exec -T cups \
+            grep -Fxq 'JobSheets none none' /etc/cups/printers.conf
+          docker compose -f "$compose" exec -T cups \
+            grep -Fq 'cupsFilter2: "application/pdf application/pdf 0 -"' /etc/cups/ppd/FolioRelay.ppd
+
+          if docker compose -f "$compose" exec -T cups \
+              grep -Eq 'CUPS-Add-Modify-Printer|CUPS-Create-Local-Printer|Create-Printer-Subscription|Create-Job-Subscriptions' \
+                /etc/cups/cupsd.conf; then
+            echo "unexpected printer-management/subscription operation admitted by CUPS policy" >&2
+            exit 1
+          fi
 
       - name: Prove Linux native libcups direct client path
         shell: bash
