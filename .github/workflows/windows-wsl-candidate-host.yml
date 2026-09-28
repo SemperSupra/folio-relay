@@ -115,7 +115,7 @@ jobs:
             }
 
             $wslIpRaw = (& wsl.exe -d $distro -- hostname -I | Out-String).Trim()
-            $wslIp = (($wslIpRaw -split '\\s+') | Where-Object { $_ })[0]
+            $wslIp = (($wslIpRaw -split '\s+') | Where-Object { $_ })[0]
             $directIpOk = $false
 
             "wsl_ip=$wslIp" | Set-Content (Join-Path $evidence 'network.txt')
