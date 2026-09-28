@@ -20,8 +20,14 @@ candidates:
     hypothesis: general scheduler can be sufficiently subordinated and stripped
     permanent_fork_allowed: false
     phase0: pass
+    phase1: pass
     upstream_scheduler_suite: pass
     production_status: active-candidate
+    authority_outage_policy:
+      upstream_error_policy: retry-job
+      qualification_retry_interval_seconds: 1
+      qualification_retry_limit: 10
+      rationale: fail closed during authority outage without permanently stopping the virtual queue
 
   ippeveprinter:
     hypothesis: simple upstream IPP Everywhere server is sufficient as ingress
@@ -47,6 +53,7 @@ candidates:
     hypothesis: production-oriented IPP framework can be constrained to a narrow adapter
     permanent_fork_allowed: false
     phase0: pass
+    phase1: pass
     production_status: active-candidate
     concurrency_observations:
       - clients: 25
@@ -101,6 +108,27 @@ operating_envelope:
     authority_outage:
       cups-minimal: pass
       pappl: pass
+    cancellation_status_projection:
+      cups-minimal: pass
+      pappl: pass
+    malformed_and_slow_client_resilience:
+      cups-minimal: pass
+      pappl: pass
+    abusive_copy_admission:
+      cups-minimal: pass
+      pappl: pass
+    bounded_spool_exhaustion:
+      cups-minimal: pass
+      pappl: pass
+      fixture_bytes: 2097152
+      invariant: substrate exhaustion does not advance durable accepted state or take down the state authority
+    architecture_build_smoke:
+      cups-minimal:
+        amd64: pass
+        arm64: pass
+      pappl:
+        amd64: pass
+        arm64: pass
   hard_product_limits:
     artifact_bytes: 104857600
     copies_per_job: 1000

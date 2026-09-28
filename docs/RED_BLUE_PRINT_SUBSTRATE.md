@@ -349,3 +349,32 @@ After the first stress round:
 Do not spend engineering effort adding queueing to `ippeveprinter`; that would
 create exactly the maintenance fork/duplicate queue authority this bake-off is
 intended to avoid.
+
+
+## Evidence update — parity, recovery, bounded spool, and arm64
+
+The active candidates now share the same FolioRelay state/idempotency contract
+in qualification. CUPS and PAPPL both pass replay/conflict/restart semantics,
+projection-only cancellation/status, malformed/slow-client pressure,
+million-copy abuse containment, authority-outage fail-closed recovery, and
+bounded 2 MiB substrate-spool exhaustion.
+
+The CUPS outage rep exposed a useful configuration dependency rather than a need
+for custom code: upstream CUPS defaults to `ErrorPolicy stop-printer`. For a
+virtual FolioRelay ingress queue that behavior prevents autonomous recovery
+after a transient authority outage. Using upstream `retry-job` with a finite
+retry budget passed the gate. Production retry interval/budget remains
+deployment policy; unbounded retries remain prohibited.
+
+PAPPL's actual minimal FolioRelay fixture also passed independent-client tiers
+of 100 x 100 and 100 x 1000 requests with zero failed or timed-out clients.
+Earlier degraded 100k-request upstream-harness observations are retained as
+historical variability, not silently discarded.
+
+Both active candidates now build and smoke successfully on native amd64 and
+arm64 GitHub-hosted runners. Architecture feasibility is therefore no longer a
+reason to prefer either candidate.
+
+Selection remains gated on the remaining required capabilities, particularly
+TLS, discovery/profile behavior, final-runtime least privilege/hardening, and
+the standards/native-client matrix.

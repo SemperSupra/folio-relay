@@ -250,3 +250,78 @@ required before product selection.
 - `ippeveprinter`: **rejected** for production ingress; retain as oracle.
 - minimal custom-built `cupsd`: **active candidate**.
 - minimal PAPPL service: **active candidate with concurrency investigation**.
+
+
+## Active-candidate parity closure and native arm64
+
+Latest software-only evidence closes several previously open parity gates without
+selecting a production winner.
+
+### Shared FolioRelay semantics
+
+`IPP Ingress Phase 1 #58` (run ID `36361061756`) passed for both active
+candidates:
+
+- 25 simultaneous real Print-Job submissions reached the same durable FolioRelay
+  state/idempotency authority without conflicts;
+- replay, idempotency-conflict and state-authority restart semantics passed;
+- Create-Job/Get-Job-Attributes/Cancel-Job projection behavior passed without
+  creating durable FolioRelay acceptance;
+- malformed and slow clients left the substrate and state-authority control
+  surfaces healthy;
+- a one-million-copy request did not advance durable accepted state;
+- a 2 MiB isolated substrate-spool exhaustion test did not advance durable
+  accepted state and did not take down the FolioRelay state authority.
+
+### Authority-outage behavior
+
+PAPPL passed the real-substrate authority-outage gate directly.
+
+CUPS initially exposed its upstream default behavior: `ErrorPolicy
+stop-printer` left the virtual queue stopped after the FolioRelay backend failed
+while the authority was unavailable. This was not a journal or idempotency
+failure—the journal remained unchanged—but it prevented autonomous recovery.
+
+The qualification fixture now uses upstream CUPS `retry-job` with a bounded
+retry budget (1-second qualification interval, 10 retries). `IPP Ingress Phase
+1 #57` (run ID `36360803858`) then passed the same fail-closed/recovery gate
+as PAPPL without a CUPS fork or a FolioRelay-specific recovery daemon.
+
+### PAPPL independent-client pressure
+
+`Print Substrate Stress #47` (run ID `36360255038`) exercised the actual
+minimal FolioRelay PAPPL fixture with independent client processes:
+
+- 100 clients x 100 requests: 0 failed, 0 timed out;
+- 100 clients x 1000 requests: 0 failed, 0 timed out.
+
+The older 7/12-error 100k-request observations remain useful historical evidence
+from the upstream synthetic harness, but the degradation was not reproduced by
+the later upstream run or the actual minimal FolioRelay fixture.
+
+### Native architecture gate
+
+`Print Substrate Bakeoff #64` (run ID `36361318869`) runs the same pinned
+Phase-0 build/smoke implementation on GitHub-hosted native architectures.
+
+Results:
+
+- minimal CUPS 2.4.19: amd64 PASS, arm64 PASS;
+- PAPPL 1.4.11: amd64 PASS, arm64 PASS;
+- ippeveprinter remains amd64 oracle-only because its production concurrency
+  veto is already established.
+
+The arm64 evidence comes from native `ubuntu-24.04-arm` runners, not a
+cross-compile proxy.
+
+### Candidate status
+
+The production-candidate set remains:
+
+- minimal upstream CUPS scheduler — active;
+- minimal PAPPL service — active;
+- ippeveprinter — production-vetoed, retained as an interoperability oracle.
+
+Do not narrow CUPS vs PAPPL yet. Remaining required software gates include TLS,
+discovery when enabled, final-runtime least privilege/hardening, and deeper
+standards/native-client qualification.
