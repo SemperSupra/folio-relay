@@ -141,7 +141,6 @@ jobs:
           set -euo pipefail
           queue=FolioRelayNative
           sudo lpadmin -x "$queue" >/dev/null 2>&1 || true
-          trap 'sudo lpadmin -x "$queue" >/dev/null 2>&1 || true' EXIT
 
           sudo lpadmin -p "$queue" -E \
             -v ipp://127.0.0.1:8633/ipp/print \
@@ -166,6 +165,12 @@ jobs:
           done
 
           after="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+          lpstat -W all -l -o "$queue" >"$evidence/macos-jobs.txt" 2>&1 || true
+          lpstat -p "$queue" -l >"$evidence/macos-printer.txt" 2>&1 || true
+          sudo cp /var/log/cups/error_log "$evidence/macos-host-cups-error.log" 2>/dev/null || true
+          cp "$RUNNER_TEMP/cups-runtime/log/error_log" "$evidence/candidate-cups-error.log" 2>/dev/null || true
+          cp "$RUNNER_TEMP/cups-runtime/log/access_log" "$evidence/candidate-cups-access.log" 2>/dev/null || true
+
           python3 - "$before" "$after" <<'PY'
           import json, sys
           before=json.loads(sys.argv[1])
@@ -238,6 +243,7 @@ jobs:
           set -euo pipefail
           cups="$RUNNER_TEMP/cups"
           stage="$RUNNER_TEMP/cups-stage"
+          libdir="$RUNNER_TEMP/cups-lib"
 
           git init "$cups"
           cd "$cups"
@@ -253,6 +259,7 @@ jobs:
 
           ./configure \
             --prefix=/usr \
+            --libdir="$libdir" \
             --sysconfdir=/etc \
             --localstatedir=/var \
             --with-tls=openssl \
@@ -268,7 +275,8 @@ jobs:
             --with-printcap=no \
             --with-max-copies=1000
           make -j"$(sysctl -n hw.ncpu)"
-          mkdir -p "$stage"
+          mkdir -p "$stage" "$libdir"
+          cp "$cups/cups/libcups.2.dylib" "$libdir/libcups.2.dylib"
           make BUILDROOT="$stage" install
 
           cupsd="$(find "$stage" -type f -path '*/sbin/cupsd' -print -quit)"
@@ -287,6 +295,8 @@ jobs:
             "$cupsd" -h 2>&1 | head -20 || true
             file "$cupsd"
             otool -L "$cupsd"
+            otool -L "$cups_exec"
+            otool -L "$libdir/libcups.2.dylib"
           } | tee "$RUNNER_TEMP/macos-cups-toolchain.txt"
 
       - name: Start FolioRelay authority and exact CUPS candidate
@@ -401,7 +411,6 @@ jobs:
           FOLIORELAY_INGRESS_STORE="$FOLIORELAY_INGRESS_STORE" \
           FOLIORELAY_MAX_INGRESS_BYTES="$FOLIORELAY_MAX_INGRESS_BYTES" \
           FOLIORELAY_SUBSTRATE_INSTANCE="$FOLIORELAY_SUBSTRATE_INSTANCE" \
-          DYLD_LIBRARY_PATH="$RUNNER_TEMP/cups/cups" \
           CUPS_SERVERROOT="$base" \
           CUPS_STATEDIR="$base" \
           CUPS_DATADIR="$data_dir" \
