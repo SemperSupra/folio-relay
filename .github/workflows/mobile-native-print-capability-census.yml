@@ -5,6 +5,7 @@ on:
     paths:
       - '.github/workflows/mobile-native-print-capability-census.yml'
       - 'experiments/mobile/ios-print-capability/**'
+      - 'scripts/mobile/**'
       - 'docs/NATIVE_CLIENT_MATRIX.md'
       - 'contracts/print-substrate-evaluation.yaml'
   workflow_dispatch:
@@ -35,6 +36,7 @@ jobs:
           xcodebuild -version | tee "$evidence/xcode-version.txt"
           xcrun simctl list runtimes -j >"$evidence/runtimes.json"
           xcrun simctl list devicetypes -j >"$evidence/device-types.json"
+          xcrun simctl list devices -j >"$evidence/devices.json"
           xcrun --sdk iphonesimulator --show-sdk-path >"$evidence/sdk-path.txt"
           xcrun --sdk iphonesimulator --show-sdk-version >"$evidence/sdk-version.txt"
 
@@ -52,50 +54,59 @@ jobs:
           app="$RUNNER_TEMP/FolioRelayPrintProbe.app"
           mkdir -p "$app"
 
-          runtime="$(python3 - "$evidence/runtimes.json" <<'PY'
+          read -r runtime udid device_name < <(python3 - "$evidence/runtimes.json" "$evidence/devices.json" <<'PY'
           import json, sys
-          data=json.load(open(sys.argv[1]))
-          runtimes=[
-              r for r in data.get("runtimes", [])
+
+          runtimes = json.load(open(sys.argv[1])).get("runtimes", [])
+          devices = json.load(open(sys.argv[2])).get("devices", {})
+          available = {
+              r["identifier"]: r
+              for r in runtimes
               if r.get("isAvailable") and r.get("platform") == "iOS"
-          ]
-          if not runtimes:
-              raise SystemExit("no available iOS simulator runtime")
-          def version(r):
-              return tuple(int(x) for x in r.get("version","0").split("."))
-          print(max(runtimes, key=version)["identifier"])
+          }
+
+          def version(identifier):
+              runtime = available.get(identifier, {})
+              return tuple(int(x) for x in runtime.get("version", "0").split("."))
+
+          candidates = []
+          for runtime_id, items in devices.items():
+              if runtime_id not in available:
+                  continue
+              for device in items:
+                  if (
+                      device.get("isAvailable")
+                      and "iPhone" in device.get("name", "")
+                      and device.get("udid")
+                  ):
+                      candidates.append((version(runtime_id), runtime_id, device))
+
+          if not candidates:
+              raise SystemExit("no compatible available iPhone simulator device/runtime pair")
+
+          _, runtime_id, device = max(candidates, key=lambda item: item[0])
+          print(runtime_id, device["udid"], device["name"].replace(" ", "_"))
           PY
           )"
 
-          device_type="$(python3 - "$evidence/device-types.json" <<'PY'
-          import json, sys
-          data=json.load(open(sys.argv[1]))
-          devices=[d for d in data.get("devicetypes", []) if "iPhone" in d.get("name","")]
-          if not devices:
-              raise SystemExit("no iPhone simulator device type")
-          print(devices[-1]["identifier"])
-          PY
-          )"
-
-          udid="$(xcrun simctl create FolioRelayPrintProbe "$device_type" "$runtime")"
           printf '%s\n' "$runtime" >"$evidence/selected-runtime.txt"
-          printf '%s\n' "$device_type" >"$evidence/selected-device-type.txt"
+          printf '%s\n' "$device_name" >"$evidence/selected-device-name.txt"
           printf '%s\n' "$udid" >"$evidence/udid.txt"
 
           cleanup() {
             xcrun simctl shutdown "$udid" >/dev/null 2>&1 || true
-            xcrun simctl delete "$udid" >/dev/null 2>&1 || true
           }
           trap cleanup EXIT
 
-          xcrun simctl boot "$udid"
+          xcrun simctl boot "$udid" >/dev/null 2>&1 || true
           xcrun simctl bootstatus "$udid" -b
 
           sdk="$(xcrun --sdk iphonesimulator --show-sdk-path)"
+          sdk_version="$(xcrun --sdk iphonesimulator --show-sdk-version)"
           arch="$(uname -m)"
           case "$arch" in
-            arm64) target='arm64-apple-ios18.0-simulator' ;;
-            x86_64) target='x86_64-apple-ios18.0-simulator' ;;
+            arm64) target="arm64-apple-ios${sdk_version}-simulator" ;;
+            x86_64) target="x86_64-apple-ios${sdk_version}-simulator" ;;
             *) echo "unsupported macOS runner architecture: $arch" >&2; exit 1 ;;
           esac
 
@@ -153,45 +164,7 @@ jobs:
           cores: 2
           ram-size: 2048M
           emulator-boot-timeout: 900
-          script: |
-            set -eu
-            evidence="$RUNNER_TEMP/android-print-capability"
-            mkdir -p "$evidence"
-
-            adb shell getprop >"$evidence/getprop.txt"
-            adb shell pm list features >"$evidence/features.txt"
-            adb shell pm list packages >"$evidence/packages.txt"
-            adb shell dumpsys print >"$evidence/dumpsys-print.txt" 2>&1 || true
-            adb shell settings get secure enabled_print_services               >"$evidence/enabled-print-services.txt" 2>&1 || true
-            adb shell dumpsys package com.android.bips               >"$evidence/bips-package.txt" 2>&1 || true
-            adb shell dumpsys package com.android.printspooler               >"$evidence/printspooler-package.txt" 2>&1 || true
-
-            python3 - "$evidence" <<'PY'
-            import json, pathlib, re, sys
-            p=pathlib.Path(sys.argv[1])
-            features=(p/"features.txt").read_text(errors="replace")
-            packages=(p/"packages.txt").read_text(errors="replace")
-            dump=(p/"dumpsys-print.txt").read_text(errors="replace")
-            enabled=(p/"enabled-print-services.txt").read_text(errors="replace").strip()
-            result={
-              "feature_printing": "android.software.print" in features,
-              "print_spooler_present": "package:com.android.printspooler" in packages,
-              "default_print_service_bips_present": "package:com.android.bips" in packages,
-              "enabled_print_services": enabled,
-              "dumpsys_print_available": bool(dump.strip()) and "Can't find service" not in dump,
-              "android_release": "",
-              "sdk": "",
-            }
-            props=(p/"getprop.txt").read_text(errors="replace")
-            for key, field in [
-              ("ro.build.version.release","android_release"),
-              ("ro.build.version.sdk","sdk"),
-            ]:
-              m=re.search(rf"\[{re.escape(key)}\]: \[(.*?)\]", props)
-              if m: result[field]=m.group(1)
-            (p/"result.json").write_text(json.dumps(result, indent=2, sort_keys=True)+"\n")
-            print(json.dumps(result, sort_keys=True))
-            PY
+          script: bash scripts/mobile/android-print-capability.sh "$RUNNER_TEMP/android-print-capability"
 
       - name: Upload Android evidence
         if: always()
