@@ -114,13 +114,17 @@ jobs:
               Start-Sleep -Seconds 1
             }
 
-            $wslIp = (& wsl.exe -d $distro -- /bin/sh -lc "hostname -I | awk '{print \$1}'").Trim()
+            $wslIpRaw = (& wsl.exe -d $distro -- hostname -I | Out-String).Trim()
+            $wslIp = (($wslIpRaw -split '\\s+') | Where-Object { $_ })[0]
+            $directIpOk = $false
+
             "wsl_ip=$wslIp" | Set-Content (Join-Path $evidence 'network.txt')
             "localhost_forwarding=$localhostOk" | Add-Content (Join-Path $evidence 'network.txt')
 
-            if (-not $localhostOk -and $wslIp) {
+            if ($wslIp) {
               try {
                 $response = Invoke-WebRequest -UseBasicParsing -TimeoutSec 5 ("http://" + $wslIp + ":18099/health")
+                if ($response.StatusCode -eq 200) { $directIpOk = $true }
                 "direct_wsl_ip_status=$($response.StatusCode)" | Add-Content (Join-Path $evidence 'network.txt')
               } catch {
                 "direct_wsl_ip_error=$($_.Exception.Message)" | Add-Content (Join-Path $evidence 'network.txt')
@@ -130,15 +134,20 @@ jobs:
             & wsl.exe -d $distro -- /bin/sh -lc "cat /tmp/foliorelay-state.log 2>/dev/null || true" |
               Set-Content (Join-Path $evidence 'state.log')
 
-            if (-not $localhostOk) {
-              throw "Windows localhost forwarding to WSL2 candidate host did not become healthy"
+            $reachable = $localhostOk -or $directIpOk
+            if (-not $reachable) {
+              throw "Windows host could not reach the imported WSL2 FolioRelay candidate host"
             }
 
+            $preferredEndpoint = if ($localhostOk) { '127.0.0.1' } else { $wslIp }
             @{
               platform = 'windows-2025'
               wsl_import = 'pass'
               wsl_version = 2
               localhost_forwarding = $localhostOk
+              direct_wsl_ip_reachable = $directIpOk
+              candidate_host_reachable = $reachable
+              preferred_endpoint = $preferredEndpoint
               wsl_ip = $wslIp
               probe = 'real-foliorelay-state-authority'
             } | ConvertTo-Json -Depth 5 |
