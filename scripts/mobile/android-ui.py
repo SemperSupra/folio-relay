@@ -92,7 +92,7 @@ def find(
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--evidence", required=True)
-    parser.add_argument("command", choices=["wait", "tap", "snapshot"])
+    parser.add_argument("command", choices=["wait", "tap", "clear", "snapshot"])
     parser.add_argument("kind", nargs="?", choices=["text", "contains", "res", "desc", "edit"])
     parser.add_argument("value", nargs="?", default="")
     parser.add_argument("--timeout", type=float, default=20)
@@ -112,7 +112,7 @@ def main() -> None:
         args.kind,
         args.value,
         args.timeout,
-        enabled_only=(args.command == "tap"),
+        enabled_only=(args.command in {"tap", "clear"}),
     )
     if node is None:
         raise SystemExit(f"UI node not found: {args.kind}={args.value!r}")
@@ -121,6 +121,32 @@ def main() -> None:
         x, y = center(node)
         adb("shell", "input", "tap", str(x), str(y))
         print(f"tapped {args.kind}={args.value!r} at {x},{y}")
+    elif args.command == "clear":
+        if args.kind != "edit":
+            raise SystemExit("clear currently supports only edit nodes")
+        current = node.attrib.get("text", "")
+        x, y = center(node)
+        adb("shell", "input", "tap", str(x), str(y))
+        adb("shell", "input", "keyevent", "KEYCODE_MOVE_END")
+        for _ in current:
+            adb("shell", "input", "keyevent", "KEYCODE_DEL")
+
+        deadline = time.time() + args.timeout
+        attempt = 0
+        while time.time() < deadline:
+            attempt += 1
+            root = snapshot(out, f"clear-edit-{attempt:02d}")
+            edits = [
+                item for item in nodes(root)
+                if item.attrib.get("class", "") == "android.widget.EditText"
+            ]
+            if edits and edits[0].attrib.get("text", "") == "":
+                print(f"cleared edit text ({len(current)} characters)")
+                return
+            time.sleep(0.5)
+        raise SystemExit(
+            f"EditText did not clear; original value length={len(current)}"
+        )
     else:
         print(f"found {args.kind}={args.value!r}")
 

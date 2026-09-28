@@ -40,11 +40,7 @@ if "${ui[@]}" wait contains "Add printer by IP address" --timeout 8; then
   "${ui[@]}" tap contains "Add printer by IP address" --timeout 5
 fi
 
-"${ui[@]}" tap edit "" --timeout 15
-adb shell input keyevent KEYCODE_MOVE_END
-for _ in $(seq 1 32); do
-  adb shell input keyevent KEYCODE_DEL
-done
+"${ui[@]}" clear edit "" --timeout 15
 adb shell input text '10.0.2.2'
 "${ui[@]}" wait text "10.0.2.2" --timeout 10
 "${ui[@]}" tap text "Add" --timeout 15
