@@ -26,6 +26,7 @@ RUN git clone --depth 1 --branch "${CUPS_VERSION}" https://github.com/OpenPrinti
 WORKDIR /src/cups
 RUN ./configure \
       --prefix=/usr \
+      --libdir=/usr/lib/foliorelay-cups \
       --sysconfdir=/etc \
       --localstatedir=/var \
       --with-tls=openssl \
@@ -42,6 +43,7 @@ RUN ./configure \
       --with-max-copies=1000 \
  && make -j"$(nproc)" \
  && make install
+ENV LD_LIBRARY_PATH=/usr/lib/foliorelay-cups
 WORKDIR /src
 RUN git clone --depth 1 --branch "${PAPPL_VERSION}" https://github.com/michaelrsweet/pappl.git pappl
 WORKDIR /src/pappl
@@ -103,7 +105,8 @@ COPY deploy/engineering-pappl/start-pappl.sh /usr/local/bin/start-foliorelay-pap
 RUN chmod 0555 /usr/local/bin/foliorelay-pappl-ingress \
                   /usr/local/bin/foliorelay-ipp-ingest \
                   /usr/local/bin/start-foliorelay-pappl
-ENV FOLIORELAY_INGEST_BIN=/usr/local/bin/foliorelay-ipp-ingest \
+ENV LD_LIBRARY_PATH=/usr/lib/foliorelay-cups:/usr/lib \
+    FOLIORELAY_INGEST_BIN=/usr/local/bin/foliorelay-ipp-ingest \
     FOLIORELAY_STATE_URL=http://state:18080 \
     FOLIORELAY_INGRESS_STORE=/var/lib/foliorelay-artifacts \
     FOLIORELAY_MAX_INGRESS_BYTES=104857600 \
