@@ -366,11 +366,32 @@ platform_client_matrix:
           rationale: Microsoft IPP Class Driver submits gzip-encoded IPP document data
           broader_legacy_filter_stack_required: false
   android:
-    status: unqualified
+    status: qualification-in-progress
+    capability_census:
+      android_release: "15"
+      sdk: "35"
+      feature_printing: true
+      print_spooler_present: true
+      default_print_service_bips_present: true
+      enabled_print_services_default: null
+      dumpsys_print_available: true
+    active_rep: real-printmanager-spooler-bips-to-pappl
     requirement: faithful-native-print-service-path
   ios_ipados:
     status: unqualified
-    requirement: faithful-airprint-path
+    capability_census:
+      simulator_runtime: ios-26.2
+      printing_available: true
+      can_print_pdf: true
+      explicit_ui_printer_constructed: true
+      ui_print_controller_constructed: true
+    hosted_simulator_delivery_rep:
+      ui_printer_contact_available: true
+      ui_print_completion_reported: true
+      durable_foliorelay_acceptance_observed: false
+      interpretation: simulator-native-api-success-without-network-job-delivery
+      admission_evidence: false
+    requirement: faithful-airprint-path-on-real-device-or-other-faithful-substrate
   synthetic_protocol_client_can_substitute_for_native_path: false
 
 veto_gates:

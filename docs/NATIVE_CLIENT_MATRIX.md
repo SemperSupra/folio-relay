@@ -16,8 +16,8 @@ does not count as that platform's native-print qualification.
 | Ubuntu local CUPS `-m everywhere` + `lp` conversion | host filter crash | host filter crash | negative-space evidence; not a candidate gate |
 | macOS 15 native print subsystem | PASS | PASS | qualified through system CUPS `lpadmin -m everywhere` + native `lp` |
 | Windows Server 2025 native print subsystem | PASS | PASS | qualified through PrintManagement/Spooler + Microsoft IPP Class Driver |
-| Android print service / Mopria-compatible path | — | — | unqualified; require faithful hosted execution |
-| iOS/iPadOS AirPrint path | — | — | unqualified; require faithful simulator/device execution |
+| Android 15 PrintManager + stock BIPS | — | experiment running | real framework/spooler/BIPS present; end-to-end PAPPL rep active |
+| iOS/iPadOS UIKit/AirPrint path | — | unqualified | UIKit API/contact/completion available in simulator, but no real job reached PAPPL |
 
 ## Promotion rule
 
@@ -206,3 +206,37 @@ The passing Windows CUPS evidence records:
 - native job state: Complete/Retained, one page;
 - durable FolioRelay stats: accepted `0 -> 1`;
 - idempotency conflicts: `0`.
+
+
+### Mobile hosted capability findings
+
+The public hosted environments can exercise more of the real mobile print stack
+than initially expected, but the evidence must be interpreted differently by
+platform.
+
+**Android 15 / API 35** boots under KVM with the real framework and reports:
+
+- `android.software.print`: present;
+- Print Spooler: present;
+- stock Default Print Service/BIPS: present;
+- `dumpsys print`: available;
+- enabled print services at clean boot: none.
+
+A real PrintManager application, system print-spooler UI, stock BIPS, and real
+PAPPL candidate rep is therefore justified and remains active. The test enables
+and configures the stock service through the emulator UI; it does not replace
+the mobile print path with a generic IPP client.
+
+**iOS Simulator 26.2** exposes the real UIKit printing API. The capability probe
+reports `isPrintingAvailable=true`, accepts the PDF as printable, constructs an
+explicit `UIPrinter`, and constructs `UIPrintInteractionController`.
+The next rep used `UIPrinter contactPrinter` and
+`UIPrintInteractionController printToPrinter` against the real PAPPL
+candidate. UIKit reported both printer contact and successful completion, but
+PAPPL received no job and FolioRelay durable acceptance remained `0 -> 0`.
+
+That mismatch is evidence that the hosted simulator is **not faithful admission
+evidence for AirPrint/network delivery**, even though its native API surface is
+usable. The simulator result is retained as negative-space evidence rather than
+being treated as a PAPPL failure. iOS/iPadOS remains unqualified pending a real
+device or another substrate that can prove actual native AirPrint delivery.

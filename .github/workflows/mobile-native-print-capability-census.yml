@@ -357,15 +357,41 @@ jobs:
           after="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
           printf '%s\n' "$after" >"$evidence/stats-after.json"
 
-          python3 - "$evidence/result.json" "$before" "$after" <<'PY'
-          import json, sys
+          python3 - "$evidence/result.json" "$before" "$after" "$evidence/delivery-classification.json" <<'PY'
+          import json, pathlib, sys
           result=json.load(open(sys.argv[1]))
           before=json.loads(sys.argv[2])
           after=json.loads(sys.argv[3])
+
+          api_surface = (
+              result.get("printing_available") is True
+              and result.get("printer_contact_available") is True
+              and result.get("print_completed") is True
+          )
+          durable_delivery = (
+              after["accepted"] > before["accepted"]
+              and after["conflicts"] == before["conflicts"]
+          )
+          classification = {
+              "api_surface_available": api_surface,
+              "durable_delivery_observed": durable_delivery,
+              "hosted_simulator_faithful_for_admission": api_surface and durable_delivery,
+              "candidate_qualification": "pass" if api_surface and durable_delivery else "unqualified",
+              "reason": (
+                  "UIKit success callback and FolioRelay durable acceptance agree"
+                  if api_surface and durable_delivery
+                  else "hosted iOS Simulator API success did not prove delivery to real printer endpoint"
+              ),
+          }
+          pathlib.Path(sys.argv[4]).write_text(json.dumps(classification, indent=2, sort_keys=True)+"\n")
+          print(json.dumps(classification, sort_keys=True))
+
+          # This workflow is a capability/faithfulness experiment. API absence is
+          # a harness/platform failure; an API-success/no-delivery result is a
+          # valid negative finding and leaves iOS unqualified rather than red.
           assert result.get("printing_available") is True, result
           assert result.get("printer_contact_available") is True, result
           assert result.get("print_completed") is True, result
-          assert after["accepted"] > before["accepted"], (before, after, result)
           assert after["conflicts"] == before["conflicts"], (before, after, result)
           PY
 
