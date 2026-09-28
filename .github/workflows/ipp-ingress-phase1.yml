@@ -433,6 +433,72 @@ jobs:
           printf '%s\n' "$stats" | tee "$RUNNER_TEMP/evidence/concurrent-stats.json"
           python3 -c 'import json,sys; s=json.load(sys.stdin); assert s["accepted"] >= 26 and s["conflicts"] == 0, s' <<<"$stats"
 
+      - name: Prove PAPPL cancellation and status projection
+        shell: bash
+        run: |
+          set -euo pipefail
+          before="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+          before_accepted="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["accepted"])' <<<"$before")"
+
+          cat >"$RUNNER_TEMP/pappl-projection.test" <<'IPP'
+          {
+            NAME "Create projection-only job"
+            OPERATION Create-Job
+            GROUP operation
+            ATTR charset attributes-charset utf-8
+            ATTR language attributes-natural-language en
+            ATTR uri printer-uri $uri
+            ATTR name requesting-user-name $user
+            STATUS successful-ok
+            EXPECT job-id
+            EXPECT job-uri
+          }
+          {
+            NAME "Read projection job status"
+            OPERATION Get-Job-Attributes
+            GROUP operation
+            ATTR charset attributes-charset utf-8
+            ATTR language attributes-natural-language en
+            ATTR uri printer-uri $uri
+            ATTR integer job-id $job-id
+            ATTR name requesting-user-name $user
+            STATUS successful-ok
+            EXPECT job-state
+          }
+          {
+            NAME "Cancel projection-only job"
+            OPERATION Cancel-Job
+            GROUP operation
+            ATTR charset attributes-charset utf-8
+            ATTR language attributes-natural-language en
+            ATTR uri printer-uri $uri
+            ATTR integer job-id $job-id
+            ATTR name requesting-user-name $user
+            STATUS successful-ok
+          }
+          {
+            NAME "Observe canceled projection state"
+            OPERATION Get-Job-Attributes
+            GROUP operation
+            ATTR charset attributes-charset utf-8
+            ATTR language attributes-natural-language en
+            ATTR uri printer-uri $uri
+            ATTR integer job-id $job-id
+            ATTR name requesting-user-name $user
+            STATUS successful-ok
+            EXPECT job-state WITH-VALUE 7
+            DISPLAY job-state
+            DISPLAY job-state-reasons
+          }
+          IPP
+
+          ipptool -tv ipp://127.0.0.1:8633/ipp/print "$RUNNER_TEMP/pappl-projection.test" \
+            | tee "$RUNNER_TEMP/evidence/pappl-projection.txt"
+
+          after="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+          after_accepted="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["accepted"])' <<<"$after")"
+          test "$after_accepted" -eq "$before_accepted"
+
       - name: Phase 2 PAPPL malformed and abusive-request pressure
         shell: bash
         run: |
@@ -678,6 +744,65 @@ jobs:
             echo "bridge dependencies:"
             cat "$RUNNER_TEMP/pappl-bridge-ldd.txt"
           } >"$RUNNER_TEMP/evidence/pappl-surface.txt"
+
+      - name: Phase 2 PAPPL bounded spool exhaustion remains local
+        shell: bash
+        run: |
+          set -euo pipefail
+          spool="$RUNNER_TEMP/pappl-spool"
+          before="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+          before_accepted="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["accepted"])' <<<"$before")"
+
+          kill "$(cat "$RUNNER_TEMP/evidence/pappl.pid")" 2>/dev/null || true
+          wait "$(cat "$RUNNER_TEMP/evidence/pappl.pid")" 2>/dev/null || true
+
+          uid="$(id -u)"; gid="$(id -g)"
+          sudo mount -t tmpfs -o "size=2m,uid=$uid,gid=$gid,mode=0700" tmpfs "$spool"
+          trap 'kill "$(cat "$RUNNER_TEMP/evidence/pappl.pid")" 2>/dev/null || true; wait "$(cat "$RUNNER_TEMP/evidence/pappl.pid")" 2>/dev/null || true; sudo umount "$spool" 2>/dev/null || true' EXIT
+
+          FOLIORELAY_INGEST_BIN="$RUNNER_TEMP/bin/foliorelay-ipp-ingest" \
+          FOLIORELAY_STATE_URL=http://127.0.0.1:18080 \
+          FOLIORELAY_INGRESS_STORE="$RUNNER_TEMP/ingress" \
+          FOLIORELAY_MAX_INGRESS_BYTES=104857600 \
+          FOLIORELAY_SUBSTRATE_INSTANCE="gha-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-spool" \
+          FOLIORELAY_PAPPL_SPOOL="$spool" \
+          FOLIORELAY_PAPPL_PORT=8633 \
+            "$RUNNER_TEMP/bin/foliorelay-pappl-ingress" \
+            >>"$RUNNER_TEMP/evidence/pappl.log" 2>&1 &
+          echo $! >"$RUNNER_TEMP/evidence/pappl.pid"
+
+          getattr="$(find /usr/share/cups -type f -name get-printer-attributes.test -print -quit)"
+          printtest="$(find /usr/share/cups -type f -name print-job.test -print -quit)"
+          for i in $(seq 1 30); do
+            ipptool -q ipp://127.0.0.1:8633/ipp/print "$getattr" && break
+            sleep 1
+          done
+          ipptool -q ipp://127.0.0.1:8633/ipp/print "$getattr"
+
+          { printf '%%PDF-1.1\n'; dd if=/dev/zero bs=1M count=4 status=none; printf '\n%%%%EOF\n'; } \
+            >"$RUNNER_TEMP/pappl-spool-exhaustion.pdf"
+
+          set +e
+          timeout 30 ipptool -q -f "$RUNNER_TEMP/pappl-spool-exhaustion.pdf" \
+            ipp://127.0.0.1:8633/ipp/print "$printtest" \
+            >"$RUNNER_TEMP/evidence/pappl-spool-full.out" \
+            2>"$RUNNER_TEMP/evidence/pappl-spool-full.err"
+          echo "$?" >"$RUNNER_TEMP/evidence/pappl-spool-full.rc"
+          set -e
+          sleep 2
+
+          after="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+          printf '%s\n' "$after" >"$RUNNER_TEMP/evidence/pappl-post-spool-full-stats.json"
+          after_accepted="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["accepted"])' <<<"$after")"
+          test "$after_accepted" -eq "$before_accepted"
+          ipptool -q ipp://127.0.0.1:8633/ipp/print "$getattr"
+          curl -fsS -o /dev/null http://127.0.0.1:18080/health
+          df -h "$spool" >"$RUNNER_TEMP/evidence/pappl-tiny-spool-df.txt"
+
+          kill "$(cat "$RUNNER_TEMP/evidence/pappl.pid")" 2>/dev/null || true
+          wait "$(cat "$RUNNER_TEMP/evidence/pappl.pid")" 2>/dev/null || true
+          sudo umount "$spool"
+          trap - EXIT
 
       - name: Stop PAPPL fixtures
         if: always()
@@ -954,6 +1079,72 @@ jobs:
           printf '%s\n' "$stats" | tee "$RUNNER_TEMP/evidence/concurrent-stats.json"
           python3 -c 'import json,sys; s=json.load(sys.stdin); assert s["accepted"] >= 26 and s["conflicts"] == 0, s' <<<"$stats"
 
+      - name: Prove CUPS cancellation and status projection
+        shell: bash
+        run: |
+          set -euo pipefail
+          before="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+          before_accepted="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["accepted"])' <<<"$before")"
+
+          cat >"$RUNNER_TEMP/cups-projection.test" <<'IPP'
+          {
+            NAME "Create projection-only job"
+            OPERATION Create-Job
+            GROUP operation
+            ATTR charset attributes-charset utf-8
+            ATTR language attributes-natural-language en
+            ATTR uri printer-uri $uri
+            ATTR name requesting-user-name $user
+            STATUS successful-ok
+            EXPECT job-id
+            EXPECT job-uri
+          }
+          {
+            NAME "Read projection job status"
+            OPERATION Get-Job-Attributes
+            GROUP operation
+            ATTR charset attributes-charset utf-8
+            ATTR language attributes-natural-language en
+            ATTR uri printer-uri $uri
+            ATTR integer job-id $job-id
+            ATTR name requesting-user-name $user
+            STATUS successful-ok
+            EXPECT job-state
+          }
+          {
+            NAME "Cancel projection-only job"
+            OPERATION Cancel-Job
+            GROUP operation
+            ATTR charset attributes-charset utf-8
+            ATTR language attributes-natural-language en
+            ATTR uri printer-uri $uri
+            ATTR integer job-id $job-id
+            ATTR name requesting-user-name $user
+            STATUS successful-ok
+          }
+          {
+            NAME "Observe canceled projection state"
+            OPERATION Get-Job-Attributes
+            GROUP operation
+            ATTR charset attributes-charset utf-8
+            ATTR language attributes-natural-language en
+            ATTR uri printer-uri $uri
+            ATTR integer job-id $job-id
+            ATTR name requesting-user-name $user
+            STATUS successful-ok
+            EXPECT job-state WITH-VALUE 7
+            DISPLAY job-state
+            DISPLAY job-state-reasons
+          }
+          IPP
+
+          ipptool -tv ipp://127.0.0.1:8634/printers/FolioRelay "$RUNNER_TEMP/cups-projection.test" \
+            | tee "$RUNNER_TEMP/evidence/cups-projection.txt"
+
+          after="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+          after_accepted="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["accepted"])' <<<"$after")"
+          test "$after_accepted" -eq "$before_accepted"
+
       - name: Phase 2 CUPS malformed and abusive-request pressure
         shell: bash
         run: |
@@ -1200,6 +1391,69 @@ jobs:
             echo "scheduler dependencies:"
             LD_LIBRARY_PATH="$RUNNER_TEMP/cups/cups" ldd "$RUNNER_TEMP/cups/scheduler/cupsd" || true
           } >"$RUNNER_TEMP/evidence/cups-surface.txt"
+
+      - name: Phase 2 CUPS bounded spool exhaustion remains local
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="$RUNNER_TEMP/cups-runtime"
+          spool="$base/spool"
+          before="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+          before_accepted="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["accepted"])' <<<"$before")"
+
+          kill "$(cat "$RUNNER_TEMP/evidence/cups.pid")" 2>/dev/null || true
+          wait "$(cat "$RUNNER_TEMP/evidence/cups.pid")" 2>/dev/null || true
+
+          uid="$(id -u)"; gid="$(id -g)"
+          sudo mount -t tmpfs -o "size=2m,uid=$uid,gid=$gid,mode=0700" tmpfs "$spool"
+          mkdir -p "$spool/temp"
+          trap 'kill "$(cat "$RUNNER_TEMP/evidence/cups.pid")" 2>/dev/null || true; wait "$(cat "$RUNNER_TEMP/evidence/cups.pid")" 2>/dev/null || true; sudo umount "$spool" 2>/dev/null || true' EXIT
+
+          FOLIORELAY_INGEST_BIN="$RUNNER_TEMP/bin/foliorelay-ipp-ingest" \
+          FOLIORELAY_STATE_URL=http://127.0.0.1:18080 \
+          FOLIORELAY_INGRESS_STORE="$RUNNER_TEMP/ingress" \
+          FOLIORELAY_MAX_INGRESS_BYTES=104857600 \
+          FOLIORELAY_SUBSTRATE_INSTANCE="gha-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-spool" \
+          LD_LIBRARY_PATH="$RUNNER_TEMP/cups/cups" \
+          CUPS_SERVERROOT="$base" \
+          CUPS_STATEDIR="$base" \
+          CUPS_DATADIR="$RUNNER_TEMP/cups-stage/usr/share/cups" \
+            "$RUNNER_TEMP/cups/scheduler/cupsd" -c "$base/cupsd.conf" -f \
+            >>"$RUNNER_TEMP/evidence/cupsd.log" 2>&1 &
+          echo $! >"$RUNNER_TEMP/evidence/cups.pid"
+
+          getattr="$(find /usr/share/cups -type f -name get-printer-attributes.test -print -quit)"
+          printtest="$(find /usr/share/cups -type f -name print-job.test -print -quit)"
+          for i in $(seq 1 30); do
+            ipptool -q ipp://127.0.0.1:8634/printers/FolioRelay "$getattr" && break
+            sleep 1
+          done
+          ipptool -q ipp://127.0.0.1:8634/printers/FolioRelay "$getattr"
+
+          { printf '%%PDF-1.1\n'; dd if=/dev/zero bs=1M count=4 status=none; printf '\n%%%%EOF\n'; } \
+            >"$RUNNER_TEMP/cups-spool-exhaustion.pdf"
+
+          set +e
+          timeout 30 ipptool -q -f "$RUNNER_TEMP/cups-spool-exhaustion.pdf" \
+            ipp://127.0.0.1:8634/printers/FolioRelay "$printtest" \
+            >"$RUNNER_TEMP/evidence/cups-spool-full.out" \
+            2>"$RUNNER_TEMP/evidence/cups-spool-full.err"
+          echo "$?" >"$RUNNER_TEMP/evidence/cups-spool-full.rc"
+          set -e
+          sleep 2
+
+          after="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+          printf '%s\n' "$after" >"$RUNNER_TEMP/evidence/cups-post-spool-full-stats.json"
+          after_accepted="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["accepted"])' <<<"$after")"
+          test "$after_accepted" -eq "$before_accepted"
+          ipptool -q ipp://127.0.0.1:8634/printers/FolioRelay "$getattr"
+          curl -fsS -o /dev/null http://127.0.0.1:18080/health
+          df -h "$spool" >"$RUNNER_TEMP/evidence/cups-tiny-spool-df.txt"
+
+          kill "$(cat "$RUNNER_TEMP/evidence/cups.pid")" 2>/dev/null || true
+          wait "$(cat "$RUNNER_TEMP/evidence/cups.pid")" 2>/dev/null || true
+          sudo umount "$spool"
+          trap - EXIT
 
       - name: Stop CUPS fixtures
         if: always()
