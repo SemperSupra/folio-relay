@@ -93,7 +93,7 @@ jobs:
           $wslConfig = Join-Path $env:USERPROFILE '.wslconfig'
           @"
           [wsl2]
-          networkingMode=mirrored
+          networkingMode=nat
           localhostForwarding=true
           "@ | Set-Content -Encoding ascii $wslConfig
           Copy-Item $wslConfig (Join-Path $evidence 'wslconfig.txt')
@@ -205,7 +205,7 @@ jobs:
               platform = 'windows-2025'
               wsl_import = 'pass'
               wsl_version = 2
-              requested_networking_mode = 'mirrored'
+              requested_networking_mode = 'nat'
               hyperv_loopback_enabled = $true
               hyperv_inbound_probe_port = 18099
               localhost_forwarding = $localhostOk
