@@ -301,18 +301,22 @@ jobs:
       - name: Start FolioRelay authority and exact CUPS candidate
         shell: bash
         env:
-          FOLIORELAY_INGEST_BIN: ${{ runner.temp }}/bin/foliorelay-ipp-ingest
           FOLIORELAY_STATE_URL: http://127.0.0.1:18080
-          FOLIORELAY_INGRESS_STORE: ${{ runner.temp }}/ingress
           FOLIORELAY_MAX_INGRESS_BYTES: '104857600'
           FOLIORELAY_SUBSTRATE_INSTANCE: macos-cups-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           set -euo pipefail
           stage="$RUNNER_TEMP/cups-stage"
-          base="$RUNNER_TEMP/cups-runtime"
+          sandbox_root="/private/tmp/foliorelay-cups-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          base="$sandbox_root/runtime"
+          ingress="$sandbox_root/ingress"
+          ingest_bin="$sandbox_root/bin/foliorelay-ipp-ingest"
           evidence="$RUNNER_TEMP/evidence-cups"
-          mkdir -p "$evidence" "$RUNNER_TEMP/ingress" "$RUNNER_TEMP/state"
+          sudo rm -rf "$sandbox_root"
+          mkdir -p "$evidence" "$RUNNER_TEMP/state"
+          mkdir -p "$sandbox_root/bin" "$ingress"
           mkdir -p "$base"/{bin/backend,bin/daemon,bin/filter,spool/temp,log,ppd,cache}
+          install -m 0555 "$RUNNER_TEMP/bin/foliorelay-ipp-ingest" "$ingest_bin"
 
           cups_exec="$(find "$stage" -type f -path '*/cups/daemon/cups-exec' -print -quit)"
           cupsd="$(find "$stage" -type f -path '*/sbin/cupsd' -print -quit)"
@@ -405,9 +409,9 @@ jobs:
           done
           curl -fsS -o /dev/null http://127.0.0.1:18080/health
 
-          FOLIORELAY_INGEST_BIN="$FOLIORELAY_INGEST_BIN" \
+          FOLIORELAY_INGEST_BIN="$ingest_bin" \
           FOLIORELAY_STATE_URL="$FOLIORELAY_STATE_URL" \
-          FOLIORELAY_INGRESS_STORE="$FOLIORELAY_INGRESS_STORE" \
+          FOLIORELAY_INGRESS_STORE="$ingress" \
           FOLIORELAY_MAX_INGRESS_BYTES="$FOLIORELAY_MAX_INGRESS_BYTES" \
           FOLIORELAY_SUBSTRATE_INSTANCE="$FOLIORELAY_SUBSTRATE_INSTANCE" \
           CUPS_SERVERROOT="$base" \
@@ -486,8 +490,8 @@ jobs:
           lpstat -W all -l -o "$queue" >"$evidence/macos-jobs.txt" 2>&1 || true
           lpstat -p "$queue" -l >"$evidence/macos-printer.txt" 2>&1 || true
           sudo cp /var/log/cups/error_log "$evidence/macos-host-cups-error.log" 2>/dev/null || true
-          cp "$RUNNER_TEMP/cups-runtime/log/error_log" "$evidence/candidate-cups-error.log" 2>/dev/null || true
-          cp "$RUNNER_TEMP/cups-runtime/log/access_log" "$evidence/candidate-cups-access.log" 2>/dev/null || true
+          cp "/private/tmp/foliorelay-cups-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}/runtime/log/error_log" "$evidence/candidate-cups-error.log" 2>/dev/null || true
+          cp "/private/tmp/foliorelay-cups-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}/runtime/log/access_log" "$evidence/candidate-cups-access.log" 2>/dev/null || true
 
           python3 - "$before" "$after" <<'PY'
           import json, sys
@@ -508,8 +512,8 @@ jobs:
           curl -fsS http://127.0.0.1:18080/v1/stats >"$evidence/stats.json" || true
           lpstat -t >"$evidence/lpstat.txt" 2>&1 || true
           sudo cp /var/log/cups/error_log "$evidence/macos-host-cups-error.log" 2>/dev/null || true
-          cp "$RUNNER_TEMP/cups-runtime/log/error_log" "$evidence/candidate-cups-error.log" 2>/dev/null || true
-          cp "$RUNNER_TEMP/cups-runtime/log/access_log" "$evidence/candidate-cups-access.log" 2>/dev/null || true
+          cp "/private/tmp/foliorelay-cups-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}/runtime/log/error_log" "$evidence/candidate-cups-error.log" 2>/dev/null || true
+          cp "/private/tmp/foliorelay-cups-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}/runtime/log/access_log" "$evidence/candidate-cups-access.log" 2>/dev/null || true
           if [ -f "$evidence/cups.pid" ]; then
             kill "$(cat "$evidence/cups.pid")" 2>/dev/null || true
           fi
@@ -517,6 +521,7 @@ jobs:
             kill "$(cat "$evidence/state.pid")" 2>/dev/null || true
           fi
           sudo lpadmin -x FolioRelayNativeCUPS >/dev/null 2>&1 || true
+          sudo rm -rf "/private/tmp/foliorelay-cups-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" 2>/dev/null || true
 
       - name: Upload CUPS evidence
         if: always()

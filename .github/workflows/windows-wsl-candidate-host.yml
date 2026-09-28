@@ -90,6 +90,18 @@ jobs:
           $evidence = Join-Path $env:RUNNER_TEMP 'windows-wsl-evidence'
           New-Item -ItemType Directory -Force -Path $install,$evidence | Out-Null
 
+          $wslConfig = Join-Path $env:USERPROFILE '.wslconfig'
+          @"
+          [wsl2]
+          networkingMode=mirrored
+          localhostForwarding=true
+          "@ | Set-Content -Encoding ascii $wslConfig
+          Copy-Item $wslConfig (Join-Path $evidence 'wslconfig.txt')
+          & wsl.exe --version 2>&1 | Out-String | Set-Content (Join-Path $evidence 'wsl-version.txt')
+          & wsl.exe --status 2>&1 | Out-String | Set-Content (Join-Path $evidence 'wsl-status-before.txt')
+          & wsl.exe --shutdown
+          Start-Sleep -Seconds 2
+
           try {
             & wsl.exe --unregister $distro 2>$null | Out-Null
             & wsl.exe --import $distro $install $rootfs --version 2
@@ -170,6 +182,7 @@ jobs:
               platform = 'windows-2025'
               wsl_import = 'pass'
               wsl_version = 2
+              requested_networking_mode = 'mirrored'
               localhost_forwarding = $localhostOk
               direct_wsl_ip_reachable = $directIpOk
               candidate_host_reachable = $reachable
