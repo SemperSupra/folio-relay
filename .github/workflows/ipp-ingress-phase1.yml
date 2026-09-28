@@ -348,7 +348,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$FOLIORELAY_PAPPL_SPOOL"
-          "$RUNNER_TEMP/bin/foliorelay-pappl-ingress" \
+          setpriv --no-new-privs -- "$RUNNER_TEMP/bin/foliorelay-pappl-ingress" \
             >"$RUNNER_TEMP/evidence/pappl.log" 2>&1 &
           echo $! >"$RUNNER_TEMP/evidence/pappl.pid"
 
@@ -363,6 +363,29 @@ jobs:
           done
           cat "$RUNNER_TEMP/evidence/pappl.log" >&2 || true
           exit 1
+
+      - name: Prove PAPPL least-privilege runtime envelope
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v setpriv >/dev/null
+          pid="$(cat "$RUNNER_TEMP/evidence/pappl.pid")"
+          status="/proc/$pid/status"
+          test -r "$status"
+          euid="$(awk '/^Uid:/ {print $3}' "$status")"
+          capeff="$(awk '/^CapEff:/ {print $2}' "$status")"
+          nnp="$(awk '/^NoNewPrivs:/ {print $2}' "$status")"
+          test "$euid" -ne 0
+          python3 - "$capeff" <<'PY'
+          import sys
+          assert int(sys.argv[1], 16) == 0, sys.argv[1]
+          PY
+          test "$nnp" -eq 1
+          {
+            echo "effective_uid=$euid"
+            echo "cap_eff=$capeff"
+            echo "no_new_privs=$nnp"
+          } | tee "$RUNNER_TEMP/evidence/pappl-privilege-envelope.txt"
 
       - name: Submit PDF and prove original-byte handoff
         shell: bash
@@ -767,7 +790,7 @@ jobs:
           FOLIORELAY_SUBSTRATE_INSTANCE="gha-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-spool" \
           FOLIORELAY_PAPPL_SPOOL="$spool" \
           FOLIORELAY_PAPPL_PORT=8633 \
-            "$RUNNER_TEMP/bin/foliorelay-pappl-ingress" \
+            setpriv --no-new-privs -- "$RUNNER_TEMP/bin/foliorelay-pappl-ingress" \
             >>"$RUNNER_TEMP/evidence/pappl.log" 2>&1 &
           echo $! >"$RUNNER_TEMP/evidence/pappl.pid"
 
@@ -987,7 +1010,7 @@ jobs:
           export CUPS_SERVERROOT="$base"
           export CUPS_STATEDIR="$base"
           export CUPS_DATADIR="$RUNNER_TEMP/cups-stage/usr/share/cups"
-          "$RUNNER_TEMP/cups/scheduler/cupsd" -c "$base/cupsd.conf" -f \
+          setpriv --no-new-privs -- "$RUNNER_TEMP/cups/scheduler/cupsd" -c "$base/cupsd.conf" -f \
             >"$RUNNER_TEMP/evidence/cupsd.log" 2>&1 &
           echo $! >"$RUNNER_TEMP/evidence/cups.pid"
 
@@ -1002,6 +1025,29 @@ jobs:
           cat "$RUNNER_TEMP/evidence/cupsd.log" >&2 || true
           cat "$base/log/error_log" >&2 || true
           exit 1
+
+      - name: Prove CUPS least-privilege runtime envelope
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v setpriv >/dev/null
+          pid="$(cat "$RUNNER_TEMP/evidence/cups.pid")"
+          status="/proc/$pid/status"
+          test -r "$status"
+          euid="$(awk '/^Uid:/ {print $3}' "$status")"
+          capeff="$(awk '/^CapEff:/ {print $2}' "$status")"
+          nnp="$(awk '/^NoNewPrivs:/ {print $2}' "$status")"
+          test "$euid" -ne 0
+          python3 - "$capeff" <<'PY'
+          import sys
+          assert int(sys.argv[1], 16) == 0, sys.argv[1]
+          PY
+          test "$nnp" -eq 1
+          {
+            echo "effective_uid=$euid"
+            echo "cap_eff=$capeff"
+            echo "no_new_privs=$nnp"
+          } | tee "$RUNNER_TEMP/evidence/cups-privilege-envelope.txt"
 
       - name: Submit PDF and prove CUPS pass-through handoff
         shell: bash
@@ -1418,7 +1464,7 @@ jobs:
           CUPS_SERVERROOT="$base" \
           CUPS_STATEDIR="$base" \
           CUPS_DATADIR="$RUNNER_TEMP/cups-stage/usr/share/cups" \
-            "$RUNNER_TEMP/cups/scheduler/cupsd" -c "$base/cupsd.conf" -f \
+            setpriv --no-new-privs -- "$RUNNER_TEMP/cups/scheduler/cupsd" -c "$base/cupsd.conf" -f \
             >>"$RUNNER_TEMP/evidence/cupsd.log" 2>&1 &
           echo $! >"$RUNNER_TEMP/evidence/cups.pid"
 
