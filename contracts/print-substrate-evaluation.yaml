@@ -243,6 +243,15 @@ operating_envelope:
     substrate_spool: deployment-bounded-separate-filesystem
 
 client_oracle_findings:
+  macos_cups_sandbox_findings:
+    status: resolved-with-upstream-policy
+    process_exec_under_users: denied-by-upstream-sandbox
+    arbitrary_private_tmp_writes: denied-by-upstream-sandbox
+    bounded_resolution:
+      executable_surface: /private/tmp
+      accepted_artifact_store: /private/var/spool
+    sandbox_disabled: false
+    source_patch_used: false
   ubuntu_local_everywhere_queue:
     status: non-candidate-specific-host-filter-defect
     affected_candidates:
@@ -287,7 +296,7 @@ platform_client_matrix:
     cups-minimal: pass
     pappl: pass
   macos_15:
-    status: candidate-qualification-in-progress
+    status: pass
     native_path: system-cups-lpadmin-everywhere-plus-lp
     runner: macos-15-arm64
     observed:
@@ -304,17 +313,23 @@ platform_client_matrix:
         native_submission: pass
         durable_acceptance: pass
         idempotency_conflicts: 0
-        evidence_run: 36411288637
+        evidence_runs:
+          - 36411288637
+          - 36427659628
       cups-minimal:
-        status: in-progress
+        status: pass
         exact_source_commit: 6ba0487abb05afc93d639f37676add8fd65d3756
-        first_native_build_attempt:
-          status: blocked-by-upstream-cdsa-sdk-compile-drift
-          observed: tls-darwin.c internal helper signature mismatch
+        tls_backend_for_native_build: openssl
+        native_submission: pass
+        durable_acceptance: pass
+        idempotency_conflicts: 0
+        evidence_run: 36427659628
+        upstream_macos_sandbox:
+          disabled: false
           source_patch_used: false
-        retry:
-          tls_backend: openssl
-          status: in-progress
+          execution_surface: /private/tmp/foliorelay-cups-<run>
+          artifact_store: /private/var/spool/foliorelay-ingress-<run>
+          rationale: honor upstream process-exec and writable-path policy
   windows_2025:
     status: capability-interview-pass
     mutation_allowed: false

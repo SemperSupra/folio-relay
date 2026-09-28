@@ -14,7 +14,7 @@ does not count as that platform's native-print qualification.
 |---|---:|---:|---|
 | Linux Ubuntu 24.04 native libcups direct Print-Job | PASS | PASS | qualified |
 | Ubuntu local CUPS `-m everywhere` + `lp` conversion | host filter crash | host filter crash | negative-space evidence; not a candidate gate |
-| macOS 15 native print subsystem | experiment running | PASS | PAPPL qualified through system CUPS `lpadmin -m everywhere` + native `lp` |
+| macOS 15 native print subsystem | PASS | PASS | qualified through system CUPS `lpadmin -m everywhere` + native `lp` |
 | Windows Server 2025 native print subsystem | — | — | capability interview passed; candidate-host strategy required |
 | Android print service / Mopria-compatible path | — | — | unqualified; require faithful hosted execution |
 | iOS/iPadOS AirPrint path | — | — | unqualified; require faithful simulator/device execution |
@@ -139,3 +139,32 @@ probe. The Windows hosted runner imports that tarball as WSL2 and must reach the
 running FolioRelay probe through Windows localhost forwarding. Passing that rep
 earns WSL2 as the candidate-host substrate for the real Windows native-printer
 qualification; it does not by itself count as Windows printing qualification.
+
+
+### macOS CUPS native result — upstream sandbox preserved
+
+The symmetric exact-CUPS macOS candidate is now qualified. Run
+`36427659628` built exact CUPS v2.4.19 commit
+`6ba0487abb05afc93d639f37676add8fd65d3756` with the upstream-supported
+OpenSSL TLS backend, started the isolated FolioRelay queue, and passed the same
+macOS system `lpadmin -m everywhere` plus native `lp` path used for PAPPL.
+
+The qualification exposed two useful upstream macOS sandbox invariants before
+passing:
+
+1. CUPS 2.4.19 explicitly denies `process-exec` below `/Users/`, so a
+   GitHub-runner temporary backend under `/Users/runner/work/_temp` cannot be
+   executed by `cups-exec`.
+2. Moving the executable surface under `/private/tmp` permits execution, but
+   arbitrary writes there are still denied by the generated job profile.
+   CUPS does explicitly permit the system spool hierarchy.
+
+The passing rep therefore keeps sandboxing enabled and makes no CUPS source
+patch: the bounded backend/ingest executable surface lives under
+`/private/tmp/foliorelay-cups-<run>`, while the qualification artifact store
+uses a dedicated runner-owned
+`/private/var/spool/foliorelay-ingress-<run>` directory. Durable FolioRelay
+acceptance advances and the idempotency-conflict counter remains unchanged.
+
+macOS native-client parity is therefore closed for both active substrate
+candidates.
