@@ -281,6 +281,25 @@ flow_control:
       - idempotency_conflicts
       - journal_fsync_latency
 
+platform_client_matrix:
+  linux_ubuntu_24_04:
+    native_client: libcups-direct-print-job
+    cups-minimal: pass
+    pappl: pass
+  macos_15:
+    status: capability-interview
+    mutation_allowed: false
+  windows_2025:
+    status: capability-interview
+    mutation_allowed: false
+  android:
+    status: unqualified
+    requirement: faithful-native-print-service-path
+  ios_ipados:
+    status: unqualified
+    requirement: faithful-airprint-path
+  synthetic_protocol_client_can_substitute_for_native_path: false
+
 veto_gates:
   - native_ipp_interoperability
   - ipp_everywhere_engineering_conformance
