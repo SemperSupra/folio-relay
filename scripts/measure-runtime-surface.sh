@@ -61,6 +61,9 @@ docker compose -f "$compose_file" exec -T "$service" \
 docker compose -f "$compose_file" exec -T "$service" \
   sh -c 'find /proc/1/fd -mindepth 1 -maxdepth 1 -print 2>/dev/null | wc -l' \
   >"$output_dir/process-open-fds.txt"
+docker compose -f "$compose_file" exec -T "$service" \
+  sh -c 'for fd in /proc/1/fd/*; do [ -e "$fd" ] || continue; printf "%s\\t%s\\n" "$(basename "$fd")" "$(readlink "$fd" 2>/dev/null || true)"; done' \
+  >"$output_dir/process-fds.tsv"
 
 docker compose -f "$compose_file" exec -T "$service" sh -c '
   if [ -r /sys/fs/cgroup/memory.current ]; then
@@ -151,13 +154,26 @@ def parse_key_value_tsv(path):
             result[parts[0]] = parts[1]
     return result
 
-def parse_listeners(path):
+def parse_process_socket_inodes(path):
+    inodes = set()
+    if not path.exists():
+        return inodes
+    for line in path.read_text(errors="replace").splitlines():
+        match = re.search(r"socket:\\[(\\d+)\\]", line)
+        if match:
+            inodes.add(match.group(1))
+    return inodes
+
+def parse_listeners(path, allowed_inodes):
     listeners = []
     if not path.exists():
         return listeners
     for line in path.read_text().splitlines()[1:]:
         fields = line.split()
-        if len(fields) < 4 or fields[3] != "0A":
+        if len(fields) < 10 or fields[3] != "0A":
+            continue
+        inode = fields[9]
+        if inode not in allowed_inodes:
             continue
         local = fields[1]
         if ":" not in local:
@@ -196,7 +212,11 @@ for path in out.glob("ldd-*.txt"):
 
 proc = parse_proc_status(out / "process-status.txt")
 cgroup = parse_key_value_tsv(out / "cgroup.tsv")
-listeners = parse_listeners(out / "proc-net-tcp.txt") + parse_listeners(out / "proc-net-tcp6.txt")
+process_socket_inodes = parse_process_socket_inodes(out / "process-fds.tsv")
+listeners = (
+    parse_listeners(out / "proc-net-tcp.txt", process_socket_inodes)
+    + parse_listeners(out / "proc-net-tcp6.txt", process_socket_inodes)
+)
 
 try:
     open_fds = int((out / "process-open-fds.txt").read_text().strip())
@@ -229,6 +249,7 @@ summary = {
     "cgroup_memory_current_bytes": cgroup.get("memory_current_bytes"),
     "cgroup_memory_peak_bytes": cgroup.get("memory_peak_bytes"),
     "cgroup_pids_current": cgroup.get("pids_current"),
+    "process_socket_fd_count": len(process_socket_inodes),
     "listening_tcp_socket_count": len(listeners),
     "listening_tcp_ports": sorted(set(listeners)),
     "read_only_rootfs": bool(host_config.get("ReadonlyRootfs")),
