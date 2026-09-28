@@ -42,11 +42,12 @@ fi
 
 "${ui[@]}" tap edit "" --timeout 15
 adb shell input keyevent KEYCODE_MOVE_END
-adb shell input keyevent KEYCODE_A --meta META_CTRL_ON || true
-adb shell input keyevent KEYCODE_DEL
+for _ in $(seq 1 32); do
+  adb shell input keyevent KEYCODE_DEL
+done
 adb shell input text '10.0.2.2'
-"${ui[@]}" wait res "android:id/button1" --timeout 15
-"${ui[@]}" tap res "android:id/button1" --timeout 10
+"${ui[@]}" wait text "10.0.2.2" --timeout 10
+"${ui[@]}" tap text "Add" --timeout 15
 
 # BIPS probes standard IPP URIs on port 631. The host maps the real PAPPL
 # candidate to that port for this qualification only.

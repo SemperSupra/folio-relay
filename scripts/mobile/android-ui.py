@@ -66,15 +66,25 @@ def matches(node: ET.Element, kind: str, value: str) -> bool:
     raise ValueError(kind)
 
 
-def find(out: pathlib.Path, kind: str, value: str, timeout: float) -> ET.Element | None:
+def find(
+    out: pathlib.Path,
+    kind: str,
+    value: str,
+    timeout: float,
+    *,
+    enabled_only: bool = False,
+) -> ET.Element | None:
     deadline = time.time() + timeout
     attempt = 0
     while time.time() < deadline:
         attempt += 1
         root = snapshot(out, f"wait-{kind}-{attempt:02d}")
         for node in nodes(root):
-            if matches(node, kind, value):
-                return node
+            if not matches(node, kind, value):
+                continue
+            if enabled_only and node.attrib.get("enabled", "true").lower() != "true":
+                continue
+            return node
         time.sleep(1)
     return None
 
@@ -97,13 +107,17 @@ def main() -> None:
     if args.kind is None:
         raise SystemExit("kind is required")
 
-    node = find(out, args.kind, args.value, args.timeout)
+    node = find(
+        out,
+        args.kind,
+        args.value,
+        args.timeout,
+        enabled_only=(args.command == "tap"),
+    )
     if node is None:
         raise SystemExit(f"UI node not found: {args.kind}={args.value!r}")
 
     if args.command == "tap":
-        if node.attrib.get("enabled", "true").lower() != "true":
-            raise SystemExit(f"UI node is disabled: {args.kind}={args.value!r}")
         x, y = center(node)
         adb("shell", "input", "tap", str(x), str(y))
         print(f"tapped {args.kind}={args.value!r} at {x},{y}")
