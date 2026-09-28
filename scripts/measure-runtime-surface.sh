@@ -159,7 +159,7 @@ def parse_process_socket_inodes(path):
     if not path.exists():
         return inodes
     for line in path.read_text(errors="replace").splitlines():
-        match = re.search(r"socket:\\[(\\d+)\\]", line)
+        match = re.search(r"socket:\[(\d+)\]", line)
         if match:
             inodes.add(match.group(1))
     return inodes
