@@ -25,8 +25,16 @@ concurrency:
 
 jobs:
   native-pappl:
-    name: macOS 15 native CUPS client -> PAPPL
-    runs-on: macos-15
+    name: ${{ matrix.runner }} native CUPS client -> PAPPL
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - macos-15
+          - macos-15-intel
+          - macos-26
+          - macos-26-intel
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 25
     steps:
       - name: Checkout FolioRelay
@@ -206,15 +214,23 @@ jobs:
         if: always()
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
-          name: macos-native-pappl-client
+          name: macos-native-pappl-client-${{ matrix.runner }}
           path: ${{ runner.temp }}/evidence
           if-no-files-found: error
           retention-days: 14
 
 
   native-cups:
-    name: macOS 15 native CUPS client -> CUPS
-    runs-on: macos-15
+    name: ${{ matrix.runner }} native CUPS client -> CUPS
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - macos-15
+          - macos-15-intel
+          - macos-26
+          - macos-26-intel
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     steps:
       - name: Checkout FolioRelay
@@ -535,7 +551,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
-          name: macos-native-cups-client
+          name: macos-native-cups-client-${{ matrix.runner }}
           path: ${{ runner.temp }}/evidence-cups
           if-no-files-found: error
           retention-days: 14

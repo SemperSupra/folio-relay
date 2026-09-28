@@ -77,9 +77,15 @@ jobs:
           compression-level: 0
 
   windows-native-pappl:
-    name: Windows native IPP client -> PAPPL in WSL2
+    name: Windows ${{ matrix.runner }} native IPP client -> PAPPL in WSL2
     needs: prepare-pappl-rootfs
-    runs-on: windows-2025
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - windows-2022
+          - windows-2025
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     steps:
       - name: Checkout FolioRelay
@@ -334,7 +340,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
-          name: windows-native-pappl
+          name: windows-native-pappl-${{ matrix.runner }}
           path: ${{ runner.temp }}\windows-native-pappl-evidence
           if-no-files-found: warn
           retention-days: 14
@@ -393,9 +399,15 @@ jobs:
           compression-level: 0
 
   windows-native-cups:
-    name: Windows native IPP client -> CUPS in WSL2
+    name: Windows ${{ matrix.runner }} native IPP client -> CUPS in WSL2
     needs: prepare-cups-rootfs
-    runs-on: windows-2025
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - windows-2022
+          - windows-2025
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     steps:
       - name: Checkout FolioRelay
@@ -646,7 +658,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
-          name: windows-native-cups
+          name: windows-native-cups-${{ matrix.runner }}
           path: ${{ runner.temp }}\windows-native-cups-evidence
           if-no-files-found: warn
           retention-days: 14
