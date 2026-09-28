@@ -8,12 +8,27 @@ sources:
   cups:
     repository: OpenPrinting/cups
     version: v2.4.19
+    annotated_tag_object: f095f335b55607ae7ab7fdf9291113da81264959
+    commit: 6ba0487abb05afc93d639f37676add8fd65d3756
   ippeveprinter:
     repository: OpenPrinting/cups
     version: v2.4.19
+    annotated_tag_object: f095f335b55607ae7ab7fdf9291113da81264959
+    commit: 6ba0487abb05afc93d639f37676add8fd65d3756
   pappl:
     repository: michaelrsweet/pappl
     version: v1.4.11
+    annotated_tag_object: 824ca3ccdeb2610da07a0ac5d3a17f87567a7a05
+    commit: ad86a0a8473f0f83233a374226561181570d4f81
+
+supply_chain_inputs:
+  ubuntu_base: ubuntu:24.04@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3
+  golang_base: golang:1.27.1-bookworm@sha256:69a7b9788769bec032d238959b61854e9ae87f57be9029ec04e9885fabf99195
+  ubuntu_archive_snapshot: 20260928T000000Z
+  source_checkout_by_commit: required
+  floating_source_tag_checkout: prohibited
+  mutable_apt_latest_resolution: prohibited
+  qualification_status: in-progress
 
 candidates:
   cups-minimal:

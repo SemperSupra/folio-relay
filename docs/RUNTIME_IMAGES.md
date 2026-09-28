@@ -364,3 +364,33 @@ The public free-tier GHA pipeline will include:
 
 A smaller image that fails functionality is not an optimization.  A larger
 dependency that is actually required and isolated may earn its keep.
+
+
+## Immutable engineering-build input tuple
+
+The packaged CUPS and PAPPL qualification images now use an explicit immutable
+input tuple rather than resolving floating source tags and current package
+archives during each build.
+
+Pinned inputs:
+
+- Ubuntu base: `ubuntu:24.04@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3`;
+- Go builder: `golang:1.27.1-bookworm@sha256:69a7b9788769bec032d238959b61854e9ae87f57be9029ec04e9885fabf99195`;
+- Ubuntu archive snapshot: `20260928T000000Z`;
+- CUPS 2.4.19 source commit: `6ba0487abb05afc93d639f37676add8fd65d3756`;
+- PAPPL 1.4.11 source commit: `ad86a0a8473f0f83233a374226561181570d4f81`.
+
+The human-readable release tags remain metadata, but builds fetch the exact
+commit SHA. Runtime image labels record the source revision, base identities,
+and Ubuntu snapshot used.
+
+Ubuntu 24.04's supported APT snapshot mechanism freezes package resolution to
+the selected archive time instead of silently consuming whatever packages are
+current on a future rebuild. An intentional security/update transaction changes
+the source/base/snapshot tuple and reruns the complete qualification suite before
+the new tuple is admitted.
+
+This does not claim byte-for-byte reproducibility yet. The next qualification
+gate compares repeated no-cache rebuilds for package inventory, declared input
+labels, and key runtime artifacts and records any remaining nondeterministic
+build products rather than masking them.
