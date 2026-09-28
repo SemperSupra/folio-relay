@@ -19,6 +19,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   phase0:
     name: Phase 0 - ${{ matrix.candidate }} (${{ matrix.arch }})
