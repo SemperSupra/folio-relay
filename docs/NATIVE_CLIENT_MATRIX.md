@@ -14,8 +14,8 @@ does not count as that platform's native-print qualification.
 |---|---:|---:|---|
 | Linux Ubuntu 24.04 native libcups direct Print-Job | PASS | PASS | qualified |
 | Ubuntu local CUPS `-m everywhere` + `lp` conversion | host filter crash | host filter crash | negative-space evidence; not a candidate gate |
-| macOS 15 native print subsystem | — | — | capability interview running |
-| Windows Server 2025 native print subsystem | — | — | capability interview running |
+| macOS 15 native print subsystem | — | experiment running | capability interview passed |
+| Windows Server 2025 native print subsystem | — | — | capability interview passed; candidate-host strategy required |
 | Android print service / Mopria-compatible path | — | — | unqualified; require faithful hosted execution |
 | iOS/iPadOS AirPrint path | — | — | unqualified; require faithful simulator/device execution |
 
@@ -57,3 +57,39 @@ interviews on standard public GitHub-hosted macOS 15 and Windows Server 2025
 runners. It intentionally does not create printers yet. The evidence determines
 whether a faithful next-stage native-print rep can be automated before any such
 rep becomes a required gate.
+
+
+## Capability interview results
+
+### macOS 15
+
+The public hosted runner exposes the real native print stack:
+
+- `cupsd` is running under launchd;
+- `lp`, `lpstat`, `lpadmin`, `ippfind`, `ipptool`, and
+  `cups-config` are present;
+- Bonjour `dns-sd` is present;
+- the selected macOS SDK contains `cups/cups.h`;
+- a native libcups header/link probe succeeds.
+
+This earns a real next-stage experiment. PAPPL v1.4.12 explicitly supports
+macOS, so the first rep builds the exact PAPPL commit and actual FolioRelay
+bridge natively on the macOS runner, creates a temporary driverless queue with
+the host's system CUPS, submits via native `lp`, and requires FolioRelay
+durable acceptance with no conflict.
+
+### Windows Server 2025
+
+The hosted runner also exposes a credible native print stack:
+
+- Print Spooler is present, Automatic, and Running;
+- PowerShell PrintManagement 1.1 is present;
+- `Add-Printer`, `Get-Printer`, `Get-PrinterDriver`,
+  `Get-PrinterPort`, and `Out-Printer` are available;
+- the `MSFT_Printer` CIM class is available;
+- `Microsoft IPP Class Driver` is installed.
+
+Windows therefore remains eligible for a real native rep. The next engineering
+question is how to host an actual FolioRelay CUPS/PAPPL candidate on or
+reachable from the Windows runner without substituting a synthetic IPP server.
+No printer is created until that candidate-host strategy is qualified.

@@ -287,11 +287,30 @@ platform_client_matrix:
     cups-minimal: pass
     pappl: pass
   macos_15:
-    status: capability-interview
+    status: capability-interview-pass
     mutation_allowed: false
+    observed:
+      cups_scheduler_running: true
+      lp_lpadmin_lpstat: present
+      ippfind_ipptool: present
+      cups_config: present
+      dns_sd: present
+      cups_sdk_header_link_probe: pass
+    next_rep:
+      candidate: pappl
+      native_path: system-cups-lpadmin-everywhere-plus-lp
+      status: in-progress
   windows_2025:
-    status: capability-interview
+    status: capability-interview-pass
     mutation_allowed: false
+    observed:
+      spooler: running
+      print_management_module: present
+      add_printer: present
+      msft_printer_cim_class: present
+      microsoft_ipp_class_driver: present
+    next_rep:
+      status: candidate-host-strategy-required
   android:
     status: unqualified
     requirement: faithful-native-print-service-path

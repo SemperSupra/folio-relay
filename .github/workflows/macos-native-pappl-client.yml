@@ -1,0 +1,202 @@
+name: macOS Native PAPPL Client Qualification
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/macos-native-pappl-client.yml'
+      - 'experiments/print-substrate/pappl-ingress.c'
+      - 'scripts/make-probe-pdf.py'
+      - 'cmd/foliorelay-ipp-ingest/**'
+      - 'cmd/foliorelay-state-fixture/**'
+      - 'internal/state/**'
+      - 'internal/security/**'
+      - 'go.mod'
+      - 'go.sum'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-pappl:
+    name: macOS 15 native CUPS client -> PAPPL
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - name: Checkout FolioRelay
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set up Go 1.27
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.1'
+          cache: false
+
+      - name: Install PAPPL build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew install openssl@3 jpeg-turbo libpng zlib
+          {
+            sw_vers
+            uname -a
+            cups-config --version
+            clang --version | head -1
+            go version
+            brew list --versions openssl@3 jpeg-turbo libpng zlib
+          } | tee "$RUNNER_TEMP/macos-toolchain.txt"
+
+      - name: Build FolioRelay state authority and ingest adapter
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/bin"
+          go build -trimpath -o "$RUNNER_TEMP/bin/foliorelay-state-fixture" ./cmd/foliorelay-state-fixture
+          go build -trimpath -o "$RUNNER_TEMP/bin/foliorelay-ipp-ingest" ./cmd/foliorelay-ipp-ingest
+
+      - name: Build exact PAPPL v1.4.12 bridge natively
+        shell: bash
+        run: |
+          set -euo pipefail
+          pappl="$RUNNER_TEMP/pappl"
+          prefix="$RUNNER_TEMP/pappl-prefix"
+          arch="$(uname -m)"
+
+          git init "$pappl"
+          cd "$pappl"
+          git remote add origin https://github.com/michaelrsweet/pappl.git
+          git fetch --depth 1 origin 6db8e137557ad84662e78d24fdb2a591c621f4ac
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "6db8e137557ad84662e78d24fdb2a591c621f4ac"
+
+          export PKG_CONFIG_PATH="$(brew --prefix openssl@3)/lib/pkgconfig:$(brew --prefix jpeg-turbo)/lib/pkgconfig:$(brew --prefix libpng)/lib/pkgconfig:$(brew --prefix zlib)/lib/pkgconfig"
+          export CPPFLAGS="-I$(brew --prefix openssl@3)/include -I$(brew --prefix jpeg-turbo)/include -I$(brew --prefix libpng)/include -I$(brew --prefix zlib)/include"
+          export CFLAGS="-O2 -arch $arch"
+          export LDFLAGS="-arch $arch -L$(brew --prefix openssl@3)/lib -L$(brew --prefix jpeg-turbo)/lib -L$(brew --prefix libpng)/lib -L$(brew --prefix zlib)/lib"
+
+          ./configure \
+            --prefix="$prefix" \
+            --with-dnssd=no \
+            --with-tls=openssl \
+            --disable-libpam \
+            --disable-libusb \
+            --disable-shared
+          make -j"$(sysctl -n hw.ncpu)"
+          make install
+
+          export PKG_CONFIG_PATH="$prefix/lib/pkgconfig:$PKG_CONFIG_PATH"
+          cd "$GITHUB_WORKSPACE"
+          cc -D_DARWIN_C_SOURCE \
+            $(pkg-config --cflags pappl) \
+            -o "$RUNNER_TEMP/bin/foliorelay-pappl-ingress" \
+            experiments/print-substrate/pappl-ingress.c \
+            $(pkg-config --static --libs pappl)
+
+          file "$RUNNER_TEMP/bin/foliorelay-pappl-ingress"
+          otool -L "$RUNNER_TEMP/bin/foliorelay-pappl-ingress"
+
+      - name: Start FolioRelay authority and PAPPL candidate
+        shell: bash
+        env:
+          FOLIORELAY_INGEST_BIN: ${{ runner.temp }}/bin/foliorelay-ipp-ingest
+          FOLIORELAY_STATE_URL: http://127.0.0.1:18080
+          FOLIORELAY_INGRESS_STORE: ${{ runner.temp }}/ingress
+          FOLIORELAY_MAX_INGRESS_BYTES: '104857600'
+          FOLIORELAY_SUBSTRATE_INSTANCE: macos-${{ github.run_id }}-${{ github.run_attempt }}
+          FOLIORELAY_PAPPL_SPOOL: ${{ runner.temp }}/pappl-spool
+          FOLIORELAY_PAPPL_PORT: '8633'
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/state" "$RUNNER_TEMP/ingress" "$FOLIORELAY_PAPPL_SPOOL" "$RUNNER_TEMP/evidence"
+
+          "$RUNNER_TEMP/bin/foliorelay-state-fixture" \
+            -listen 127.0.0.1:18080 \
+            -journal "$RUNNER_TEMP/state/journal.frj" \
+            >"$RUNNER_TEMP/evidence/state.log" 2>&1 &
+          echo $! >"$RUNNER_TEMP/evidence/state.pid"
+
+          for i in $(seq 1 30); do
+            curl -fsS -o /dev/null http://127.0.0.1:18080/health && break
+            sleep 1
+          done
+          curl -fsS -o /dev/null http://127.0.0.1:18080/health
+
+          "$RUNNER_TEMP/bin/foliorelay-pappl-ingress" \
+            >"$RUNNER_TEMP/evidence/pappl.log" 2>&1 &
+          echo $! >"$RUNNER_TEMP/evidence/pappl.pid"
+
+          testfile="$(find /usr/share/cups -type f -name get-printer-attributes.test -print -quit)"
+          test -n "$testfile"
+          for i in $(seq 1 45); do
+            ipptool -q ipp://127.0.0.1:8633/ipp/print "$testfile" && break
+            sleep 1
+          done
+          ipptool -q ipp://127.0.0.1:8633/ipp/print "$testfile"
+
+      - name: Prove macOS native print-system path
+        shell: bash
+        run: |
+          set -euo pipefail
+          queue=FolioRelayNative
+          sudo lpadmin -x "$queue" >/dev/null 2>&1 || true
+          trap 'sudo lpadmin -x "$queue" >/dev/null 2>&1 || true' EXIT
+
+          sudo lpadmin -p "$queue" -E \
+            -v ipp://127.0.0.1:8633/ipp/print \
+            -m everywhere
+
+          lpstat -p "$queue" -l | tee "$RUNNER_TEMP/evidence/macos-queue.txt"
+          lpoptions -p "$queue" -l >"$RUNNER_TEMP/evidence/macos-options.txt" 2>&1 || true
+
+          python3 scripts/make-probe-pdf.py "$RUNNER_TEMP/macos-native.pdf"
+          file "$RUNNER_TEMP/macos-native.pdf" | tee "$RUNNER_TEMP/evidence/macos-native-file.txt"
+
+          before="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+          lp -d "$queue" "$RUNNER_TEMP/macos-native.pdf" \
+            | tee "$RUNNER_TEMP/evidence/macos-lp-submit.txt"
+
+          for i in $(seq 1 45); do
+            after="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+            b="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["accepted"])' <<<"$before")"
+            a="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["accepted"])' <<<"$after")"
+            [ "$a" -gt "$b" ] && break
+            sleep 1
+          done
+
+          after="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+          python3 - "$before" "$after" <<'PY'
+          import json, sys
+          before=json.loads(sys.argv[1])
+          after=json.loads(sys.argv[2])
+          assert after["accepted"] > before["accepted"], (before, after)
+          assert after["conflicts"] == before["conflicts"], (before, after)
+          PY
+
+          printf '%s\n' "$before" >"$RUNNER_TEMP/evidence/macos-before.json"
+          printf '%s\n' "$after" >"$RUNNER_TEMP/evidence/macos-after.json"
+          lpstat -W completed -o "$queue" >"$RUNNER_TEMP/evidence/macos-completed.txt" 2>&1 || true
+
+      - name: Capture evidence
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/evidence"
+          cp "$RUNNER_TEMP/macos-toolchain.txt" "$RUNNER_TEMP/evidence/" 2>/dev/null || true
+          curl -fsS http://127.0.0.1:18080/v1/stats >"$RUNNER_TEMP/evidence/stats.json" || true
+          lpstat -t >"$RUNNER_TEMP/evidence/lpstat.txt" 2>&1 || true
+          if [ -f "$RUNNER_TEMP/evidence/pappl.pid" ]; then
+            kill "$(cat "$RUNNER_TEMP/evidence/pappl.pid")" 2>/dev/null || true
+          fi
+          if [ -f "$RUNNER_TEMP/evidence/state.pid" ]; then
+            kill "$(cat "$RUNNER_TEMP/evidence/state.pid")" 2>/dev/null || true
+          fi
+          sudo lpadmin -x FolioRelayNative >/dev/null 2>&1 || true
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: macos-native-pappl-client
+          path: ${{ runner.temp }}/evidence
+          if-no-files-found: error
+          retention-days: 14
