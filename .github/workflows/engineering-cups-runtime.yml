@@ -1,0 +1,144 @@
+name: Engineering CUPS Runtime
+
+on:
+  pull_request:
+    paths:
+      - 'cmd/foliorelay-ipp-ingest/**'
+      - 'cmd/foliorelay-state-fixture/**'
+      - 'internal/state/**'
+      - 'experiments/print-substrate/cups-*'
+      - 'deploy/engineering-cups/**'
+      - '.github/workflows/engineering-cups-runtime.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout FolioRelay
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Install IPP client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cups-ipp-utils curl
+
+      - name: Build and start engineering runtime
+        run: |
+          docker compose -f deploy/engineering-cups/compose.yaml up -d --build
+
+      - name: Wait for state authority and printer
+        run: |
+          set -euo pipefail
+          testfile="$(find /usr/share/cups -type f -name get-printer-attributes.test -print -quit)"
+          test -n "$testfile"
+
+          for i in $(seq 1 60); do
+            curl -fsS -o /dev/null http://127.0.0.1:18080/health && break
+            sleep 1
+          done
+          curl -fsS -o /dev/null http://127.0.0.1:18080/health
+
+          for i in $(seq 1 60); do
+            ipptool -q ipp://127.0.0.1:8634/printers/FolioRelay "$testfile" && break
+            sleep 1
+          done
+          ipptool -q ipp://127.0.0.1:8634/printers/FolioRelay "$testfile"
+
+      - name: Print through the packaged runtime
+        run: |
+          set -euo pipefail
+          cat >"$RUNNER_TEMP/sample.pdf" <<'PDF'
+          %PDF-1.1
+          1 0 obj
+          << /Type /Catalog /Pages 2 0 R >>
+          endobj
+          2 0 obj
+          << /Type /Pages /Kids [3 0 R] /Count 1 >>
+          endobj
+          3 0 obj
+          << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>
+          endobj
+          trailer
+          << /Root 1 0 R >>
+          %%EOF
+          PDF
+
+          printtest="$(find /usr/share/cups -type f -name print-job.test -print -quit)"
+          test -n "$printtest"
+          ipptool -q -f "$RUNNER_TEMP/sample.pdf" \
+            ipp://127.0.0.1:8634/printers/FolioRelay "$printtest"
+
+          for i in $(seq 1 30); do
+            stats="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+            accepted="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["accepted"])' <<<"$stats")"
+            [ "$accepted" -ge 1 ] && break
+            sleep 1
+          done
+          stats="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+          python3 - "$stats" <<'PY'
+          import json, sys
+          stats=json.loads(sys.argv[1])
+          assert stats["accepted"] >= 1, stats
+          assert stats["conflicts"] == 0, stats
+          PY
+
+          docker compose -f deploy/engineering-cups/compose.yaml exec -T cups \
+            sh -c 'find /var/lib/foliorelay-artifacts/sha256 -type f -print -quit | grep -q .'
+
+      - name: Prove restart keeps substrate identity/state safe
+        run: |
+          set -euo pipefail
+          before="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+          docker compose -f deploy/engineering-cups/compose.yaml restart cups
+
+          testfile="$(find /usr/share/cups -type f -name get-printer-attributes.test -print -quit)"
+          for i in $(seq 1 60); do
+            ipptool -q ipp://127.0.0.1:8634/printers/FolioRelay "$testfile" && break
+            sleep 1
+          done
+
+          printtest="$(find /usr/share/cups -type f -name print-job.test -print -quit)"
+          ipptool -q -f "$RUNNER_TEMP/sample.pdf" \
+            ipp://127.0.0.1:8634/printers/FolioRelay "$printtest"
+
+          for i in $(seq 1 30); do
+            after="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+            b="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["accepted"])' <<<"$before")"
+            a="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["accepted"])' <<<"$after")"
+            [ "$a" -gt "$b" ] && break
+            sleep 1
+          done
+          python3 - "$before" "$after" <<'PY'
+          import json, sys
+          before=json.loads(sys.argv[1])
+          after=json.loads(sys.argv[2])
+          assert after["accepted"] > before["accepted"], (before, after)
+          assert after["conflicts"] == before["conflicts"], (before, after)
+          PY
+
+      - name: Capture logs
+        if: always()
+        run: |
+          mkdir -p "$RUNNER_TEMP/engineering-runtime"
+          docker compose -f deploy/engineering-cups/compose.yaml ps -a >"$RUNNER_TEMP/engineering-runtime/ps.txt" || true
+          docker compose -f deploy/engineering-cups/compose.yaml logs --no-color >"$RUNNER_TEMP/engineering-runtime/logs.txt" 2>&1 || true
+          curl -fsS http://127.0.0.1:18080/v1/stats >"$RUNNER_TEMP/engineering-runtime/stats.json" || true
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: engineering-cups-runtime
+          path: ${{ runner.temp }}/engineering-runtime
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Stop runtime
+        if: always()
+        run: |
+          docker compose -f deploy/engineering-cups/compose.yaml down -v || true
