@@ -387,6 +387,58 @@ jobs:
             echo "no_new_privs=$nnp"
           } | tee "$RUNNER_TEMP/evidence/pappl-privilege-envelope.txt"
 
+      - name: Prove PAPPL TLS-only IPP surface
+        shell: bash
+        env:
+          FOLIORELAY_INGEST_BIN: ${{ runner.temp }}/bin/foliorelay-ipp-ingest
+          FOLIORELAY_STATE_URL: http://127.0.0.1:18080
+          FOLIORELAY_INGRESS_STORE: ${{ runner.temp }}/ingress
+          FOLIORELAY_MAX_INGRESS_BYTES: "104857600"
+          FOLIORELAY_SUBSTRATE_INSTANCE: gha-${{ github.run_id }}-${{ github.run_attempt }}-tls
+          FOLIORELAY_PAPPL_SPOOL: ${{ runner.temp }}/pappl-tls-spool
+          FOLIORELAY_PAPPL_PORT: "8636"
+          FOLIORELAY_PAPPL_TLS_ONLY: "1"
+          FOLIORELAY_PAPPL_HOSTNAME: localhost
+        run: |
+          set -euo pipefail
+          mkdir -p "$FOLIORELAY_PAPPL_SPOOL"
+          setpriv --no-new-privs -- "$RUNNER_TEMP/bin/foliorelay-pappl-ingress" \
+            >"$RUNNER_TEMP/evidence/pappl-tls.log" 2>&1 &
+          tls_pid=$!
+          echo "$tls_pid" >"$RUNNER_TEMP/evidence/pappl-tls.pid"
+          trap 'kill "$tls_pid" 2>/dev/null || true; wait "$tls_pid" 2>/dev/null || true' EXIT
+
+          ready=0
+          for i in $(seq 1 30); do
+            set +e
+            handshake="$(timeout 4 openssl s_client -connect 127.0.0.1:8636 -servername localhost -brief </dev/null 2>&1)"
+            set -e
+            if grep -Eq 'Protocol (version:|:) TLSv1\.(2|3)' <<<"$handshake"; then
+              printf '%s\n' "$handshake" >"$RUNNER_TEMP/evidence/pappl-tls-handshake.txt"
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          test "$ready" -eq 1
+
+          getattr="$(find /usr/share/cups -type f -name get-printer-attributes.test -print -quit)"
+          test -n "$getattr"
+          ipptool -S -q ipps://localhost:8636/ipp/print "$getattr"
+
+          set +e
+          ipptool -q ipp://127.0.0.1:8636/ipp/print "$getattr" \
+            >"$RUNNER_TEMP/evidence/pappl-plaintext-on-tls-only.out" \
+            2>"$RUNNER_TEMP/evidence/pappl-plaintext-on-tls-only.err"
+          plaintext_rc=$?
+          set -e
+          echo "$plaintext_rc" >"$RUNNER_TEMP/evidence/pappl-plaintext-on-tls-only.rc"
+          test "$plaintext_rc" -ne 0
+
+          kill "$tls_pid"
+          wait "$tls_pid" 2>/dev/null || true
+          trap - EXIT
+
       - name: Submit PDF and prove original-byte handoff
         shell: bash
         run: |
@@ -914,7 +966,8 @@ jobs:
           set -euo pipefail
           base="$RUNNER_TEMP/cups-runtime"
           mkdir -p "$RUNNER_TEMP/evidence" "$RUNNER_TEMP/ingress" "$RUNNER_TEMP/state"
-          mkdir -p "$base"/{bin/backend,bin/daemon,bin/filter,spool/temp,log,ppd,cache}
+          mkdir -p "$base"/{bin/backend,bin/daemon,bin/filter,spool/temp,log,ppd,cache,ssl}
+          chmod 0700 "$base/ssl"
 
           # cupsd dispatches filters/backends through its upstream cups-exec
           # helper under ServerBin/daemon, even when the scheduler runs unprivileged.
@@ -934,6 +987,8 @@ jobs:
           ServerRoot $base
           StateDir $base
           ServerBin $base/bin
+          ServerKeychain $base/ssl
+          CreateSelfSignedCerts Yes
           CacheDir $base/cache
           DataDir $RUNNER_TEMP/cups-stage/usr/share/cups
           RequestRoot $base/spool
@@ -954,8 +1009,11 @@ jobs:
           Browsing Off
           WebInterface No
           DefaultShared No
+          ServerName localhost
           Listen 127.0.0.1:8634
+          SSLListen 127.0.0.1:8635
           Listen $base/cups.sock
+          SSLOptions MinTLS1.2
           MaxLogSize 0
           LogLevel debug2
           # Backend failure must fail closed without permanently stopping the
@@ -1048,6 +1106,37 @@ jobs:
             echo "cap_eff=$capeff"
             echo "no_new_privs=$nnp"
           } | tee "$RUNNER_TEMP/evidence/cups-privilege-envelope.txt"
+
+      - name: Prove CUPS dedicated TLS IPP surface
+        shell: bash
+        run: |
+          set -euo pipefail
+          ready=0
+          for i in $(seq 1 30); do
+            set +e
+            handshake="$(timeout 4 openssl s_client -connect 127.0.0.1:8635 -servername localhost -brief </dev/null 2>&1)"
+            set -e
+            if grep -Eq 'Protocol (version:|:) TLSv1\.(2|3)' <<<"$handshake"; then
+              printf '%s\n' "$handshake" >"$RUNNER_TEMP/evidence/cups-tls-handshake.txt"
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          test "$ready" -eq 1
+
+          getattr="$(find /usr/share/cups -type f -name get-printer-attributes.test -print -quit)"
+          test -n "$getattr"
+          ipptool -S -q ipps://localhost:8635/printers/FolioRelay "$getattr"
+
+          set +e
+          ipptool -q ipp://127.0.0.1:8635/printers/FolioRelay "$getattr" \
+            >"$RUNNER_TEMP/evidence/cups-plaintext-on-tls-port.out" \
+            2>"$RUNNER_TEMP/evidence/cups-plaintext-on-tls-port.err"
+          plaintext_rc=$?
+          set -e
+          echo "$plaintext_rc" >"$RUNNER_TEMP/evidence/cups-plaintext-on-tls-port.rc"
+          test "$plaintext_rc" -ne 0
 
       - name: Submit PDF and prove CUPS pass-through handoff
         shell: bash

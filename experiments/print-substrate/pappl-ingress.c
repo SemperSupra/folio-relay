@@ -209,7 +209,10 @@ int main(void)
   };
   const char *spool = getenv("FOLIORELAY_PAPPL_SPOOL");
   const char *portenv = getenv("FOLIORELAY_PAPPL_PORT");
+  const char *tlsenv = getenv("FOLIORELAY_PAPPL_TLS_ONLY");
+  const char *hostname = getenv("FOLIORELAY_PAPPL_HOSTNAME");
   int port = portenv ? atoi(portenv) : 8633;
+  bool tls_only = tlsenv && (!strcmp(tlsenv, "1") || !strcmp(tlsenv, "true") || !strcmp(tlsenv, "yes"));
   pappl_system_t *system;
   pappl_printer_t *printer;
 
@@ -228,9 +231,12 @@ int main(void)
       "-",
       PAPPL_LOGLEVEL_WARN,
       NULL,
-      false);
+      tls_only);
   if (!system)
     return 1;
+
+  if (hostname && *hostname)
+    papplSystemSetHostName(system, hostname);
 
   papplSystemSetPrinterDrivers(system, 1, drivers, NULL, NULL, driver_cb, NULL);
   papplSystemAddListeners(system, NULL);
