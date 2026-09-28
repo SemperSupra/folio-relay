@@ -405,3 +405,70 @@ This closes the packaged CUPS read-only-root/authority-envelope gate. It does
 **not** select CUPS over PAPPL: PAPPL still needs a comparable packaged-runtime
 surface rep before runtime packaging/surface can be used symmetrically in the
 selection decision.
+
+
+## Packaged PAPPL restart identity and normalized runtime surface
+
+The packaged PAPPL lane exposed and then closed a real restart-identity defect.
+
+The initial restart rep kept the FolioRelay substrate-instance epoch stable but
+PAPPL reset its numeric job allocator. A distinct post-restart document then
+collided with the pre-restart command identity:
+
+```text
+before: accepted=1 conflicts=0
+after:  accepted=1 conflicts=1
+```
+
+The bridge now uses upstream PAPPL's own projection-state mechanism:
+`papplSystemSaveState` persists `NextJobId`, and
+`papplSystemLoadState` restores it. If an existing state file cannot be
+loaded, the bridge fails closed instead of silently resetting the allocator.
+
+On the current head `11bc4c295577049f11494339229afac544073e29`,
+Engineering PAPPL Runtime #10 (run ID `36381873028`) passes:
+
+- real PDF acceptance into FolioRelay;
+- read-only root filesystem;
+- UID 10001;
+- `CAP_DROP=ALL`;
+- `no-new-privileges`;
+- explicit writable PAPPL projection/artifact/scratch paths;
+- stable substrate-instance epoch across a process restart;
+- restored PAPPL source-job allocation across that restart;
+- a distinct post-restart document advances durable FolioRelay acceptance
+  without an idempotency conflict.
+
+PAPPL's saved state remains substrate-local projection/identity-continuity
+state; it is not a second durable FolioRelay job authority.
+
+### Apples-to-apples packaged surface
+
+The earlier PAPPL package measurement was distorted by linking the candidate to
+Ubuntu's broad distro `libcups`, which pulled Avahi, D-Bus, GSSAPI, GnuTLS,
+and related transitive dependencies despite those features being disabled in
+the PAPPL build.
+
+The current PAPPL build instead uses the same pinned/minimized upstream
+CUPS/libcups policy as the CUPS candidate. Current symmetric public-GHA
+measurements are:
+
+| Metric | CUPS | PAPPL |
+|---|---:|---:|
+| Image size | 87,175,497 B | 87,566,902 B |
+| Accessible rootfs files | 2,594 | 2,607 |
+| Accessible rootfs bytes | 91,180,391 B | 91,268,910 B |
+| Executable files | 498 | 496 |
+| Executable bytes | 40,534,904 B | 39,712,648 B |
+| dpkg packages | 92 | 94 |
+| dpkg installed size | 94,583 KiB | 95,501 KiB |
+| Measured dynamic dependency paths | 8 | 9 |
+
+The package difference is now only PAPPL's explicit JPEG/PNG runtime support;
+both candidates use the same private minimized `libcups.so.2`. PAPPL's
+measured dependency set adds JPEG and PNG while CUPS adds `libcrypt`.
+
+The image-size difference is about 0.45%, far too small to justify a substrate
+selection on size alone. These results close the prior packaging asymmetry and
+move the critical path to native-client interoperability and immutable
+supply-chain/security-update qualification.

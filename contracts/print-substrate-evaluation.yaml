@@ -68,6 +68,14 @@ candidates:
     discovery_profile: pass
     least_privilege: pass
     ipp_everywhere_engineering_conformance: pass
+    packaged_engineering_runtime:
+      runnable: pass
+      read_only_root: pass
+      cap_drop_all: pass
+      no_new_privileges: pass
+      explicit_writable_paths: pass
+      source_identity_restart_continuity: pass
+      projection_state_load_failure: fail-closed
     production_status: active-candidate
     concurrency_observations:
       - clients: 25
@@ -155,6 +163,27 @@ operating_envelope:
     ipp_everywhere_engineering_conformance:
       cups-minimal: pass
       pappl: pass
+    packaged_runtime_surface:
+      normalized_against_pinned_minimal_libcups: true
+      cups-minimal:
+        image_size_bytes: 87175497
+        rootfs_accessible_file_count: 2594
+        rootfs_accessible_file_bytes: 91180391
+        executable_file_count: 498
+        executable_file_bytes: 40534904
+        package_count: 92
+        package_installed_size_kib: 94583
+        measured_dynamic_dependency_count: 8
+      pappl:
+        image_size_bytes: 87566902
+        rootfs_accessible_file_count: 2607
+        rootfs_accessible_file_bytes: 91268910
+        executable_file_count: 496
+        executable_file_bytes: 39712648
+        package_count: 94
+        package_installed_size_kib: 95501
+        measured_dynamic_dependency_count: 9
+      interpretation: characterization-only-not-selection
   hard_product_limits:
     artifact_bytes: 104857600
     copies_per_job: 1000
