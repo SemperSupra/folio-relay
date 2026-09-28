@@ -149,8 +149,12 @@ jobs:
 
             pappl)
               sudo apt-get install -y --no-install-recommends libpng-dev libjpeg-dev
-              git clone --depth 1 --branch v1.4.11 https://github.com/michaelrsweet/pappl.git pappl
+              git init pappl
               cd pappl
+              git remote add origin https://github.com/michaelrsweet/pappl.git
+              git fetch --depth 1 origin 6db8e137557ad84662e78d24fdb2a591c621f4ac
+              git checkout --detach FETCH_HEAD
+              test "$(git rev-parse HEAD)" = "6db8e137557ad84662e78d24fdb2a591c621f4ac"
               ./configure \
                 --with-dnssd=avahi \
                 --with-tls=openssl \
@@ -312,8 +316,12 @@ jobs:
 
           case "$CANDIDATE" in
             pappl)
-              git clone --depth 1 --branch v1.4.11 https://github.com/michaelrsweet/pappl.git pappl
+              git init pappl
               cd pappl
+              git remote add origin https://github.com/michaelrsweet/pappl.git
+              git fetch --depth 1 origin 6db8e137557ad84662e78d24fdb2a591c621f4ac
+              git checkout --detach FETCH_HEAD
+              test "$(git rev-parse HEAD)" = "6db8e137557ad84662e78d24fdb2a591c621f4ac"
               ./configure \
                 --with-dnssd=avahi \
                 --with-tls=openssl \

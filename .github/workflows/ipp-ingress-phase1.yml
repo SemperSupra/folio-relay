@@ -305,9 +305,12 @@ jobs:
             libssl-dev zlib1g-dev libcups2-dev cups-client cups-ipp-utils \
             libpng-dev libjpeg-dev
 
-          git clone --depth 1 --branch v1.4.11 \
-            https://github.com/michaelrsweet/pappl.git "$RUNNER_TEMP/pappl"
+          git init "$RUNNER_TEMP/pappl"
           cd "$RUNNER_TEMP/pappl"
+          git remote add origin https://github.com/michaelrsweet/pappl.git
+          git fetch --depth 1 origin 6db8e137557ad84662e78d24fdb2a591c621f4ac
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "6db8e137557ad84662e78d24fdb2a591c621f4ac"
           ./configure \
             --with-dnssd=no \
             --with-tls=openssl \

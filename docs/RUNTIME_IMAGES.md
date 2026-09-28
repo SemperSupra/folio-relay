@@ -378,7 +378,7 @@ Pinned inputs:
 - Go builder: `golang:1.27.1-bookworm@sha256:69a7b9788769bec032d238959b61854e9ae87f57be9029ec04e9885fabf99195`;
 - Ubuntu archive snapshot: `20260928T000000Z`;
 - CUPS 2.4.19 source commit: `6ba0487abb05afc93d639f37676add8fd65d3756`;
-- PAPPL 1.4.11 source commit: `ad86a0a8473f0f83233a374226561181570d4f81`.
+- PAPPL 1.4.12 source commit: `6db8e137557ad84662e78d24fdb2a591c621f4ac`.
 
 The human-readable release tags remain metadata, but builds fetch the exact
 commit SHA. Runtime image labels record the source revision, base identities,
@@ -394,3 +394,25 @@ This does not claim byte-for-byte reproducibility yet. The next qualification
 gate compares repeated no-cache rebuilds for package inventory, declared input
 labels, and key runtime artifacts and records any remaining nondeterministic
 build products rather than masking them.
+
+
+### PAPPL 1.4.12 update rehearsal
+
+The first real immutable-input update transaction uses PAPPL 1.4.12, published
+2026-08-20. Upstream describes it as a bug-fix release and lists overflow
+protection in dithering and ready-media handling plus HTTP error-path, printer
+deletion locking, USB, and polling fixes.
+
+The admitted candidate tuple moves from:
+
+- `v1.4.11` / `ad86a0a8473f0f83233a374226561181570d4f81`
+
+to:
+
+- annotated tag `4f6a8d87dde5ab99d33abe172f767e6db1beb20d`;
+- source commit `6db8e137557ad84662e78d24fdb2a591c621f4ac`.
+
+All qualification workflows fetch that exact commit rather than the mutable tag
+name. The update is admitted only after the normal protocol, stress,
+architecture, packaged-runtime, restart/idempotency, conformance, and repeated
+no-cache rebuild gates pass on the new tuple.

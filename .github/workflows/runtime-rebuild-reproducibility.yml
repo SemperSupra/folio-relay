@@ -27,13 +27,13 @@ jobs:
           set -euo pipefail
           cups_tag="$(git ls-remote https://github.com/OpenPrinting/cups.git 'refs/tags/v2.4.19' | awk '{print $1}')"
           cups_commit="$(git ls-remote https://github.com/OpenPrinting/cups.git 'refs/tags/v2.4.19^{}' | awk '{print $1}')"
-          pappl_tag="$(git ls-remote https://github.com/michaelrsweet/pappl.git 'refs/tags/v1.4.11' | awk '{print $1}')"
-          pappl_commit="$(git ls-remote https://github.com/michaelrsweet/pappl.git 'refs/tags/v1.4.11^{}' | awk '{print $1}')"
+          pappl_tag="$(git ls-remote https://github.com/michaelrsweet/pappl.git 'refs/tags/v1.4.12' | awk '{print $1}')"
+          pappl_commit="$(git ls-remote https://github.com/michaelrsweet/pappl.git 'refs/tags/v1.4.12^{}' | awk '{print $1}')"
 
           test "$cups_tag" = "f095f335b55607ae7ab7fdf9291113da81264959"
           test "$cups_commit" = "6ba0487abb05afc93d639f37676add8fd65d3756"
-          test "$pappl_tag" = "824ca3ccdeb2610da07a0ac5d3a17f87567a7a05"
-          test "$pappl_commit" = "ad86a0a8473f0f83233a374226561181570d4f81"
+          test "$pappl_tag" = "4f6a8d87dde5ab99d33abe172f767e6db1beb20d"
+          test "$pappl_commit" = "6db8e137557ad84662e78d24fdb2a591c621f4ac"
 
           {
             echo "cups_tag_object=$cups_tag"
@@ -65,7 +65,7 @@ jobs:
           - candidate: pappl
             dockerfile: deploy/engineering-pappl/Dockerfile
             target: pappl
-            expected_revision: ad86a0a8473f0f83233a374226561181570d4f81
+            expected_revision: 6db8e137557ad84662e78d24fdb2a591c621f4ac
             binaries: /usr/local/bin/foliorelay-pappl-ingress
     steps:
       - name: Checkout FolioRelay

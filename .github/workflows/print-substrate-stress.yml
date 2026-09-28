@@ -362,14 +362,18 @@ jobs:
       - name: Checkout FolioRelay
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
-      - name: Build PAPPL 1.4.11
+      - name: Build PAPPL 1.4.12
         shell: bash
         run: |
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends             autoconf build-essential pkg-config git ca-certificates             libssl-dev zlib1g-dev libavahi-client-dev libcups2-dev cups-ipp-utils             libpng-dev libjpeg-dev
-          git clone --depth 1 --branch v1.4.11 https://github.com/michaelrsweet/pappl.git "$RUNNER_TEMP/pappl"
+          git init "$RUNNER_TEMP/pappl"
           cd "$RUNNER_TEMP/pappl"
+          git remote add origin https://github.com/michaelrsweet/pappl.git
+          git fetch --depth 1 origin 6db8e137557ad84662e78d24fdb2a591c621f4ac
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "6db8e137557ad84662e78d24fdb2a591c621f4ac"
           ./configure             --with-dnssd=avahi             --with-tls=openssl             --disable-libpam             --disable-libusb             --disable-shared
           make -j"$(nproc)"
           make -C testsuite -j"$(nproc)"

@@ -17,9 +17,9 @@ sources:
     commit: 6ba0487abb05afc93d639f37676add8fd65d3756
   pappl:
     repository: michaelrsweet/pappl
-    version: v1.4.11
-    annotated_tag_object: 824ca3ccdeb2610da07a0ac5d3a17f87567a7a05
-    commit: ad86a0a8473f0f83233a374226561181570d4f81
+    version: v1.4.12
+    annotated_tag_object: 4f6a8d87dde5ab99d33abe172f767e6db1beb20d
+    commit: 6db8e137557ad84662e78d24fdb2a591c621f4ac
 
 supply_chain_inputs:
   ubuntu_base: ubuntu:24.04@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3
@@ -46,6 +46,15 @@ supply_chain_inputs:
     pappl:
       status: pass
       bytes: 90328920
+  upstream_update_rehearsal:
+    candidate: pappl
+    from_version: v1.4.11
+    from_commit: ad86a0a8473f0f83233a374226561181570d4f81
+    to_version: v1.4.12
+    to_commit: 6db8e137557ad84662e78d24fdb2a591c621f4ac
+    release_published: 2026-08-20
+    reason: upstream bug-fix release with overflow-protection and error/locking fixes
+    qualification_status: in-progress
 
 candidates:
   cups-minimal:
