@@ -10,6 +10,7 @@ on:
       - 'deploy/engineering-cups/**'
       - 'scripts/measure-runtime-surface.sh'
       - 'scripts/make-probe-pdf.py'
+      - 'experiments/print-substrate/native-libcups-client.c'
       - '.github/workflows/engineering-cups-runtime.yml'
   workflow_dispatch:
 
@@ -119,46 +120,29 @@ jobs:
           docker compose -f deploy/engineering-cups/compose.yaml exec -T cups \
             sh -c 'find /var/lib/foliorelay-artifacts/sha256 -type f -print -quit | grep -q .'
 
-      - name: Prove Linux native driverless client path
+      - name: Prove Linux native libcups direct client path
         shell: bash
         run: |
           set -euo pipefail
-          queue="FolioRelayNativeCUPS"
-          sudo lpadmin -x "$queue" 2>/dev/null || true
-          trap 'sudo lpadmin -x "$queue" 2>/dev/null || true' EXIT
+          mkdir -p "$RUNNER_TEMP/engineering-runtime"
+          cc -O2 -Wall -Wextra \
+            $(cups-config --cflags) \
+            -o "$RUNNER_TEMP/foliorelay-native-libcups-client" \
+            experiments/print-substrate/native-libcups-client.c \
+            $(cups-config --ldflags) $(cups-config --libs)
 
-          sudo lpadmin -p "$queue" -E \
-            -v ipp://127.0.0.1:8634/printers/FolioRelay \
-            -m everywhere
-
-          lpstat -v "$queue" | tee "$RUNNER_TEMP/engineering-runtime/linux-native-client-queue.txt"
-          lpoptions -p "$queue" -l \
-            >"$RUNNER_TEMP/engineering-runtime/linux-native-client-options.txt" 2>&1 || true
-          dpkg-query -W cups-client cups-daemon cups-filters-core-drivers \
-            >"$RUNNER_TEMP/engineering-runtime/linux-native-client-packages.txt"
-          sudo install -m 0644 "/etc/cups/ppd/$queue.ppd" \
-            "$RUNNER_TEMP/engineering-runtime/linux-native-client.ppd" 2>/dev/null || true
-          grep -E '^\*(NickName|cupsFilter|cupsFilter2|cupsManualCopies|cupsIPP)' \
-            "$RUNNER_TEMP/engineering-runtime/linux-native-client.ppd" \
-            >"$RUNNER_TEMP/engineering-runtime/linux-native-client-ppd-routing.txt" 2>/dev/null || true
-
-          before="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
           python3 scripts/make-probe-pdf.py "$RUNNER_TEMP/linux-native-client.pdf"
           file "$RUNNER_TEMP/linux-native-client.pdf" \
-            | tee "$RUNNER_TEMP/engineering-runtime/linux-native-client-pdf-file.txt"
+            | tee "$RUNNER_TEMP/engineering-runtime/linux-native-libcups-pdf-file.txt"
+          dpkg-query -W libcups2 libcups2-dev \
+            | tee "$RUNNER_TEMP/engineering-runtime/linux-native-libcups-packages.txt"
 
-          set +e
-          lp -d "$queue" "$RUNNER_TEMP/linux-native-client.pdf" \
-            > >(tee "$RUNNER_TEMP/engineering-runtime/linux-native-client-submit.txt") \
-            2> >(tee "$RUNNER_TEMP/engineering-runtime/linux-native-client-submit.err" >&2)
-          lp_rc=$?
-          set -e
-          echo "$lp_rc" >"$RUNNER_TEMP/engineering-runtime/linux-native-client-submit.rc"
-          sudo cp /var/log/cups/error_log \
-            "$RUNNER_TEMP/engineering-runtime/linux-native-client-cups-error.log" 2>/dev/null || true
-          test "$lp_rc" -eq 0
+          before="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+          "$RUNNER_TEMP/foliorelay-native-libcups-client" \
+            ipp://127.0.0.1:8634/printers/FolioRelay "$RUNNER_TEMP/linux-native-client.pdf" \
+            | tee "$RUNNER_TEMP/engineering-runtime/linux-native-libcups-submit.txt"
 
-          for i in $(seq 1 45); do
+          for i in $(seq 1 30); do
             after="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
             b="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["accepted"])' <<<"$before")"
             a="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["accepted"])' <<<"$after")"
@@ -167,22 +151,6 @@ jobs:
           done
 
           after="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
-          lpstat -W all -l -o "$queue" \
-            >"$RUNNER_TEMP/engineering-runtime/linux-native-client-jobs.txt" 2>&1 || true
-          lpstat -p "$queue" -l \
-            >"$RUNNER_TEMP/engineering-runtime/linux-native-client-printer.txt" 2>&1 || true
-          sudo install -m 0644 /var/log/cups/error_log \
-            "$RUNNER_TEMP/engineering-runtime/linux-native-client-cups-error.log" 2>/dev/null || true
-          {
-            echo "=== PPD routing ==="
-            cat "$RUNNER_TEMP/engineering-runtime/linux-native-client-ppd-routing.txt" 2>/dev/null || true
-            echo "=== Queue jobs ==="
-            cat "$RUNNER_TEMP/engineering-runtime/linux-native-client-jobs.txt" 2>/dev/null || true
-            echo "=== Printer ==="
-            cat "$RUNNER_TEMP/engineering-runtime/linux-native-client-printer.txt" 2>/dev/null || true
-            echo "=== Host CUPS errors (tail) ==="
-            tail -120 "$RUNNER_TEMP/engineering-runtime/linux-native-client-cups-error.log" 2>/dev/null || true
-          } | tee "$RUNNER_TEMP/engineering-runtime/linux-native-client-diagnostic.txt"
           python3 - "$before" "$after" <<'PY'
           import json, sys
           before=json.loads(sys.argv[1])
@@ -190,11 +158,10 @@ jobs:
           assert after["accepted"] > before["accepted"], (before, after)
           assert after["conflicts"] == before["conflicts"], (before, after)
           PY
-          printf '%s\n' "$before" >"$RUNNER_TEMP/engineering-runtime/linux-native-client-before.json"
-          printf '%s\n' "$after" >"$RUNNER_TEMP/engineering-runtime/linux-native-client-after.json"
+          printf '%s\n' "$before" >"$RUNNER_TEMP/engineering-runtime/linux-native-libcups-before.json"
+          printf '%s\n' "$after" >"$RUNNER_TEMP/engineering-runtime/linux-native-libcups-after.json"
 
-      - name: Prove restart keeps substrate identity/state safe
-        run: |
+      - name: Prove restart keeps substrate identity/state safe        run: |
           set -euo pipefail
           before="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
           docker compose -f deploy/engineering-cups/compose.yaml restart cups
