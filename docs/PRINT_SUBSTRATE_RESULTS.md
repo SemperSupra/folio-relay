@@ -523,3 +523,74 @@ update is an explicit change to the source/base/snapshot tuple followed by the
 same qualification suite. It does not imply that future upstream releases are
 automatically safe; each candidate update must earn admission with fresh
 evidence.
+
+
+## PAPPL 1.4.12 admitted update rehearsal
+
+FolioRelay exercised the immutable update mechanism against a real newer
+upstream release rather than a synthetic version bump. PAPPL moved from
+`v1.4.11` / `ad86a0a8473f0f83233a374226561181570d4f81` to
+`v1.4.12` / `6db8e137557ad84662e78d24fdb2a591c621f4ac`.
+
+The v1.4.12 tuple passed:
+
+- IPP Ingress Phase 1 #107, including replay/conflict/restart, TLS, pressure,
+  authority-outage, and IPP Everywhere engineering-conformance gates;
+- Print Substrate Bakeoff #111, including discovery plus native amd64 and arm64;
+- Print Substrate Stress #101, including the PAPPL concurrency frontier and
+  independent-client pressure;
+- Runtime Rebuild Reproducibility #6, including source-authority verification,
+  two no-cache builds, identical package manifests, identical key-binary hashes,
+  and identical image sizes;
+- Engineering PAPPL Runtime #23 and Engineering CUPS Runtime #38 for the native
+  direct-libcups interoperability rep, packaged authority envelope, real print,
+  restart/idempotency, and current surface characterization.
+
+This closes the currently defined upstream security-update/rebuild mechanism
+gate. Future source/base/snapshot updates still require a fresh qualification
+transaction; this pass does not grant automatic trust to later releases.
+
+### Linux native-client oracle correction
+
+The first Linux-native attempt created a local Ubuntu CUPS
+`-m everywhere` queue and submitted through `lp`. On both FolioRelay
+candidate endpoints, Ubuntu's local `/usr/lib/cups/filter/universal` process
+crashed with signal 11 while loading PPD color-profile state. The failure
+reproduced with a standards-conventional one-page PDF, and the IPP backend
+exited without an error before FolioRelay durable acceptance changed.
+
+Because the same host-side conversion failure occurred before transport to both
+otherwise-green candidate endpoints, it is retained as a client-stack
+compatibility/negative-space finding, not a CUPS-vs-PAPPL substrate failure.
+
+The admission rep now uses the Ubuntu host's native libcups directly and issues
+IPP `Print-Job` to each explicit candidate URI with the same valid PDF. Both
+returned:
+
+```text
+status=successful-ok job-id=2
+```
+
+and each advanced FolioRelay durable acceptance with no idempotency conflict.
+This qualifies the Linux native libcups transport path without involving the
+unrelated local scheduler/filter conversion pipeline.
+
+### Current immutable packaged surface
+
+After immutable OCI bases, the frozen Ubuntu snapshot, and the pinned minimized
+private libcups closure are applied symmetrically:
+
+| Metric | CUPS | PAPPL |
+|---|---:|---:|
+| Image size | 90,321,940 B | 90,328,920 B |
+| Accessible rootfs files | 2,745 | 2,756 |
+| Accessible rootfs bytes | 93,324,056 B | 93,324,474 B |
+| Executable files | 507 | 505 |
+| Executable bytes | 41,583,958 B | 40,761,702 B |
+| dpkg packages | 94 | 96 |
+| dpkg installed size | 96,801 KiB | 97,719 KiB |
+| Measured dynamic dependency paths | 8 | 9 |
+
+The image-size difference is about 0.008%. Surface size is therefore not a
+meaningful selector between the two survivors. Broader native-platform
+interoperability remains a separate Phase-3 work item.

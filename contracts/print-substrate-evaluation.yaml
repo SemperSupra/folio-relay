@@ -54,7 +54,7 @@ supply_chain_inputs:
     to_commit: 6db8e137557ad84662e78d24fdb2a591c621f4ac
     release_published: 2026-08-20
     reason: upstream bug-fix release with overflow-protection and error/locking fixes
-    qualification_status: in-progress
+    qualification_status: pass
 
 candidates:
   cups-minimal:
@@ -204,25 +204,36 @@ operating_envelope:
     ipp_everywhere_engineering_conformance:
       cups-minimal: pass
       pappl: pass
+    linux_native_libcups_direct_print_job:
+      cups-minimal: pass
+      pappl: pass
+      client_library: ubuntu-24.04-libcups-2.4.7
+      operation: Print-Job
+      observed_status: successful-ok
+      note: direct native client bypasses unrelated local scheduler/filter conversion
+    upstream_security_update_path:
+      status: pass
+      rehearsal: pappl-v1.4.11-to-v1.4.12
     packaged_runtime_surface:
       normalized_against_pinned_minimal_libcups: true
+      immutable_input_tuple: true
       cups-minimal:
-        image_size_bytes: 87175497
-        rootfs_accessible_file_count: 2594
-        rootfs_accessible_file_bytes: 91180391
-        executable_file_count: 498
-        executable_file_bytes: 40534904
-        package_count: 92
-        package_installed_size_kib: 94583
+        image_size_bytes: 90321940
+        rootfs_accessible_file_count: 2745
+        rootfs_accessible_file_bytes: 93324056
+        executable_file_count: 507
+        executable_file_bytes: 41583958
+        package_count: 94
+        package_installed_size_kib: 96801
         measured_dynamic_dependency_count: 8
       pappl:
-        image_size_bytes: 87566902
-        rootfs_accessible_file_count: 2607
-        rootfs_accessible_file_bytes: 91268910
-        executable_file_count: 496
-        executable_file_bytes: 39712648
-        package_count: 94
-        package_installed_size_kib: 95501
+        image_size_bytes: 90328920
+        rootfs_accessible_file_count: 2756
+        rootfs_accessible_file_bytes: 93324474
+        executable_file_count: 505
+        executable_file_bytes: 40761702
+        package_count: 96
+        package_installed_size_kib: 97719
         measured_dynamic_dependency_count: 9
       interpretation: characterization-only-not-selection
   hard_product_limits:
@@ -230,6 +241,17 @@ operating_envelope:
     copies_per_job: 1000
     state_journal_record_bytes: 4194304
     substrate_spool: deployment-bounded-separate-filesystem
+
+client_oracle_findings:
+  ubuntu_local_everywhere_queue:
+    status: non-candidate-specific-host-filter-defect
+    affected_candidates:
+      - cups-minimal
+      - pappl
+    observed_failure: cups-filters universal process signal-11 before IPP transport
+    valid_pdf_reproduced: true
+    admission_gate: false
+    retained_as_negative_space_evidence: true
 
 flow_control:
   throttle_basis: resource-budget-and-work-pressure

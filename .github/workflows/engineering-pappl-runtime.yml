@@ -25,11 +25,10 @@ jobs:
       - name: Checkout FolioRelay
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
-      - name: Install IPP client
+      - name: Install native IPP client dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends cups-daemon cups-client cups-ipp-utils cups-filters-core-drivers libcups2-dev curl
-          sudo systemctl start cups.service 2>/dev/null || sudo service cups start
+          sudo apt-get install -y --no-install-recommends cups-ipp-utils libcups2-dev curl
 
       - name: Build and start engineering runtime
         run: |

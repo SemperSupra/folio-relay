@@ -413,6 +413,6 @@ to:
 - source commit `6db8e137557ad84662e78d24fdb2a591c621f4ac`.
 
 All qualification workflows fetch that exact commit rather than the mutable tag
-name. The update is admitted only after the normal protocol, stress,
-architecture, packaged-runtime, restart/idempotency, conformance, and repeated
-no-cache rebuild gates pass on the new tuple.
+name. The update passed the normal protocol, stress, architecture,
+packaged-runtime, restart/idempotency, conformance, and repeated no-cache
+rebuild gates and is admitted as the current PAPPL candidate tuple.
