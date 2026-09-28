@@ -26,7 +26,7 @@ jobs:
       - name: Install IPP client
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends cups-daemon cups-client cups-ipp-utils curl
+          sudo apt-get install -y --no-install-recommends cups-daemon cups-client cups-ipp-utils cups-filters-core-drivers curl
           sudo systemctl start cups.service 2>/dev/null || sudo service cups start
 
       - name: Build and start engineering runtime
@@ -133,8 +133,10 @@ jobs:
           lpstat -v "$queue" | tee "$RUNNER_TEMP/engineering-runtime/linux-native-client-queue.txt"
           lpoptions -p "$queue" -l \
             >"$RUNNER_TEMP/engineering-runtime/linux-native-client-options.txt" 2>&1 || true
-          dpkg-query -W cups-client cups-daemon \
+          dpkg-query -W cups-client cups-daemon cups-filters-core-drivers \
             >"$RUNNER_TEMP/engineering-runtime/linux-native-client-packages.txt"
+          sudo cp "/etc/cups/ppd/$queue.ppd" \
+            "$RUNNER_TEMP/engineering-runtime/linux-native-client.ppd" 2>/dev/null || true
 
           before="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
           cat >"$RUNNER_TEMP/linux-native-client.pdf" <<'PDF'
@@ -154,8 +156,16 @@ jobs:
           %%EOF
           PDF
 
+          set +e
           lp -d "$queue" "$RUNNER_TEMP/linux-native-client.pdf" \
-            | tee "$RUNNER_TEMP/engineering-runtime/linux-native-client-submit.txt"
+            > >(tee "$RUNNER_TEMP/engineering-runtime/linux-native-client-submit.txt") \
+            2> >(tee "$RUNNER_TEMP/engineering-runtime/linux-native-client-submit.err" >&2)
+          lp_rc=$?
+          set -e
+          echo "$lp_rc" >"$RUNNER_TEMP/engineering-runtime/linux-native-client-submit.rc"
+          sudo cp /var/log/cups/error_log \
+            "$RUNNER_TEMP/engineering-runtime/linux-native-client-cups-error.log" 2>/dev/null || true
+          test "$lp_rc" -eq 0
 
           for i in $(seq 1 45); do
             after="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
