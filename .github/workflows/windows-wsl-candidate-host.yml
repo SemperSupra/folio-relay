@@ -488,10 +488,10 @@ jobs:
 
             & wsl.exe -d $distro -- uname -a |
               Tee-Object -FilePath (Join-Path $evidence 'uname.txt')
-            & wsl.exe -d $distro -- env 'LD_LIBRARY_PATH=/usr/lib/foliorelay-cups:/usr/lib' \
-              ldd /usr/sbin/cupsd 2>&1 |
-              Out-String | Set-Content (Join-Path $evidence 'cups-binary-probe.txt')
+            $cupsProbe = & wsl.exe -d $distro -- sh -lc 'LD_LIBRARY_PATH=/usr/lib/foliorelay-cups:/usr/lib ldd /usr/sbin/cupsd' 2>&1
+            $cupsProbe | Out-String | Set-Content (Join-Path $evidence 'cups-binary-probe.txt')
             if ($LASTEXITCODE -ne 0) { throw "CUPS runtime library closure probe failed rc=$LASTEXITCODE" }
+            if (($cupsProbe | Out-String) -match 'not found') { throw "CUPS runtime library closure contains unresolved dependency" }
 
             $wslIpRaw = (& wsl.exe -d $distro -- hostname -I | Out-String).Trim()
             $validIpv4 = @()
