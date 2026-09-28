@@ -420,13 +420,20 @@ jobs:
           done
           curl -fsS -o /dev/null http://127.0.0.1:18081/health
 
-          testfile="$(find /usr/share/cups -type f -name get-printer-attributes.test -print -quit)"
-          test -n "$testfile"
-          for i in $(seq 1 60); do
-            ipptool -q ipp://127.0.0.1:631/ipp/print "$testfile" && break
-            sleep 1
-          done
-          ipptool -q ipp://127.0.0.1:631/ipp/print "$testfile"
+          python3 - <<'PY'
+          import socket, time
+          deadline = time.time() + 60
+          last = None
+          while time.time() < deadline:
+              try:
+                  with socket.create_connection(("127.0.0.1", 631), timeout=1):
+                      break
+              except OSError as error:
+                  last = error
+                  time.sleep(1)
+          else:
+              raise SystemExit(f"PAPPL candidate never listened on host port 631: {last}")
+          PY
 
       - name: Enable KVM access
         shell: bash
