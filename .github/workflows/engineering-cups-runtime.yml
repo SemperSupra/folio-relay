@@ -9,6 +9,7 @@ on:
       - 'experiments/print-substrate/cups-*'
       - 'deploy/engineering-cups/**'
       - 'scripts/measure-runtime-surface.sh'
+      - 'scripts/measure-runtime-startup.sh'
       - 'scripts/make-probe-pdf.py'
       - 'experiments/print-substrate/native-libcups-client.c'
       - '.github/workflows/engineering-cups-runtime.yml'
@@ -199,6 +200,15 @@ jobs:
             "$RUNNER_TEMP/engineering-runtime/surface" \
             /usr/sbin/cupsd \
             /usr/lib/cups/daemon/cups-exec
+
+      - name: Measure packaged CUPS restart-to-ready latency
+        run: |
+          bash scripts/measure-runtime-startup.sh \
+            deploy/engineering-cups/compose.yaml \
+            cups \
+            ipp://127.0.0.1:8634/printers/FolioRelay \
+            "$RUNNER_TEMP/engineering-runtime/behavior" \
+            3
 
       - name: Capture logs
         if: always()
