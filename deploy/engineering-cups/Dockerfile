@@ -54,6 +54,7 @@ RUN ./configure \
  && make BUILDROOT=/out install \
  && install -Dm0555 /out/usr/sbin/cupsd /runtime/usr/sbin/cupsd \
  && install -Dm0555 /out/usr/lib/cups/daemon/cups-exec /runtime/usr/lib/cups/daemon/cups-exec \
+ && install -Dm0555 /out/usr/lib/cups/filter/gziptoany /runtime/usr/lib/cups/filter/gziptoany \
  && install -Dm0555 /src/cups/cups/libcups.so.2 /runtime/usr/lib/foliorelay-cups/libcups.so.2 \
  && mkdir -p /runtime/usr/share/cups/mime \
  && cp -a /out/usr/share/cups/mime/. /runtime/usr/share/cups/mime/
@@ -98,7 +99,7 @@ COPY deploy/engineering-cups/cups-files.conf /etc/cups/cups-files.conf
 COPY deploy/engineering-cups/cupsd.conf /etc/cups/cupsd.conf
 COPY deploy/engineering-cups/printers.conf /etc/cups/printers.conf
 COPY deploy/engineering-cups/start-cups.sh /usr/local/bin/start-foliorelay-cups
-RUN chmod 0555 /usr/sbin/cupsd /usr/lib/cups/daemon/cups-exec /usr/lib/cups/backend/foliorelay \
+RUN chmod 0555 /usr/sbin/cupsd /usr/lib/cups/daemon/cups-exec /usr/lib/cups/filter/gziptoany /usr/lib/cups/backend/foliorelay \
  && chmod 0555 /usr/local/bin/start-foliorelay-cups \
  && mkdir -p /var/lib/cups/ssl /var/cache/cups /var/spool/cups/tmp /var/log/cups /var/lib/foliorelay-artifacts \
  && chown -R 10001:10001 /etc/cups /var/lib/cups /var/cache/cups /var/spool/cups /var/log/cups /var/lib/foliorelay-artifacts

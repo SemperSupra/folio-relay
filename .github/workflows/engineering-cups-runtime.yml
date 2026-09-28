@@ -125,6 +125,34 @@ jobs:
           docker compose -f deploy/engineering-cups/compose.yaml exec -T cups \
             sh -c 'find /var/lib/foliorelay-artifacts/sha256 -type f -print -quit | grep -q .'
 
+      - name: Prove minimal CUPS filter and backend surface
+        run: |
+          set -euo pipefail
+          compose='deploy/engineering-cups/compose.yaml'
+
+          docker compose -f "$compose" exec -T cups \
+            test -x /usr/lib/cups/filter/gziptoany
+
+          for path in \
+            /usr/lib/cups/filter/pstops \
+            /usr/lib/cups/filter/rastertopwg \
+            /usr/lib/cups/filter/foomatic-rip \
+            /usr/lib/cups/backend/ipp \
+            /usr/lib/cups/backend/snmp \
+            /usr/lib/cups/notifier/mailto \
+            /usr/sbin/sendmail
+          do
+            if docker compose -f "$compose" exec -T cups test -e "$path"; then
+              echo "unexpected excluded CUPS surface present: $path" >&2
+              exit 1
+            fi
+          done
+
+          docker compose -f "$compose" exec -T cups \
+            sh -c 'find /usr/lib/cups/backend -maxdepth 1 -type f -printf "%f\\n" | sort' \
+            | tee "$RUNNER_TEMP/engineering-runtime/cups-backends.txt"
+          test "$(cat "$RUNNER_TEMP/engineering-runtime/cups-backends.txt")" = "foliorelay"
+
       - name: Prove Linux native libcups direct client path
         shell: bash
         run: |
