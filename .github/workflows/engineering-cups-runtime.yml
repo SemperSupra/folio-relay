@@ -127,6 +127,13 @@ jobs:
           mkdir -p "$RUNNER_TEMP/engineering-runtime"
           docker compose -f deploy/engineering-cups/compose.yaml ps -a >"$RUNNER_TEMP/engineering-runtime/ps.txt" || true
           docker compose -f deploy/engineering-cups/compose.yaml logs --no-color >"$RUNNER_TEMP/engineering-runtime/logs.txt" 2>&1 || true
+          docker compose -f deploy/engineering-cups/compose.yaml exec -T cups \
+            sh -c 'cat /var/log/cups/error_log' >"$RUNNER_TEMP/engineering-runtime/cups-error.log" 2>&1 || true
+          testfile="$(find /usr/share/cups -type f -name get-printer-attributes.test -print -quit)"
+          if [ -n "$testfile" ]; then
+            ipptool -tv ipp://127.0.0.1:8634/printers/FolioRelay "$testfile" \
+              >"$RUNNER_TEMP/engineering-runtime/ipp-readiness-probe.txt" 2>&1 || true
+          fi
           curl -fsS http://127.0.0.1:18080/v1/stats >"$RUNNER_TEMP/engineering-runtime/stats.json" || true
 
       - name: Upload evidence
