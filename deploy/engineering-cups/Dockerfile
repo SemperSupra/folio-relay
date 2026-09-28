@@ -40,7 +40,12 @@ RUN ./configure \
       --with-max-copies=1000 \
  && make -j"$(nproc)" \
  && mkdir -p /out \
- && make BUILDROOT=/out install
+ && make BUILDROOT=/out install \
+ && install -Dm0555 /out/usr/sbin/cupsd /runtime/usr/sbin/cupsd \
+ && install -Dm0555 /out/usr/lib/cups/daemon/cups-exec /runtime/usr/lib/cups/daemon/cups-exec \
+ && install -Dm0555 /src/cups/cups/libcups.so.2 /runtime/usr/lib/foliorelay-cups/libcups.so.2 \
+ && mkdir -p /runtime/usr/share/cups/mime \
+ && cp -a /out/usr/share/cups/mime/. /runtime/usr/share/cups/mime/
 
 FROM ubuntu:24.04 AS state
 RUN groupadd -g 10001 foliorelay \
@@ -57,12 +62,11 @@ CMD ["-listen","0.0.0.0:18080","-journal","/state/journal.frj"]
 FROM ubuntu:24.04 AS cups
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates libssl3 zlib1g \
+ && apt-get install -y --no-install-recommends libssl3 zlib1g \
  && rm -rf /var/lib/apt/lists/* \
  && groupadd -g 10001 foliorelay \
  && useradd --no-create-home --uid 10001 --gid 10001 --shell /usr/sbin/nologin foliorelay
-COPY --from=cups-build /out/usr/ /usr/
-COPY --from=cups-build /src/cups/cups/libcups.so.2 /usr/lib/foliorelay-cups/libcups.so.2
+COPY --from=cups-build /runtime/usr/ /usr/
 COPY --from=go-build /out/foliorelay-ipp-ingest /usr/local/bin/foliorelay-ipp-ingest
 COPY experiments/print-substrate/cups-backend.sh /usr/lib/cups/backend/foliorelay
 COPY experiments/print-substrate/cups-foliorelay.ppd /etc/cups/ppd/FolioRelay.ppd
