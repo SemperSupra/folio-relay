@@ -1,0 +1,33 @@
+services:
+  state:
+    build:
+      context: ../..
+      dockerfile: deploy/engineering-cups/Dockerfile
+      target: state
+    restart: unless-stopped
+    volumes:
+      - state-data:/state
+    ports:
+      - "127.0.0.1:18080:18080"
+
+  cups:
+    build:
+      context: ../..
+      dockerfile: deploy/engineering-cups/Dockerfile
+      target: cups
+    restart: unless-stopped
+    depends_on:
+      - state
+    ports:
+      - "8634:8634"
+      - "8635:8635"
+    volumes:
+      - cups-state:/var/lib/cups
+      - cups-spool:/var/spool/cups
+      - artifacts:/var/lib/foliorelay-artifacts
+
+volumes:
+  state-data:
+  cups-state:
+  cups-spool:
+  artifacts:
