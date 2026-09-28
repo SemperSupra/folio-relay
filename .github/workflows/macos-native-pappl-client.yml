@@ -237,7 +237,7 @@ jobs:
         run: |
           set -euo pipefail
           cups="$RUNNER_TEMP/cups"
-          prefix="$RUNNER_TEMP/cups-prefix"
+          stage="$RUNNER_TEMP/cups-stage"
 
           git init "$cups"
           cd "$cups"
@@ -251,9 +251,9 @@ jobs:
           export LDFLAGS="-L$(brew --prefix openssl@3)/lib"
 
           ./configure \
-            --prefix="$prefix" \
-            --sysconfdir="$prefix/etc" \
-            --localstatedir="$prefix/var" \
+            --prefix=/usr \
+            --sysconfdir=/etc \
+            --localstatedir=/var \
             --with-tls=openssl \
             --with-dnssd=no \
             --disable-pam \
@@ -267,14 +267,25 @@ jobs:
             --with-printcap=no \
             --with-max-copies=1000
           make -j"$(sysctl -n hw.ncpu)"
-          make install
+          mkdir -p "$stage"
+          make BUILDROOT="$stage" install
+
+          cupsd="$(find "$stage" -type f -path '*/sbin/cupsd' -print -quit)"
+          cups_exec="$(find "$stage" -type f -path '*/cups/daemon/cups-exec' -print -quit)"
+          data_dir="$(find "$stage" -type d -path '*/share/cups' -print -quit)"
+          test -n "$cupsd"
+          test -n "$cups_exec"
+          test -n "$data_dir"
 
           {
             sw_vers
             uname -a
-            "$prefix/sbin/cupsd" -h 2>&1 | head -20 || true
-            file "$prefix/sbin/cupsd"
-            otool -L "$prefix/sbin/cupsd"
+            echo "cupsd=$cupsd"
+            echo "cups_exec=$cups_exec"
+            echo "data_dir=$data_dir"
+            "$cupsd" -h 2>&1 | head -20 || true
+            file "$cupsd"
+            otool -L "$cupsd"
           } | tee "$RUNNER_TEMP/macos-cups-toolchain.txt"
 
       - name: Start FolioRelay authority and exact CUPS candidate
@@ -287,14 +298,21 @@ jobs:
           FOLIORELAY_SUBSTRATE_INSTANCE: macos-cups-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           set -euo pipefail
-          prefix="$RUNNER_TEMP/cups-prefix"
+          stage="$RUNNER_TEMP/cups-stage"
           base="$RUNNER_TEMP/cups-runtime"
           evidence="$RUNNER_TEMP/evidence-cups"
           mkdir -p "$evidence" "$RUNNER_TEMP/ingress" "$RUNNER_TEMP/state"
           mkdir -p "$base"/{bin/backend,bin/daemon,bin/filter,spool/temp,log,ppd,cache}
 
+          cups_exec="$(find "$stage" -type f -path '*/cups/daemon/cups-exec' -print -quit)"
+          cupsd="$(find "$stage" -type f -path '*/sbin/cupsd' -print -quit)"
+          data_dir="$(find "$stage" -type d -path '*/share/cups' -print -quit)"
+          test -n "$cups_exec"
+          test -n "$cupsd"
+          test -n "$data_dir"
+
           sudo install -o root -g wheel -m 0555 \
-            "$prefix/lib/cups/daemon/cups-exec" "$base/bin/daemon/cups-exec"
+            "$cups_exec" "$base/bin/daemon/cups-exec"
           sudo install -o root -g wheel -m 0555 \
             experiments/print-substrate/cups-backend.sh "$base/bin/backend/foliorelay"
           install -m 0644 experiments/print-substrate/cups-foliorelay.ppd \
@@ -309,7 +327,7 @@ jobs:
           StateDir $base
           ServerBin $base/bin
           CacheDir $base/cache
-          DataDir $prefix/share/cups
+          DataDir $data_dir
           RequestRoot $base/spool
           TempDir $base/spool/temp
           AccessLog $base/log/access_log
@@ -382,11 +400,11 @@ jobs:
           FOLIORELAY_INGRESS_STORE="$FOLIORELAY_INGRESS_STORE" \
           FOLIORELAY_MAX_INGRESS_BYTES="$FOLIORELAY_MAX_INGRESS_BYTES" \
           FOLIORELAY_SUBSTRATE_INSTANCE="$FOLIORELAY_SUBSTRATE_INSTANCE" \
-          DYLD_LIBRARY_PATH="$prefix/lib" \
+          DYLD_LIBRARY_PATH="$RUNNER_TEMP/cups/cups" \
           CUPS_SERVERROOT="$base" \
           CUPS_STATEDIR="$base" \
-          CUPS_DATADIR="$prefix/share/cups" \
-            "$prefix/sbin/cupsd" -f -c "$base/cupsd.conf" -s "$base/cups-files.conf" \
+          CUPS_DATADIR="$data_dir" \
+            "$cupsd" -f -c "$base/cupsd.conf" -s "$base/cups-files.conf" \
             >"$evidence/cupsd.log" 2>&1 &
           echo $! >"$evidence/cups.pid"
 
