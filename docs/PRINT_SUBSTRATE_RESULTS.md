@@ -472,3 +472,54 @@ The image-size difference is about 0.45%, far too small to justify a substrate
 selection on size alone. These results close the prior packaging asymmetry and
 move the critical path to native-client interoperability and immutable
 supply-chain/security-update qualification.
+
+
+## Immutable-input rebuild qualification
+
+The packaged-runtime build chain now uses immutable external inputs:
+
+- Ubuntu base:
+  `ubuntu:24.04@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3`;
+- Go builder:
+  `golang:1.27.1-bookworm@sha256:69a7b9788769bec032d238959b61854e9ae87f57be9029ec04e9885fabf99195`;
+- Ubuntu archive snapshot: `20260928T000000Z`;
+- CUPS source: commit
+  `6ba0487abb05afc93d639f37676add8fd65d3756`;
+- PAPPL source: commit
+  `ad86a0a8473f0f83233a374226561181570d4f81`.
+
+The release tags remain human-readable metadata, while CI independently verifies
+the upstream annotated tag objects and their peeled commits before the rebuild
+jobs run.
+
+Ubuntu's snapshot resolver initially exposed a bootstrap edge case: the minimal
+pinned Ubuntu base has no CA bundle, but snapshot resolution switches to HTTPS.
+The build now bootstraps trust from the already pinned Go builder image, then
+installs Ubuntu's own `ca-certificates` from the frozen Ubuntu snapshot. This
+keeps HTTPS transport without allowing one mutable "latest" package to bootstrap
+the supposedly immutable build.
+
+`Runtime Rebuild Reproducibility #1` proves two independent no-cache rebuilds
+per active candidate from the frozen tuple.
+
+CUPS:
+
+- source-authority check: PASS;
+- provenance labels identical: PASS;
+- installed package manifest identical: PASS;
+- key runtime binary hashes identical: PASS;
+- image size A/B: 90,321,940 / 90,321,940 bytes.
+
+PAPPL:
+
+- source-authority check: PASS;
+- provenance labels identical: PASS;
+- installed package manifest identical: PASS;
+- key runtime binary hashes identical: PASS;
+- image size A/B: 90,328,920 / 90,328,920 bytes.
+
+This closes the current upstream security-update/rebuild *mechanism* gate: an
+update is an explicit change to the source/base/snapshot tuple followed by the
+same qualification suite. It does not imply that future upstream releases are
+automatically safe; each candidate update must earn admission with fresh
+evidence.

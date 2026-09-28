@@ -28,7 +28,24 @@ supply_chain_inputs:
   source_checkout_by_commit: required
   floating_source_tag_checkout: prohibited
   mutable_apt_latest_resolution: prohibited
-  qualification_status: in-progress
+  qualification_status: pass
+  release_tag_authority_verified: pass
+  pinned_base_resolution: pass
+  pinned_ubuntu_snapshot_resolution: pass
+  repeated_no_cache_builds: pass
+  repeated_package_manifest_match:
+    cups-minimal: pass
+    pappl: pass
+  repeated_key_binary_hash_match:
+    cups-minimal: pass
+    pappl: pass
+  repeated_image_size_match:
+    cups-minimal:
+      status: pass
+      bytes: 90321940
+    pappl:
+      status: pass
+      bytes: 90328920
 
 candidates:
   cups-minimal:

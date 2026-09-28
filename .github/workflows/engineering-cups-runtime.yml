@@ -26,7 +26,8 @@ jobs:
       - name: Install IPP client
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends cups-ipp-utils curl
+          sudo apt-get install -y --no-install-recommends cups-daemon cups-client cups-ipp-utils curl
+          sudo systemctl start cups.service 2>/dev/null || sudo service cups start
 
       - name: Build and start engineering runtime
         run: |
@@ -116,6 +117,64 @@ jobs:
 
           docker compose -f deploy/engineering-cups/compose.yaml exec -T cups \
             sh -c 'find /var/lib/foliorelay-artifacts/sha256 -type f -print -quit | grep -q .'
+
+      - name: Prove Linux native driverless client path
+        shell: bash
+        run: |
+          set -euo pipefail
+          queue="FolioRelayNativeCUPS"
+          sudo lpadmin -x "$queue" 2>/dev/null || true
+          trap 'sudo lpadmin -x "$queue" 2>/dev/null || true' EXIT
+
+          sudo lpadmin -p "$queue" -E \
+            -v ipp://127.0.0.1:8634/printers/FolioRelay \
+            -m everywhere
+
+          lpstat -v "$queue" | tee "$RUNNER_TEMP/engineering-runtime/linux-native-client-queue.txt"
+          lpoptions -p "$queue" -l \
+            >"$RUNNER_TEMP/engineering-runtime/linux-native-client-options.txt" 2>&1 || true
+          dpkg-query -W cups-client cups-daemon \
+            >"$RUNNER_TEMP/engineering-runtime/linux-native-client-packages.txt"
+
+          before="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+          cat >"$RUNNER_TEMP/linux-native-client.pdf" <<'PDF'
+          %PDF-1.1
+          % FolioRelay Linux native CUPS client probe
+          1 0 obj
+          << /Type /Catalog /Pages 2 0 R >>
+          endobj
+          2 0 obj
+          << /Type /Pages /Kids [3 0 R] /Count 1 >>
+          endobj
+          3 0 obj
+          << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>
+          endobj
+          trailer
+          << /Root 1 0 R >>
+          %%EOF
+          PDF
+
+          lp -d "$queue" "$RUNNER_TEMP/linux-native-client.pdf" \
+            | tee "$RUNNER_TEMP/engineering-runtime/linux-native-client-submit.txt"
+
+          for i in $(seq 1 45); do
+            after="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+            b="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["accepted"])' <<<"$before")"
+            a="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["accepted"])' <<<"$after")"
+            [ "$a" -gt "$b" ] && break
+            sleep 1
+          done
+
+          after="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+          python3 - "$before" "$after" <<'PY'
+          import json, sys
+          before=json.loads(sys.argv[1])
+          after=json.loads(sys.argv[2])
+          assert after["accepted"] > before["accepted"], (before, after)
+          assert after["conflicts"] == before["conflicts"], (before, after)
+          PY
+          printf '%s\n' "$before" >"$RUNNER_TEMP/engineering-runtime/linux-native-client-before.json"
+          printf '%s\n' "$after" >"$RUNNER_TEMP/engineering-runtime/linux-native-client-after.json"
 
       - name: Prove restart keeps substrate identity/state safe
         run: |
