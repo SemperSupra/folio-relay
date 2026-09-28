@@ -308,6 +308,13 @@ platform_client_matrix:
       cups-minimal:
         status: in-progress
         exact_source_commit: 6ba0487abb05afc93d639f37676add8fd65d3756
+        first_native_build_attempt:
+          status: blocked-by-upstream-cdsa-sdk-compile-drift
+          observed: tls-darwin.c internal helper signature mismatch
+          source_patch_used: false
+        retry:
+          tls_backend: openssl
+          status: in-progress
   windows_2025:
     status: capability-interview-pass
     mutation_allowed: false
@@ -317,12 +324,26 @@ platform_client_matrix:
       add_printer: present
       msft_printer_cim_class: present
       microsoft_ipp_class_driver: present
+    host_strategy_census:
+      wsl_present: true
+      wsl_status_probe: pass
+      wsl_version_probe: pass
+      windows_subsystem_for_linux_feature: enabled
+      virtual_machine_platform_feature: enabled
+      vmcompute_service: running
+      hns_service: running
+      docker_service: running
+      virtualization_firmware_enabled: true
+      add_printer_ipp_url_parameter: present
     next_rep:
-      status: candidate-host-strategy-census-in-progress
-      preferred_order:
-        - local-wsl-or-container-if-faithful
-        - bounded-ephemeral-network-reachable-real-candidate
-        - defer-to-hil-if-neither-is-faithful
+      status: wsl2-import-and-localhost-forwarding-qualification-in-progress
+      strategy: imported-pinned-ubuntu-rootfs
+      qualification_probe: real-foliorelay-state-authority
+      then:
+        - host-real-pappl-or-cups-candidate-in-qualified-wsl
+        - create-windows-native-ipp-printer
+        - submit-through-windows-spooler
+        - require-durable-foliorelay-acceptance
   android:
     status: unqualified
     requirement: faithful-native-print-service-path

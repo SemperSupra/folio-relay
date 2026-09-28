@@ -226,6 +226,12 @@ jobs:
           go build -trimpath -o "$RUNNER_TEMP/bin/foliorelay-state-fixture" ./cmd/foliorelay-state-fixture
           go build -trimpath -o "$RUNNER_TEMP/bin/foliorelay-ipp-ingest" ./cmd/foliorelay-ipp-ingest
 
+      - name: Install CUPS build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew install openssl@3
+
       - name: Build exact CUPS v2.4.19 candidate natively
         shell: bash
         run: |
@@ -240,11 +246,15 @@ jobs:
           git checkout --detach FETCH_HEAD
           test "$(git rev-parse HEAD)" = "6ba0487abb05afc93d639f37676add8fd65d3756"
 
+          export PKG_CONFIG_PATH="$(brew --prefix openssl@3)/lib/pkgconfig"
+          export CPPFLAGS="-I$(brew --prefix openssl@3)/include"
+          export LDFLAGS="-L$(brew --prefix openssl@3)/lib"
+
           ./configure \
             --prefix="$prefix" \
             --sysconfdir="$prefix/etc" \
             --localstatedir="$prefix/var" \
-            --with-tls=cdsa \
+            --with-tls=openssl \
             --with-dnssd=no \
             --disable-pam \
             --disable-gssapi \

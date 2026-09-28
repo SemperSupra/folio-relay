@@ -1,0 +1,159 @@
+name: Windows WSL Candidate Host Qualification
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/windows-wsl-candidate-host.yml'
+      - 'cmd/foliorelay-state-fixture/**'
+      - 'internal/state/**'
+      - 'internal/security/**'
+      - 'go.mod'
+      - 'go.sum'
+      - 'contracts/print-substrate-evaluation.yaml'
+      - 'docs/NATIVE_CLIENT_MATRIX.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  prepare-rootfs:
+    name: Prepare pinned WSL rootfs probe
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout FolioRelay
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set up Go 1.27
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.1'
+          cache: false
+
+      - name: Build static FolioRelay authority probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' \
+            -o "$RUNNER_TEMP/foliorelay-state-fixture" ./cmd/foliorelay-state-fixture
+          file "$RUNNER_TEMP/foliorelay-state-fixture"
+
+      - name: Export pinned Ubuntu rootfs with probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          image='ubuntu:24.04@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3'
+          docker pull "$image"
+          cid="$(docker create "$image" /bin/true)"
+          trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+          docker cp "$RUNNER_TEMP/foliorelay-state-fixture" \
+            "$cid:/usr/local/bin/foliorelay-state-fixture"
+          docker export "$cid" -o "$RUNNER_TEMP/foliorelay-wsl-rootfs.tar"
+          sha256sum "$RUNNER_TEMP/foliorelay-wsl-rootfs.tar" \
+            | tee "$RUNNER_TEMP/foliorelay-wsl-rootfs.sha256"
+
+      - name: Upload pinned WSL rootfs
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: foliorelay-wsl-rootfs
+          path: |
+            ${{ runner.temp }}/foliorelay-wsl-rootfs.tar
+            ${{ runner.temp }}/foliorelay-wsl-rootfs.sha256
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0
+
+  windows-wsl-host:
+    name: Windows 2025 -> imported WSL2 FolioRelay host
+    needs: prepare-rootfs
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - name: Checkout FolioRelay
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Download pinned WSL rootfs
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: foliorelay-wsl-rootfs
+          path: ${{ runner.temp }}\foliorelay-wsl-rootfs
+
+      - name: Import WSL2 rootfs and prove Windows-host reachability
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $distro = "FolioRelayProbe-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          $install = Join-Path $env:RUNNER_TEMP 'foliorelay-wsl-install'
+          $artifact = Join-Path $env:RUNNER_TEMP 'foliorelay-wsl-rootfs'
+          $rootfs = Join-Path $artifact 'foliorelay-wsl-rootfs.tar'
+          $evidence = Join-Path $env:RUNNER_TEMP 'windows-wsl-evidence'
+          New-Item -ItemType Directory -Force -Path $install,$evidence | Out-Null
+
+          try {
+            & wsl.exe --unregister $distro 2>$null | Out-Null
+            & wsl.exe --import $distro $install $rootfs --version 2
+            if ($LASTEXITCODE -ne 0) { throw "wsl --import failed rc=$LASTEXITCODE" }
+
+            & wsl.exe -d $distro -- uname -a |
+              Tee-Object -FilePath (Join-Path $evidence 'uname.txt')
+            if ($LASTEXITCODE -ne 0) { throw "wsl uname failed rc=$LASTEXITCODE" }
+
+            & wsl.exe -d $distro -- /bin/sh -lc "nohup /usr/local/bin/foliorelay-state-fixture -listen 0.0.0.0:18099 -journal /tmp/foliorelay.frj >/tmp/foliorelay-state.log 2>&1 & echo \$! >/tmp/foliorelay-state.pid"
+            if ($LASTEXITCODE -ne 0) { throw "failed to start WSL FolioRelay authority" }
+
+            $localhostOk = $false
+            for ($i=0; $i -lt 30; $i++) {
+              try {
+                $response = Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 http://127.0.0.1:18099/health
+                if ($response.StatusCode -eq 200) {
+                  $localhostOk = $true
+                  break
+                }
+              } catch {}
+              Start-Sleep -Seconds 1
+            }
+
+            $wslIp = (& wsl.exe -d $distro -- /bin/sh -lc "hostname -I | awk '{print \$1}'").Trim()
+            "wsl_ip=$wslIp" | Set-Content (Join-Path $evidence 'network.txt')
+            "localhost_forwarding=$localhostOk" | Add-Content (Join-Path $evidence 'network.txt')
+
+            if (-not $localhostOk -and $wslIp) {
+              try {
+                $response = Invoke-WebRequest -UseBasicParsing -TimeoutSec 5 ("http://" + $wslIp + ":18099/health")
+                "direct_wsl_ip_status=$($response.StatusCode)" | Add-Content (Join-Path $evidence 'network.txt')
+              } catch {
+                "direct_wsl_ip_error=$($_.Exception.Message)" | Add-Content (Join-Path $evidence 'network.txt')
+              }
+            }
+
+            & wsl.exe -d $distro -- /bin/sh -lc "cat /tmp/foliorelay-state.log 2>/dev/null || true" |
+              Set-Content (Join-Path $evidence 'state.log')
+
+            if (-not $localhostOk) {
+              throw "Windows localhost forwarding to WSL2 candidate host did not become healthy"
+            }
+
+            @{
+              platform = 'windows-2025'
+              wsl_import = 'pass'
+              wsl_version = 2
+              localhost_forwarding = $localhostOk
+              wsl_ip = $wslIp
+              probe = 'real-foliorelay-state-authority'
+            } | ConvertTo-Json -Depth 5 |
+              Tee-Object -FilePath (Join-Path $evidence 'result.json')
+          }
+          finally {
+            & wsl.exe --terminate $distro 2>$null | Out-Null
+            & wsl.exe --unregister $distro 2>$null | Out-Null
+          }
+
+      - name: Upload WSL host evidence
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: windows-wsl-candidate-host
+          path: ${{ runner.temp }}\windows-wsl-evidence
+          if-no-files-found: warn
+          retention-days: 14

@@ -113,7 +113,29 @@ advanced, and the idempotency-conflict counter did not advance.
 This is promoted admission evidence because it exercises the actual macOS print
 subsystem rather than a platform-labeled protocol script.
 
-A symmetric exact-CUPS macOS job is now part of the same workflow. It builds the
-pinned CUPS v2.4.19 commit natively, runs the isolated FolioRelay CUPS candidate,
-and submits through the same macOS system queue/client path before CUPS can be
-marked qualified on macOS.
+A symmetric exact-CUPS macOS job is now part of the same workflow. Its first
+build attempt exposed upstream CUPS 2.4.19 CDSA/SecureTransport source drift
+against the current macOS 15/Xcode SDK: `tls-darwin.c` calls an internal helper
+using an older signature. FolioRelay does not patch or fork CUPS for the rep.
+The retry builds the same exact CUPS commit with upstream's supported OpenSSL
+TLS backend, matching the existing production candidate policy more closely,
+then uses the same system `lpadmin -m everywhere` + native `lp` path.
+
+
+### Windows WSL candidate-host strategy
+
+The expanded Windows Server 2025 census found a promising fully local path:
+
+- WSL is present and both status/version probes succeed;
+- Windows Subsystem for Linux and VirtualMachinePlatform are enabled;
+- `vmcompute`, HNS, and Docker services are running;
+- firmware virtualization reports enabled;
+- the native PrintManagement `Add-Printer` command exposes `-IppURL`;
+- Microsoft IPP Class Driver remains installed.
+
+The next rep therefore avoids a public tunnel. A Linux job exports the already
+pinned Ubuntu 24.04 OCI rootfs with a static real FolioRelay state-authority
+probe. The Windows hosted runner imports that tarball as WSL2 and must reach the
+running FolioRelay probe through Windows localhost forwarding. Passing that rep
+earns WSL2 as the candidate-host substrate for the real Windows native-printer
+qualification; it does not by itself count as Windows printing qualification.
