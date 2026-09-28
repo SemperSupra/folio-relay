@@ -41,8 +41,12 @@ if "${ui[@]}" wait contains "Add printer by IP address" --timeout 8; then
 fi
 
 "${ui[@]}" tap edit "" --timeout 15
+adb shell input keyevent KEYCODE_MOVE_END
+adb shell input keyevent KEYCODE_A --meta META_CTRL_ON || true
+adb shell input keyevent KEYCODE_DEL
 adb shell input text '10.0.2.2'
-"${ui[@]}" tap text "Add" --timeout 10
+"${ui[@]}" wait res "android:id/button1" --timeout 15
+"${ui[@]}" tap res "android:id/button1" --timeout 10
 
 # BIPS probes standard IPP URIs on port 631. The host maps the real PAPPL
 # candidate to that port for this qualification only.

@@ -102,6 +102,8 @@ def main() -> None:
         raise SystemExit(f"UI node not found: {args.kind}={args.value!r}")
 
     if args.command == "tap":
+        if node.attrib.get("enabled", "true").lower() != "true":
+            raise SystemExit(f"UI node is disabled: {args.kind}={args.value!r}")
         x, y = center(node)
         adb("shell", "input", "tap", str(x), str(y))
         print(f"tapped {args.kind}={args.value!r} at {x},{y}")
