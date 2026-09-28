@@ -87,7 +87,7 @@ jobs:
           _, runtime_id, device = max(candidates, key=lambda item: item[0])
           print(runtime_id, device["udid"], device["name"].replace(" ", "_"))
           PY
-          )"
+          )
 
           printf '%s\n' "$runtime" >"$evidence/selected-runtime.txt"
           printf '%s\n' "$device_name" >"$evidence/selected-device-name.txt"
