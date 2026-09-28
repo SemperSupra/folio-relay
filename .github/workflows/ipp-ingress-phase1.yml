@@ -811,6 +811,17 @@ jobs:
           assert stats["conflicts"] == 0, stats
           PY
 
+      - name: Phase 3 PAPPL IPP Everywhere engineering conformance
+        shell: bash
+        run: |
+          set -euo pipefail
+          suite_root="$RUNNER_TEMP/cups-conformance"
+          if [ ! -d "$suite_root/.git" ]; then
+            git clone --depth 1 --branch v2.4.19               https://github.com/OpenPrinting/cups.git "$suite_root"
+          fi
+          cd "$suite_root/examples"
+          timeout 180 ipptool -V 2.0 -tv             -f "$RUNNER_TEMP/sample.pdf"             ipp://127.0.0.1:8633/ipp/print             ./ipp-everywhere.test             | tee "$RUNNER_TEMP/evidence/pappl-ipp-everywhere.txt"
+
       - name: Record PAPPL transient-state surface
         shell: bash
         run: |
@@ -1516,6 +1527,13 @@ jobs:
           assert stats["accepted"] > baseline, (baseline, stats)
           assert stats["conflicts"] == 0, stats
           PY
+
+      - name: Phase 3 CUPS IPP Everywhere engineering conformance
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/cups/examples"
+          timeout 180 ipptool -V 2.0 -tv             -f "$RUNNER_TEMP/sample.pdf"             ipp://127.0.0.1:8634/printers/FolioRelay             ./ipp-everywhere.test             | tee "$RUNNER_TEMP/evidence/cups-ipp-everywhere.txt"
 
       - name: Record CUPS transient-state surface
         shell: bash
