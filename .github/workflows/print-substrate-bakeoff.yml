@@ -21,16 +21,28 @@ permissions:
 
 jobs:
   phase0:
-    name: Phase 0 - ${{ matrix.candidate }}
-    runs-on: ubuntu-24.04
+    name: Phase 0 - ${{ matrix.candidate }} (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
-        candidate:
-          - cups-minimal
-          - ippeveprinter
-          - pappl
+        include:
+          - candidate: cups-minimal
+            arch: amd64
+            runner: ubuntu-24.04
+          - candidate: ippeveprinter
+            arch: amd64
+            runner: ubuntu-24.04
+          - candidate: pappl
+            arch: amd64
+            runner: ubuntu-24.04
+          - candidate: cups-minimal
+            arch: arm64
+            runner: ubuntu-24.04-arm
+          - candidate: pappl
+            arch: arm64
+            runner: ubuntu-24.04-arm
     steps:
       - name: Checkout FolioRelay
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -49,9 +61,17 @@ jobs:
         shell: bash
         env:
           CANDIDATE: ${{ matrix.candidate }}
+          EXPECTED_ARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/substrate" "$RUNNER_TEMP/evidence"
+          actual_arch="$(uname -m)"
+          printf '%s\n' "$actual_arch" | tee "$RUNNER_TEMP/evidence/runner-arch.txt"
+          case "$EXPECTED_ARCH" in
+            amd64) test "$actual_arch" = "x86_64" ;;
+            arm64) test "$actual_arch" = "aarch64" ;;
+            *) echo "unsupported expected architecture: $EXPECTED_ARCH" >&2; exit 2 ;;
+          esac
           cd "$RUNNER_TEMP/substrate"
 
           case "$CANDIDATE" in
@@ -215,7 +235,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
-          name: print-substrate-${{ matrix.candidate }}
+          name: print-substrate-${{ matrix.candidate }}-${{ matrix.arch }}
           path: ${{ runner.temp }}/evidence
           if-no-files-found: error
           retention-days: 14
