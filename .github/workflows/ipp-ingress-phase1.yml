@@ -810,6 +810,12 @@ jobs:
           Listen $base/cups.sock
           MaxLogSize 0
           LogLevel debug2
+          # Backend failure must fail closed without permanently stopping the
+          # virtual ingress queue. Use CUPS' upstream bounded retry policy so
+          # transient FolioRelay-authority outages recover autonomously.
+          ErrorPolicy retry-job
+          JobRetryInterval 1
+          JobRetryLimit 10
           PreserveJobFiles Off
           PreserveJobHistory 30
           <Location />
