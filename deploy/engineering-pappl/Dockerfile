@@ -69,17 +69,8 @@ RUN mkdir -p /out /runtime \
       -lpthread -lm \
  && strip /out/foliorelay-pappl-ingress \
  && ldd /out/foliorelay-pappl-ingress > /out/foliorelay-pappl-ingress.ldd \
- && awk '/=> \/[^ ]+/ {print $3}' /out/foliorelay-pappl-ingress.ldd \
-    | sort -u | while read -r lib; do \
-      test -n "$lib" || continue; \
-      case "$lib" in \
-        /lib/*) dest="/runtime/usr/lib/${lib#/lib/}" ;; \
-        /usr/lib/*) dest="/runtime${lib}" ;; \
-        *) echo "unexpected PAPPL runtime library path: $lib" >&2; exit 1 ;; \
-      esac; \
-      mkdir -p "$(dirname "$dest")"; \
-      cp -L "$lib" "$dest"; \
-    done
+ && install -Dm0555 /usr/lib/foliorelay-cups/libcups.so.2 \
+      /runtime/usr/lib/foliorelay-cups/libcups.so.2
 
 FROM ubuntu:24.04 AS state
 RUN groupadd -g 10001 foliorelay \
@@ -94,18 +85,20 @@ ENTRYPOINT ["/usr/local/bin/foliorelay-state-fixture"]
 CMD ["-listen","0.0.0.0:18080","-journal","/state/journal.frj"]
 
 FROM ubuntu:24.04 AS pappl
-RUN groupadd -g 10001 foliorelay \
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      libjpeg-turbo8 libpng16-16t64 libssl3 zlib1g \
+ && rm -rf /var/lib/apt/lists/* \
+ && groupadd -g 10001 foliorelay \
  && useradd --no-create-home --uid 10001 --gid 10001 --shell /usr/sbin/nologin foliorelay \
  && mkdir -p /var/lib/pappl /var/lib/foliorelay-artifacts \
  && chown -R 10001:10001 /var/lib/pappl /var/lib/foliorelay-artifacts
 COPY --from=pappl-build /runtime/usr/ /usr/
-COPY --from=pappl-build /out/foliorelay-pappl-ingress /usr/local/bin/foliorelay-pappl-ingress
+COPY --from=pappl-build --chmod=0555 /out/foliorelay-pappl-ingress /usr/local/bin/foliorelay-pappl-ingress
 COPY --from=pappl-build /out/foliorelay-pappl-ingress.ldd /usr/share/foliorelay/pappl-runtime.ldd
-COPY --from=go-build /out/foliorelay-ipp-ingest /usr/local/bin/foliorelay-ipp-ingest
-COPY deploy/engineering-pappl/start-pappl.sh /usr/local/bin/start-foliorelay-pappl
-RUN chmod 0555 /usr/local/bin/foliorelay-pappl-ingress \
-                  /usr/local/bin/foliorelay-ipp-ingest \
-                  /usr/local/bin/start-foliorelay-pappl
+COPY --from=go-build --chmod=0555 /out/foliorelay-ipp-ingest /usr/local/bin/foliorelay-ipp-ingest
+COPY --chmod=0555 deploy/engineering-pappl/start-pappl.sh /usr/local/bin/start-foliorelay-pappl
 ENV LD_LIBRARY_PATH=/usr/lib/foliorelay-cups:/usr/lib \
     FOLIORELAY_INGEST_BIN=/usr/local/bin/foliorelay-ipp-ingest \
     FOLIORELAY_STATE_URL=http://state:18080 \
