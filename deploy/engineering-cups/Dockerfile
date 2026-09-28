@@ -62,6 +62,7 @@ RUN apt-get update \
  && groupadd -g 10001 foliorelay \
  && useradd --no-create-home --uid 10001 --gid 10001 --shell /usr/sbin/nologin foliorelay
 COPY --from=cups-build /out/usr/ /usr/
+COPY --from=cups-build /src/cups/cups/libcups.so.2 /usr/lib/foliorelay-cups/libcups.so.2
 COPY --from=go-build /out/foliorelay-ipp-ingest /usr/local/bin/foliorelay-ipp-ingest
 COPY experiments/print-substrate/cups-backend.sh /usr/lib/cups/backend/foliorelay
 COPY experiments/print-substrate/cups-foliorelay.ppd /etc/cups/ppd/FolioRelay.ppd
@@ -73,7 +74,7 @@ RUN chmod 0555 /usr/sbin/cupsd /usr/lib/cups/daemon/cups-exec /usr/lib/cups/back
  && chmod 0555 /usr/local/bin/start-foliorelay-cups \
  && mkdir -p /var/lib/cups/ssl /var/cache/cups /var/spool/cups/tmp /var/log/cups /var/lib/foliorelay-artifacts \
  && chown -R 10001:10001 /etc/cups /var/lib/cups /var/cache/cups /var/spool/cups /var/log/cups /var/lib/foliorelay-artifacts
-ENV LD_LIBRARY_PATH=/usr/lib \
+ENV LD_LIBRARY_PATH=/usr/lib/foliorelay-cups:/usr/lib \
     FOLIORELAY_INGEST_BIN=/usr/local/bin/foliorelay-ipp-ingest \
     FOLIORELAY_STATE_URL=http://state:18080 \
     FOLIORELAY_INGRESS_STORE=/var/lib/foliorelay-artifacts \
