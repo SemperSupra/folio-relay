@@ -10,6 +10,7 @@ on:
       - 'deploy/engineering-cups/**'
       - 'scripts/measure-runtime-surface.sh'
       - 'scripts/measure-runtime-startup.sh'
+      - 'scripts/measure-selection-maintenance.py'
       - 'scripts/make-probe-pdf.py'
       - 'experiments/print-substrate/native-libcups-client.c'
       - '.github/workflows/engineering-cups-runtime.yml'
@@ -204,6 +205,12 @@ jobs:
             "$RUNNER_TEMP/engineering-runtime/surface" \
             /usr/sbin/cupsd \
             /usr/lib/cups/daemon/cups-exec
+
+      - name: Measure CUPS integration maintenance surface
+        run: |
+          python3 scripts/measure-selection-maintenance.py \
+            cups \
+            "$RUNNER_TEMP/engineering-runtime/selection-maintenance.json"
 
       - name: Measure packaged CUPS restart-to-ready latency
         run: |

@@ -10,6 +10,7 @@ on:
       - 'deploy/engineering-pappl/**'
       - 'scripts/measure-runtime-surface.sh'
       - 'scripts/measure-runtime-startup.sh'
+      - 'scripts/measure-selection-maintenance.py'
       - 'scripts/make-probe-pdf.py'
       - 'experiments/print-substrate/native-libcups-client.c'
       - '.github/workflows/engineering-pappl-runtime.yml'
@@ -239,6 +240,12 @@ jobs:
             pappl \
             "$RUNNER_TEMP/engineering-pappl-runtime/surface" \
             /usr/local/bin/foliorelay-pappl-ingress
+
+      - name: Measure PAPPL integration maintenance surface
+        run: |
+          python3 scripts/measure-selection-maintenance.py \
+            pappl \
+            "$RUNNER_TEMP/engineering-pappl-runtime/selection-maintenance.json"
 
       - name: Measure packaged PAPPL restart-to-ready latency
         run: |
