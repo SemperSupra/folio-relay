@@ -309,12 +309,15 @@ jobs:
           stage="$RUNNER_TEMP/cups-stage"
           sandbox_root="/private/tmp/foliorelay-cups-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           base="$sandbox_root/runtime"
-          ingress="$sandbox_root/ingress"
+          ingress="/private/var/spool/foliorelay-ingress-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           ingest_bin="$sandbox_root/bin/foliorelay-ipp-ingest"
           evidence="$RUNNER_TEMP/evidence-cups"
-          sudo rm -rf "$sandbox_root"
+          sudo rm -rf "$sandbox_root" "$ingress"
           mkdir -p "$evidence" "$RUNNER_TEMP/state"
-          mkdir -p "$sandbox_root/bin" "$ingress"
+          mkdir -p "$sandbox_root/bin"
+          sudo mkdir -p "$ingress"
+          sudo chown "$(id -u):$(id -g)" "$ingress"
+          chmod 0700 "$ingress"
           mkdir -p "$base"/{bin/backend,bin/daemon,bin/filter,spool/temp,log,ppd,cache}
           install -m 0555 "$RUNNER_TEMP/bin/foliorelay-ipp-ingest" "$ingest_bin"
 
@@ -521,7 +524,8 @@ jobs:
             kill "$(cat "$evidence/state.pid")" 2>/dev/null || true
           fi
           sudo lpadmin -x FolioRelayNativeCUPS >/dev/null 2>&1 || true
-          sudo rm -rf "/private/tmp/foliorelay-cups-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" 2>/dev/null || true
+          sudo rm -rf "/private/tmp/foliorelay-cups-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            "/private/var/spool/foliorelay-ingress-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" 2>/dev/null || true
 
       - name: Upload CUPS evidence
         if: always()
