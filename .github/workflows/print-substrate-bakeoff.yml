@@ -268,19 +268,37 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/discovery/evidence"
           sudo mkdir -p /run/dbus
           if ! pgrep -x dbus-daemon >/dev/null 2>&1; then
             sudo dbus-daemon --system --fork
           fi
-          sudo pkill -x avahi-daemon 2>/dev/null || true
-          sudo avahi-daemon --daemonize --no-drop-root
+
+          # Package installation can already start Avahi on hosted Ubuntu.
+          # Reuse a healthy daemon; only recover it when the client cannot
+          # reach the system bus/service.
+          if ! avahi-browse -a -t >/dev/null 2>&1; then
+            if command -v systemctl >/dev/null 2>&1; then
+              sudo systemctl restart avahi-daemon \
+                >"$RUNNER_TEMP/discovery/evidence/avahi-start.txt" 2>&1 || true
+            fi
+          fi
+          if ! avahi-browse -a -t >/dev/null 2>&1; then
+            sudo pkill -x avahi-daemon 2>/dev/null || true
+            sudo rm -f /run/avahi-daemon/pid
+            sudo avahi-daemon --daemonize --no-drop-root \
+              >>"$RUNNER_TEMP/discovery/evidence/avahi-start.txt" 2>&1
+          fi
+
           for i in $(seq 1 20); do
-            if avahi-browse -a -t >/dev/null 2>&1; then
+            if avahi-browse -a -t \
+              >"$RUNNER_TEMP/discovery/evidence/avahi-ready.txt" 2>&1; then
               exit 0
             fi
             sleep 1
           done
-          sudo avahi-daemon --check || true
+          sudo avahi-daemon --check \
+            >>"$RUNNER_TEMP/discovery/evidence/avahi-ready.txt" 2>&1 || true
           exit 1
 
       - name: Build and launch discovery profile
@@ -354,57 +372,57 @@ jobs:
               install -m 0644 "$GITHUB_WORKSPACE/experiments/print-substrate/cups-foliorelay.ppd" "$base/ppd/FolioRelay.ppd"
               user="$(id -un)"
               group="$(id -gn)"
-              cat >"$base/cups-files.conf" <<EOF
-              User $user
-              Group $group
-              ServerRoot $base
-              StateDir $base
-              ServerBin $base/bin
-              CacheDir $base/cache
-              DataDir $RUNNER_TEMP/discovery/cups/stage/usr/share/cups
-              RequestRoot $base/spool
-              TempDir $base/spool/temp
-              AccessLog $base/log/access_log
-              ErrorLog $base/log/error_log
-              PageLog $base/log/page_log
-              FileDevice No
-              PassEnv FOLIORELAY_INGEST_BIN
-              EOF
-              cat >"$base/cupsd.conf" <<EOF
-              StrictConformance Yes
-              Browsing On
-              BrowseLocalProtocols dnssd
-              DefaultShared Yes
-              WebInterface No
-              Listen *:8651
-              PreserveJobFiles Off
-              PreserveJobHistory 10
-              <Location />
-                Order allow,deny
-                Allow all
-              </Location>
-              <Location /printers>
-                Order allow,deny
-                Allow all
-              </Location>
-              <Policy default>
-                <Limit All>
-                  Order allow,deny
-                  Allow all
-                </Limit>
-              </Policy>
-              EOF
-              cat >"$base/printers.conf" <<'EOF'
-              <Printer FolioRelay>
-              Accepting Yes
-              DeviceURI foliorelay:/
-              Info FolioRelay Discovery
-              JobSheets none none
-              State Idle
-              StateMessage Ready
-              Shared Yes
-              </Printer>
-              EOF
+              printf '%s\n' \
+                "User $user" \
+                "Group $group" \
+                "ServerRoot $base" \
+                "StateDir $base" \
+                "ServerBin $base/bin" \
+                "CacheDir $base/cache" \
+                "DataDir $RUNNER_TEMP/discovery/cups/stage/usr/share/cups" \
+                "RequestRoot $base/spool" \
+                "TempDir $base/spool/temp" \
+                "AccessLog $base/log/access_log" \
+                "ErrorLog $base/log/error_log" \
+                "PageLog $base/log/page_log" \
+                "FileDevice No" \
+                "PassEnv FOLIORELAY_INGEST_BIN" \
+                >"$base/cups-files.conf"
+              printf '%s\n' \
+                "StrictConformance Yes" \
+                "Browsing On" \
+                "BrowseLocalProtocols dnssd" \
+                "DefaultShared Yes" \
+                "WebInterface No" \
+                "Listen *:8651" \
+                "PreserveJobFiles Off" \
+                "PreserveJobHistory 10" \
+                "<Location />" \
+                "  Order allow,deny" \
+                "  Allow all" \
+                "</Location>" \
+                "<Location /printers>" \
+                "  Order allow,deny" \
+                "  Allow all" \
+                "</Location>" \
+                "<Policy default>" \
+                "  <Limit All>" \
+                "    Order allow,deny" \
+                "    Allow all" \
+                "  </Limit>" \
+                "</Policy>" \
+                >"$base/cupsd.conf"
+              printf '%s\n' \
+                "<Printer FolioRelay>" \
+                "Accepting Yes" \
+                "DeviceURI foliorelay:/" \
+                "Info FolioRelay Discovery" \
+                "JobSheets none none" \
+                "State Idle" \
+                "StateMessage Ready" \
+                "Shared Yes" \
+                "</Printer>" \
+                >"$base/printers.conf"
               FOLIORELAY_INGEST_BIN=/bin/true \
               LD_LIBRARY_PATH="$RUNNER_TEMP/discovery/cups/cups" \
               CUPS_SERVERROOT="$base" \
