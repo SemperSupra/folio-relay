@@ -1,0 +1,203 @@
+name: Mobile Native Print Capability Census
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/mobile-native-print-capability-census.yml'
+      - 'experiments/mobile/ios-print-capability/**'
+      - 'docs/NATIVE_CLIENT_MATRIX.md'
+      - 'contracts/print-substrate-evaluation.yaml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ios-simulator:
+    name: iOS Simulator native print framework
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - name: Checkout FolioRelay
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Census Xcode and simulator print surfaces
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/ios-print-capability"
+          mkdir -p "$evidence"
+
+          xcodebuild -version | tee "$evidence/xcode-version.txt"
+          xcrun simctl list runtimes -j >"$evidence/runtimes.json"
+          xcrun simctl list devicetypes -j >"$evidence/device-types.json"
+          xcrun --sdk iphonesimulator --show-sdk-path >"$evidence/sdk-path.txt"
+          xcrun --sdk iphonesimulator --show-sdk-version >"$evidence/sdk-version.txt"
+
+          sdk="$(cat "$evidence/sdk-path.txt")"
+          test -f "$sdk/System/Library/Frameworks/UIKit.framework/Headers/UIPrintInteractionController.h"
+          grep -q 'printToPrinter\|print(to:'             "$sdk/System/Library/Frameworks/UIKit.framework/Headers/UIPrintInteractionController.h" || true
+
+          find /Applications -path '*PrinterSimulator.app' -print             >"$evidence/printer-simulator-paths.txt" 2>/dev/null || true
+
+      - name: Build and run UIKit printing capability probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/ios-print-capability"
+          app="$RUNNER_TEMP/FolioRelayPrintProbe.app"
+          mkdir -p "$app"
+
+          runtime="$(python3 - "$evidence/runtimes.json" <<'PY'
+          import json, sys
+          data=json.load(open(sys.argv[1]))
+          runtimes=[
+              r for r in data.get("runtimes", [])
+              if r.get("isAvailable") and r.get("platform") == "iOS"
+          ]
+          if not runtimes:
+              raise SystemExit("no available iOS simulator runtime")
+          def version(r):
+              return tuple(int(x) for x in r.get("version","0").split("."))
+          print(max(runtimes, key=version)["identifier"])
+          PY
+          )"
+
+          device_type="$(python3 - "$evidence/device-types.json" <<'PY'
+          import json, sys
+          data=json.load(open(sys.argv[1]))
+          devices=[d for d in data.get("devicetypes", []) if "iPhone" in d.get("name","")]
+          if not devices:
+              raise SystemExit("no iPhone simulator device type")
+          print(devices[-1]["identifier"])
+          PY
+          )"
+
+          udid="$(xcrun simctl create FolioRelayPrintProbe "$device_type" "$runtime")"
+          printf '%s\n' "$runtime" >"$evidence/selected-runtime.txt"
+          printf '%s\n' "$device_type" >"$evidence/selected-device-type.txt"
+          printf '%s\n' "$udid" >"$evidence/udid.txt"
+
+          cleanup() {
+            xcrun simctl shutdown "$udid" >/dev/null 2>&1 || true
+            xcrun simctl delete "$udid" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          xcrun simctl boot "$udid"
+          xcrun simctl bootstatus "$udid" -b
+
+          sdk="$(xcrun --sdk iphonesimulator --show-sdk-path)"
+          arch="$(uname -m)"
+          case "$arch" in
+            arm64) target='arm64-apple-ios18.0-simulator' ;;
+            x86_64) target='x86_64-apple-ios18.0-simulator' ;;
+            *) echo "unsupported macOS runner architecture: $arch" >&2; exit 1 ;;
+          esac
+
+          cp experiments/mobile/ios-print-capability/Info.plist "$app/Info.plist"
+          xcrun --sdk iphonesimulator clang             -fobjc-arc -target "$target" -isysroot "$sdk"             -framework UIKit -framework Foundation             experiments/mobile/ios-print-capability/main.m             -o "$app/FolioRelayPrintProbe"
+          codesign --force --sign - "$app"
+
+          xcrun simctl install "$udid" "$app"
+          xcrun simctl launch "$udid" org.sempersupra.foliorelay.printprobe             | tee "$evidence/launch.txt"
+
+          for i in $(seq 1 30); do
+            data_container="$(xcrun simctl get_app_container "$udid" org.sempersupra.foliorelay.printprobe data 2>/dev/null || true)"
+            if [ -n "$data_container" ] && [ -f "$data_container/Documents/result.json" ]; then
+              cp "$data_container/Documents/result.json" "$evidence/result.json"
+              break
+            fi
+            sleep 1
+          done
+          test -s "$evidence/result.json"
+          cat "$evidence/result.json"
+
+      - name: Upload iOS evidence
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: ios-simulator-print-capability
+          path: ${{ runner.temp }}/ios-print-capability
+          if-no-files-found: error
+          retention-days: 14
+
+  android-emulator:
+    name: Android emulator native print framework
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout FolioRelay
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Enable KVM access
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"'             | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm || true
+          ls -l /dev/kvm || true
+
+      - name: Boot Android emulator and census real print framework
+        uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_7
+          cores: 2
+          ram-size: 2048M
+          emulator-boot-timeout: 900
+          script: |
+            set -euo pipefail
+            evidence="$RUNNER_TEMP/android-print-capability"
+            mkdir -p "$evidence"
+
+            adb shell getprop >"$evidence/getprop.txt"
+            adb shell pm list features >"$evidence/features.txt"
+            adb shell pm list packages >"$evidence/packages.txt"
+            adb shell dumpsys print >"$evidence/dumpsys-print.txt" 2>&1 || true
+            adb shell settings get secure enabled_print_services               >"$evidence/enabled-print-services.txt" 2>&1 || true
+            adb shell dumpsys package com.android.bips               >"$evidence/bips-package.txt" 2>&1 || true
+            adb shell dumpsys package com.android.printspooler               >"$evidence/printspooler-package.txt" 2>&1 || true
+
+            python3 - "$evidence" <<'PY'
+            import json, pathlib, re, sys
+            p=pathlib.Path(sys.argv[1])
+            features=(p/"features.txt").read_text(errors="replace")
+            packages=(p/"packages.txt").read_text(errors="replace")
+            dump=(p/"dumpsys-print.txt").read_text(errors="replace")
+            enabled=(p/"enabled-print-services.txt").read_text(errors="replace").strip()
+            result={
+              "feature_printing": "android.software.print" in features,
+              "print_spooler_present": "package:com.android.printspooler" in packages,
+              "default_print_service_bips_present": "package:com.android.bips" in packages,
+              "enabled_print_services": enabled,
+              "dumpsys_print_available": bool(dump.strip()) and "Can't find service" not in dump,
+              "android_release": "",
+              "sdk": "",
+            }
+            props=(p/"getprop.txt").read_text(errors="replace")
+            for key, field in [
+              ("ro.build.version.release","android_release"),
+              ("ro.build.version.sdk","sdk"),
+            ]:
+              m=re.search(rf"\[{re.escape(key)}\]: \[(.*?)\]", props)
+              if m: result[field]=m.group(1)
+            (p/"result.json").write_text(json.dumps(result, indent=2, sort_keys=True)+"\n")
+            print(json.dumps(result, sort_keys=True))
+            PY
+
+      - name: Upload Android evidence
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: android-emulator-print-capability
+          path: ${{ runner.temp }}/android-print-capability
+          if-no-files-found: warn
+          retention-days: 14
