@@ -139,8 +139,11 @@ jobs:
             >"$RUNNER_TEMP/engineering-pappl-runtime/linux-native-client-options.txt" 2>&1 || true
           dpkg-query -W cups-client cups-daemon cups-filters-core-drivers \
             >"$RUNNER_TEMP/engineering-pappl-runtime/linux-native-client-packages.txt"
-          sudo cp "/etc/cups/ppd/$queue.ppd" \
+          sudo install -m 0644 "/etc/cups/ppd/$queue.ppd" \
             "$RUNNER_TEMP/engineering-pappl-runtime/linux-native-client.ppd" 2>/dev/null || true
+          grep -E '^\*(NickName|cupsFilter|cupsFilter2|cupsManualCopies|cupsIPP)' \
+            "$RUNNER_TEMP/engineering-pappl-runtime/linux-native-client.ppd" \
+            >"$RUNNER_TEMP/engineering-pappl-runtime/linux-native-client-ppd-routing.txt" 2>/dev/null || true
 
           before="$(curl -fsS http://127.0.0.1:18081/v1/stats)"
           cat >"$RUNNER_TEMP/linux-native-client.pdf" <<'PDF'
@@ -180,6 +183,22 @@ jobs:
           done
 
           after="$(curl -fsS http://127.0.0.1:18081/v1/stats)"
+          lpstat -W all -l -o "$queue" \
+            >"$RUNNER_TEMP/engineering-pappl-runtime/linux-native-client-jobs.txt" 2>&1 || true
+          lpstat -p "$queue" -l \
+            >"$RUNNER_TEMP/engineering-pappl-runtime/linux-native-client-printer.txt" 2>&1 || true
+          sudo install -m 0644 /var/log/cups/error_log \
+            "$RUNNER_TEMP/engineering-pappl-runtime/linux-native-client-cups-error.log" 2>/dev/null || true
+          {
+            echo "=== PPD routing ==="
+            cat "$RUNNER_TEMP/engineering-pappl-runtime/linux-native-client-ppd-routing.txt" 2>/dev/null || true
+            echo "=== Queue jobs ==="
+            cat "$RUNNER_TEMP/engineering-pappl-runtime/linux-native-client-jobs.txt" 2>/dev/null || true
+            echo "=== Printer ==="
+            cat "$RUNNER_TEMP/engineering-pappl-runtime/linux-native-client-printer.txt" 2>/dev/null || true
+            echo "=== Host CUPS errors (tail) ==="
+            tail -120 "$RUNNER_TEMP/engineering-pappl-runtime/linux-native-client-cups-error.log" 2>/dev/null || true
+          } | tee "$RUNNER_TEMP/engineering-pappl-runtime/linux-native-client-diagnostic.txt"
           python3 - "$before" "$after" <<'PY'
           import json, sys
           before=json.loads(sys.argv[1])
