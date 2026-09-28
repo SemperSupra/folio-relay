@@ -44,10 +44,14 @@ RUN mkdir -p /out /runtime \
       -lpthread -lm \
  && strip /out/foliorelay-pappl-ingress \
  && ldd /out/foliorelay-pappl-ingress > /out/foliorelay-pappl-ingress.ldd \
- && { \
-      awk '/=> \/[^ ]+/ {print $3} /^[[:space:]]*\/[^ ]+/ {print $1}' /out/foliorelay-pappl-ingress.ldd; \
-    } | sort -u | while read -r lib; do \
-      test -n "$lib" && cp --parents "$lib" /runtime; \
+ && awk '/=> \/[^ ]+/ {print $3}' /out/foliorelay-pappl-ingress.ldd \
+    | sort -u | while read -r lib; do \
+      test -n "$lib" || continue; \
+      resolved="$(readlink -f "$lib")"; \
+      case "$resolved" in \
+        /usr/lib/*) cp --parents "$resolved" /runtime ;; \
+        *) echo "unexpected PAPPL runtime library path: $lib -> $resolved" >&2; exit 1 ;; \
+      esac; \
     done
 
 FROM ubuntu:24.04 AS state
@@ -67,7 +71,7 @@ RUN groupadd -g 10001 foliorelay \
  && useradd --no-create-home --uid 10001 --gid 10001 --shell /usr/sbin/nologin foliorelay \
  && mkdir -p /var/lib/pappl /var/lib/foliorelay-artifacts \
  && chown -R 10001:10001 /var/lib/pappl /var/lib/foliorelay-artifacts
-COPY --from=pappl-build /runtime/ /
+COPY --from=pappl-build /runtime/usr/ /usr/
 COPY --from=pappl-build /out/foliorelay-pappl-ingress /usr/local/bin/foliorelay-pappl-ingress
 COPY --from=pappl-build /out/foliorelay-pappl-ingress.ldd /usr/share/foliorelay/pappl-runtime.ldd
 COPY --from=go-build /out/foliorelay-ipp-ingest /usr/local/bin/foliorelay-ipp-ingest
