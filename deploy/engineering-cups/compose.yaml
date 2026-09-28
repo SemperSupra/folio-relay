@@ -5,6 +5,11 @@ services:
       dockerfile: deploy/engineering-cups/Dockerfile
       target: state
     restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     volumes:
       - state-data:/state
     ports:
@@ -16,6 +21,11 @@ services:
       dockerfile: deploy/engineering-cups/Dockerfile
       target: cups
     restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     depends_on:
       - state
     ports:
@@ -25,6 +35,9 @@ services:
       - cups-state:/var/lib/cups
       - cups-spool:/var/spool/cups
       - artifacts:/var/lib/foliorelay-artifacts
+    tmpfs:
+      - /var/cache/cups:rw,noexec,nosuid,nodev,size=16m,uid=10001,gid=10001,mode=0750
+      - /var/log/cups:rw,noexec,nosuid,nodev,size=16m,uid=10001,gid=10001,mode=0750
 
 volumes:
   state-data:
