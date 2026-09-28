@@ -20,7 +20,7 @@ ARG CUPS_VERSION=v2.4.19
 ARG CUPS_COMMIT=6ba0487abb05afc93d639f37676add8fd65d3756
 COPY --from=go-build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 ENV DEBIAN_FRONTEND=noninteractive
-RUN printf 'APT::Snapshot "%s";\n' "${UBUNTU_SNAPSHOT}" > /etc/apt/apt.conf.d/50snapshot \
+RUN printf 'APT::Snapshot "%s";\nAcquire::Retries "5";\n' "${UBUNTU_SNAPSHOT}" > /etc/apt/apt.conf.d/50snapshot \
  && apt-get update \
  && apt-get install -y --no-install-recommends \
       autoconf build-essential ca-certificates git libssl-dev pkg-config zlib1g-dev \
@@ -79,7 +79,7 @@ ARG UBUNTU_BASE
 ARG GO_BASE
 COPY --from=go-build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 ENV DEBIAN_FRONTEND=noninteractive
-RUN printf 'APT::Snapshot "%s";\n' "${UBUNTU_SNAPSHOT}" > /etc/apt/apt.conf.d/50snapshot \
+RUN printf 'APT::Snapshot "%s";\nAcquire::Retries "5";\n' "${UBUNTU_SNAPSHOT}" > /etc/apt/apt.conf.d/50snapshot \
  && apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates libssl3 zlib1g \
  && rm -rf /var/lib/apt/lists/* \
