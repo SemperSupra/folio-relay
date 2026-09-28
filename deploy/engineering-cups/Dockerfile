@@ -18,6 +18,7 @@ FROM ${UBUNTU_BASE} AS cups-build
 ARG UBUNTU_SNAPSHOT
 ARG CUPS_VERSION=v2.4.19
 ARG CUPS_COMMIT=6ba0487abb05afc93d639f37676add8fd65d3756
+COPY --from=go-build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 ENV DEBIAN_FRONTEND=noninteractive
 RUN printf 'APT::Snapshot "%s";\n' "${UBUNTU_SNAPSHOT}" > /etc/apt/apt.conf.d/50snapshot \
  && apt-get update \
@@ -75,10 +76,11 @@ ARG CUPS_VERSION=v2.4.19
 ARG CUPS_COMMIT=6ba0487abb05afc93d639f37676add8fd65d3756
 ARG UBUNTU_BASE
 ARG GO_BASE
+COPY --from=go-build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 ENV DEBIAN_FRONTEND=noninteractive
 RUN printf 'APT::Snapshot "%s";\n' "${UBUNTU_SNAPSHOT}" > /etc/apt/apt.conf.d/50snapshot \
  && apt-get update \
- && apt-get install -y --no-install-recommends libssl3 zlib1g \
+ && apt-get install -y --no-install-recommends ca-certificates libssl3 zlib1g \
  && rm -rf /var/lib/apt/lists/* \
  && groupadd -g 10001 foliorelay \
  && useradd --no-create-home --uid 10001 --gid 10001 --shell /usr/sbin/nologin foliorelay

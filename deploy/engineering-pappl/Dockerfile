@@ -20,6 +20,7 @@ ARG PAPPL_VERSION=v1.4.11
 ARG PAPPL_COMMIT=ad86a0a8473f0f83233a374226561181570d4f81
 ARG CUPS_VERSION=v2.4.19
 ARG CUPS_COMMIT=6ba0487abb05afc93d639f37676add8fd65d3756
+COPY --from=go-build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 ENV DEBIAN_FRONTEND=noninteractive
 RUN printf 'APT::Snapshot "%s";\n' "${UBUNTU_SNAPSHOT}" > /etc/apt/apt.conf.d/50snapshot \
  && apt-get update \
@@ -108,11 +109,12 @@ ARG CUPS_VERSION=v2.4.19
 ARG CUPS_COMMIT=6ba0487abb05afc93d639f37676add8fd65d3756
 ARG UBUNTU_BASE
 ARG GO_BASE
+COPY --from=go-build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 ENV DEBIAN_FRONTEND=noninteractive
 RUN printf 'APT::Snapshot "%s";\n' "${UBUNTU_SNAPSHOT}" > /etc/apt/apt.conf.d/50snapshot \
  && apt-get update \
  && apt-get install -y --no-install-recommends \
-      libjpeg-turbo8 libpng16-16t64 libssl3 zlib1g \
+      ca-certificates libjpeg-turbo8 libpng16-16t64 libssl3 zlib1g \
  && rm -rf /var/lib/apt/lists/* \
  && groupadd -g 10001 foliorelay \
  && useradd --no-create-home --uid 10001 --gid 10001 --shell /usr/sbin/nologin foliorelay \
