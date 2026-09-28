@@ -154,7 +154,7 @@ jobs:
           ram-size: 2048M
           emulator-boot-timeout: 900
           script: |
-            set -euo pipefail
+            set -eu
             evidence="$RUNNER_TEMP/android-print-capability"
             mkdir -p "$evidence"
 
