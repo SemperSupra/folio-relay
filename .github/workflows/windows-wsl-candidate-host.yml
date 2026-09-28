@@ -166,8 +166,12 @@ jobs:
 
             & wsl.exe -d $distro -- uname -a |
               Tee-Object -FilePath (Join-Path $evidence 'uname.txt')
-            & wsl.exe -d $distro -- /usr/local/bin/foliorelay-pappl-ingress --help 2>&1 |
+            & wsl.exe -d $distro -- env 'LD_LIBRARY_PATH=/usr/lib/foliorelay-cups:/usr/lib'               ldd /usr/local/bin/foliorelay-pappl-ingress 2>&1 |
               Out-String | Set-Content (Join-Path $evidence 'pappl-binary-probe.txt')
+            if ($LASTEXITCODE -ne 0) { throw "PAPPL runtime library closure probe failed rc=$LASTEXITCODE" }
+            & wsl.exe -d $distro -- /usr/bin/setpriv --version 2>&1 |
+              Out-String | Set-Content (Join-Path $evidence 'setpriv-version.txt')
+            if ($LASTEXITCODE -ne 0) { throw "setpriv is unavailable in PAPPL rootfs" }
 
             $wslIpRaw = (& wsl.exe -d $distro -- hostname -I | Out-String).Trim()
             $validIpv4 = @()
@@ -186,7 +190,9 @@ jobs:
             $stateStdout = Join-Path $evidence 'state.stdout.log'
             $stateStderr = Join-Path $evidence 'state.stderr.log'
             $stateProcess = Start-Process -FilePath wsl.exe `
-              -ArgumentList @('-d',$distro,'-u','foliorelay','--',
+              -ArgumentList @('-d',$distro,'--',
+                '/usr/bin/setpriv',
+                '--reuid=10001','--regid=10001','--clear-groups','--no-new-privs',
                 '/usr/local/bin/foliorelay-state-fixture',
                 '-listen','0.0.0.0:18080',
                 '-journal','/tmp/foliorelay-state/journal.frj') `
@@ -208,7 +214,8 @@ jobs:
             $papplStdout = Join-Path $evidence 'pappl.stdout.log'
             $papplStderr = Join-Path $evidence 'pappl.stderr.log'
             $papplProcess = Start-Process -FilePath wsl.exe `
-              -ArgumentList @('-d',$distro,'-u','foliorelay','--','env',
+              -ArgumentList @('-d',$distro,'--','env',
+                'LD_LIBRARY_PATH=/usr/lib/foliorelay-cups:/usr/lib',
                 'FOLIORELAY_INGEST_BIN=/usr/local/bin/foliorelay-ipp-ingest',
                 'FOLIORELAY_STATE_URL=http://127.0.0.1:18080',
                 'FOLIORELAY_INGRESS_STORE=/var/lib/foliorelay-artifacts',
@@ -217,6 +224,8 @@ jobs:
                 'FOLIORELAY_PAPPL_PORT=8633',
                 'HOME=/var/lib/pappl',
                 'TMPDIR=/tmp',
+                '/usr/bin/setpriv',
+                '--reuid=10001','--regid=10001','--clear-groups','--no-new-privs',
                 '/usr/local/bin/start-foliorelay-pappl') `
               -PassThru -NoNewWindow `
               -RedirectStandardOutput $papplStdout `
