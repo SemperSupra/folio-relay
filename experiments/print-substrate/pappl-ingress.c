@@ -215,12 +215,19 @@ int main(void)
   bool tls_only = tlsenv && (!strcmp(tlsenv, "1") || !strcmp(tlsenv, "true") || !strcmp(tlsenv, "yes"));
   pappl_system_t *system;
   pappl_printer_t *printer;
+  char *state_path = NULL;
+  bool state_exists, loaded;
 
   if (!spool || !*spool || port < 1 || port > 65535)
   {
     fputs("invalid PAPPL fixture configuration\n", stderr);
     return 64;
   }
+
+  if (asprintf(&state_path, "%s/system.state", spool) < 0)
+    return 1;
+
+  state_exists = access(state_path, F_OK) == 0;
 
   system = papplSystemCreate(
       PAPPL_SOPTIONS_NONE,
@@ -233,29 +240,65 @@ int main(void)
       NULL,
       tls_only);
   if (!system)
+  {
+    free(state_path);
     return 1;
+  }
 
   if (hostname && *hostname)
     papplSystemSetHostName(system, hostname);
 
   papplSystemSetPrinterDrivers(system, 1, drivers, NULL, NULL, driver_cb, NULL);
   papplSystemAddListeners(system, NULL);
-
-  printer = papplPrinterCreate(
+  papplSystemSetSaveCallback(
       system,
-      1,
-      "FolioRelay",
-      "foliorelay-pdf",
-      "MFG:FolioRelay;MDL:PDF Ingress;CMD:PDF;",
-      "file:/dev/null");
-  if (!printer)
-    return 1;
+      (pappl_save_cb_t)papplSystemSaveState,
+      state_path);
 
-  // PAPPL queue/history is transient ingress state. FolioRelay owns durable state.
+  loaded = papplSystemLoadState(system, state_path);
+  if (state_exists && !loaded)
+  {
+    fputs("refusing to reset existing PAPPL state after load failure\n", stderr);
+    free(state_path);
+    return 1;
+  }
+
+  if (loaded)
+  {
+    printer = papplSystemFindPrinter(system, NULL, 1, NULL);
+  }
+  else
+  {
+    printer = papplPrinterCreate(
+        system,
+        1,
+        "FolioRelay",
+        "foliorelay-pdf",
+        "MFG:FolioRelay;MDL:PDF Ingress;CMD:PDF;",
+        "file:/dev/null");
+  }
+
+  if (!printer)
+  {
+    free(state_path);
+    return 1;
+  }
+
+  // PAPPL queue/history and source-ID allocation are substrate projection state.
+  // Persisting NextJobId prevents source identity reuse across process restart;
+  // FolioRelay remains the sole durable product/job authority.
   papplPrinterSetMaxActiveJobs(printer, 1000);
   papplPrinterSetMaxPreservedJobs(printer, 0);
   papplPrinterSetMaxCompletedJobs(printer, 100);
 
+  if (!loaded && !papplSystemSaveState(system, state_path))
+  {
+    fputs("unable to persist initial PAPPL projection state\n", stderr);
+    free(state_path);
+    return 1;
+  }
+
   papplSystemRun(system);
+  free(state_path);
   return 0;
 }
