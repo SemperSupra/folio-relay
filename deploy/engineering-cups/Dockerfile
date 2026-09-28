@@ -8,6 +8,7 @@ COPY go.mod ./
 COPY cmd/foliorelay-ipp-ingest ./cmd/foliorelay-ipp-ingest
 COPY cmd/foliorelay-state-fixture ./cmd/foliorelay-state-fixture
 COPY internal/state ./internal/state
+COPY internal/security ./internal/security
 RUN CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/foliorelay-ipp-ingest ./cmd/foliorelay-ipp-ingest \
  && CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/foliorelay-state-fixture ./cmd/foliorelay-state-fixture
 
