@@ -140,6 +140,7 @@ jobs:
         run: |
           set -euo pipefail
           queue=FolioRelayNative
+          evidence="$RUNNER_TEMP/evidence"
           sudo lpadmin -x "$queue" >/dev/null 2>&1 || true
 
           sudo lpadmin -p "$queue" -E \
@@ -165,11 +166,11 @@ jobs:
           done
 
           after="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+          printf '%s\n' "$before" >"$evidence/macos-before.json"
+          printf '%s\n' "$after" >"$evidence/macos-after.json"
           lpstat -W all -l -o "$queue" >"$evidence/macos-jobs.txt" 2>&1 || true
           lpstat -p "$queue" -l >"$evidence/macos-printer.txt" 2>&1 || true
           sudo cp /var/log/cups/error_log "$evidence/macos-host-cups-error.log" 2>/dev/null || true
-          cp "$RUNNER_TEMP/cups-runtime/log/error_log" "$evidence/candidate-cups-error.log" 2>/dev/null || true
-          cp "$RUNNER_TEMP/cups-runtime/log/access_log" "$evidence/candidate-cups-access.log" 2>/dev/null || true
 
           python3 - "$before" "$after" <<'PY'
           import json, sys
@@ -179,9 +180,7 @@ jobs:
           assert after["conflicts"] == before["conflicts"], (before, after)
           PY
 
-          printf '%s\n' "$before" >"$RUNNER_TEMP/evidence/macos-before.json"
-          printf '%s\n' "$after" >"$RUNNER_TEMP/evidence/macos-after.json"
-          lpstat -W completed -o "$queue" >"$RUNNER_TEMP/evidence/macos-completed.txt" 2>&1 || true
+          lpstat -W completed -o "$queue" >"$evidence/macos-completed.txt" 2>&1 || true
 
       - name: Capture evidence
         if: always()
@@ -446,6 +445,29 @@ jobs:
           file "$RUNNER_TEMP/macos-native-cups.pdf" \
             | tee "$evidence/macos-native-file.txt"
 
+          printtest="$(find /usr/share/cups -type f -name print-job.test -print -quit)"
+          test -n "$printtest"
+          direct_before="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+          ipptool -q -f "$RUNNER_TEMP/macos-native-cups.pdf" \
+            ipp://127.0.0.1:8634/printers/FolioRelay "$printtest"
+          for i in $(seq 1 30); do
+            direct_after="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+            db="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["accepted"])' <<<"$direct_before")"
+            da="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["accepted"])' <<<"$direct_after")"
+            [ "$da" -gt "$db" ] && break
+            sleep 1
+          done
+          direct_after="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+          printf '%s\n' "$direct_before" >"$evidence/direct-before.json"
+          printf '%s\n' "$direct_after" >"$evidence/direct-after.json"
+          python3 - "$direct_before" "$direct_after" <<'PY'
+          import json, sys
+          before=json.loads(sys.argv[1])
+          after=json.loads(sys.argv[2])
+          assert after["accepted"] > before["accepted"], (before, after)
+          assert after["conflicts"] == before["conflicts"], (before, after)
+          PY
+
           before="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
           lp -d "$queue" "$RUNNER_TEMP/macos-native-cups.pdf" \
             | tee "$evidence/macos-lp-submit.txt"
@@ -459,6 +481,14 @@ jobs:
           done
 
           after="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+          printf '%s\n' "$before" >"$evidence/macos-before.json"
+          printf '%s\n' "$after" >"$evidence/macos-after.json"
+          lpstat -W all -l -o "$queue" >"$evidence/macos-jobs.txt" 2>&1 || true
+          lpstat -p "$queue" -l >"$evidence/macos-printer.txt" 2>&1 || true
+          sudo cp /var/log/cups/error_log "$evidence/macos-host-cups-error.log" 2>/dev/null || true
+          cp "$RUNNER_TEMP/cups-runtime/log/error_log" "$evidence/candidate-cups-error.log" 2>/dev/null || true
+          cp "$RUNNER_TEMP/cups-runtime/log/access_log" "$evidence/candidate-cups-access.log" 2>/dev/null || true
+
           python3 - "$before" "$after" <<'PY'
           import json, sys
           before=json.loads(sys.argv[1])
@@ -466,8 +496,6 @@ jobs:
           assert after["accepted"] > before["accepted"], (before, after)
           assert after["conflicts"] == before["conflicts"], (before, after)
           PY
-          printf '%s\n' "$before" >"$evidence/macos-before.json"
-          printf '%s\n' "$after" >"$evidence/macos-after.json"
           lpstat -W completed -o "$queue" >"$evidence/macos-completed.txt" 2>&1 || true
 
       - name: Capture CUPS evidence
@@ -479,6 +507,9 @@ jobs:
           cp "$RUNNER_TEMP/macos-cups-toolchain.txt" "$evidence/" 2>/dev/null || true
           curl -fsS http://127.0.0.1:18080/v1/stats >"$evidence/stats.json" || true
           lpstat -t >"$evidence/lpstat.txt" 2>&1 || true
+          sudo cp /var/log/cups/error_log "$evidence/macos-host-cups-error.log" 2>/dev/null || true
+          cp "$RUNNER_TEMP/cups-runtime/log/error_log" "$evidence/candidate-cups-error.log" 2>/dev/null || true
+          cp "$RUNNER_TEMP/cups-runtime/log/access_log" "$evidence/candidate-cups-access.log" 2>/dev/null || true
           if [ -f "$evidence/cups.pid" ]; then
             kill "$(cat "$evidence/cups.pid")" 2>/dev/null || true
           fi

@@ -124,19 +124,39 @@ jobs:
             }
 
             $wslIpRaw = (& wsl.exe -d $distro -- hostname -I | Out-String).Trim()
-            $wslIp = (($wslIpRaw -split '\s+') | Where-Object { $_ })[0]
+            $tokens = @($wslIpRaw -split '\s+' | Where-Object { $_ })
+            $validIpv4 = @()
+            foreach ($token in $tokens) {
+              $parsed = $null
+              if ([System.Net.IPAddress]::TryParse($token, [ref]$parsed) -and
+                  $parsed.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork -and
+                  -not $parsed.IPAddressToString.StartsWith('127.')) {
+                $validIpv4 += $parsed.IPAddressToString
+              }
+            }
+            $wslIp = @($validIpv4)[0]
             $directIpOk = $false
 
-            "wsl_ip=$wslIp" | Set-Content (Join-Path $evidence 'network.txt')
+            "wsl_ip_raw=$wslIpRaw" | Set-Content (Join-Path $evidence 'network.txt')
+            "wsl_ip_candidates=$($validIpv4 -join ',')" | Add-Content (Join-Path $evidence 'network.txt')
+            "wsl_ip=$wslIp" | Add-Content (Join-Path $evidence 'network.txt')
             "localhost_forwarding=$localhostOk" | Add-Content (Join-Path $evidence 'network.txt')
 
             if ($wslIp) {
-              try {
-                $response = Invoke-WebRequest -UseBasicParsing -TimeoutSec 5 ("http://" + $wslIp + ":18099/health")
-                if ($response.StatusCode -eq 200) { $directIpOk = $true }
-                "direct_wsl_ip_status=$($response.StatusCode)" | Add-Content (Join-Path $evidence 'network.txt')
-              } catch {
-                "direct_wsl_ip_error=$($_.Exception.Message)" | Add-Content (Join-Path $evidence 'network.txt')
+              for ($i=0; $i -lt 30; $i++) {
+                try {
+                  $response = Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 ("http://" + $wslIp + ":18099/health")
+                  if ($response.StatusCode -eq 200) {
+                    $directIpOk = $true
+                    "direct_wsl_ip_status=$($response.StatusCode)" | Add-Content (Join-Path $evidence 'network.txt')
+                    break
+                  }
+                } catch {
+                  if ($i -eq 29) {
+                    "direct_wsl_ip_error=$($_.Exception.Message)" | Add-Content (Join-Path $evidence 'network.txt')
+                  }
+                }
+                Start-Sleep -Seconds 1
               }
             }
 
