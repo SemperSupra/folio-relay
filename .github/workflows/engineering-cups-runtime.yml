@@ -161,7 +161,8 @@ jobs:
           printf '%s\n' "$before" >"$RUNNER_TEMP/engineering-runtime/linux-native-libcups-before.json"
           printf '%s\n' "$after" >"$RUNNER_TEMP/engineering-runtime/linux-native-libcups-after.json"
 
-      - name: Prove restart keeps substrate identity/state safe        run: |
+      - name: Prove restart keeps substrate identity/state safe
+        run: |
           set -euo pipefail
           before="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
           docker compose -f deploy/engineering-cups/compose.yaml restart cups
