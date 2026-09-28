@@ -61,7 +61,7 @@ int main(int argc, char *argv[])
                "document-format", NULL, "application/pdf");
 
   response = cupsDoFileRequest(http, request, resource, argv[2]);
-  if (!response || cupsLastError() > IPP_STATUS_OK_CONFLICT)
+  if (!response || cupsLastError() > IPP_STATUS_OK_CONFLICTING)
   {
     fprintf(stderr, "Print-Job failed: %s\n", cupsLastErrorString());
     if (response)
