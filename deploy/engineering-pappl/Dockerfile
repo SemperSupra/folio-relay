@@ -60,6 +60,7 @@ RUN mkdir -p /out /runtime \
  && cc -D_GNU_SOURCE \
       -I/src/pappl -I/src/pappl/pappl \
       $(cups-config --cflags) \
+      -L/usr/lib/foliorelay-cups \
       -o /out/foliorelay-pappl-ingress \
       /src/pappl-ingress.c \
       /src/pappl/pappl/libpappl.a \
