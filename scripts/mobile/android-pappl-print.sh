@@ -40,7 +40,7 @@ if "${ui[@]}" wait contains "Add printer by IP address" --timeout 8; then
   "${ui[@]}" tap contains "Add printer by IP address" --timeout 5
 fi
 
-"${ui[@]}" clear edit "" --timeout 15
+"${ui[@]}" clear res "com.android.bips:id/hostname" --timeout 15
 adb shell input text '10.0.2.2'
 "${ui[@]}" wait text "10.0.2.2" --timeout 10
 "${ui[@]}" tap text "Add" --timeout 15

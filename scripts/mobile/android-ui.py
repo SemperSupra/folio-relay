@@ -122,11 +122,15 @@ def main() -> None:
         adb("shell", "input", "tap", str(x), str(y))
         print(f"tapped {args.kind}={args.value!r} at {x},{y}")
     elif args.command == "clear":
-        if args.kind != "edit":
-            raise SystemExit("clear currently supports only edit nodes")
+        if node.attrib.get("class", "") != "android.widget.EditText":
+            raise SystemExit(
+                f"clear target is not EditText: {args.kind}={args.value!r}"
+            )
         current = node.attrib.get("text", "")
-        x, y = center(node)
-        adb("shell", "input", "tap", str(x), str(y))
+        if node.attrib.get("focused", "false").lower() != "true":
+            x, y = center(node)
+            adb("shell", "input", "tap", str(x), str(y))
+            time.sleep(0.25)
         adb("shell", "input", "keyevent", "KEYCODE_MOVE_END")
         for _ in current:
             adb("shell", "input", "keyevent", "KEYCODE_DEL")
@@ -139,6 +143,10 @@ def main() -> None:
             edits = [
                 item for item in nodes(root)
                 if item.attrib.get("class", "") == "android.widget.EditText"
+                and (
+                    args.kind != "res"
+                    or item.attrib.get("resource-id", "") == args.value
+                )
             ]
             if edits and edits[0].attrib.get("text", "") == "":
                 print(f"cleared edit text ({len(current)} characters)")
