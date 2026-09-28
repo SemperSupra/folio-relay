@@ -14,12 +14,34 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/foliorelay-ipp-ing
 
 FROM ubuntu:24.04 AS pappl-build
 ARG PAPPL_VERSION=v1.4.11
+ARG CUPS_VERSION=v2.4.19
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       autoconf build-essential ca-certificates git pkg-config \
-      libssl-dev zlib1g-dev libcups2-dev libpng-dev libjpeg-dev \
+      libssl-dev zlib1g-dev libpng-dev libjpeg-dev \
  && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+RUN git clone --depth 1 --branch "${CUPS_VERSION}" https://github.com/OpenPrinting/cups.git cups
+WORKDIR /src/cups
+RUN ./configure \
+      --prefix=/usr \
+      --sysconfdir=/etc \
+      --localstatedir=/var \
+      --with-tls=openssl \
+      --with-dnssd=no \
+      --disable-pam \
+      --disable-gssapi \
+      --disable-libusb \
+      --disable-webif \
+      --disable-browsing \
+      --disable-default-shared \
+      --disable-raw-printing \
+      --with-languages=none \
+      --with-printcap=no \
+      --with-max-copies=1000 \
+ && make -j"$(nproc)" \
+ && make install
 WORKDIR /src
 RUN git clone --depth 1 --branch "${PAPPL_VERSION}" https://github.com/michaelrsweet/pappl.git pappl
 WORKDIR /src/pappl
