@@ -103,7 +103,7 @@ jobs:
             -p 8632 \
             -d "$RUNNER_TEMP/ippeve-spool" \
             -k \
-            -f application/pdf,image/pwg-raster \
+            -f application/pdf,image/pwg-raster,image/jpeg \
             -c "$RUNNER_TEMP/bin/foliorelay-ipp-ingest" \
             "FolioRelay Phase1" \
             >"$RUNNER_TEMP/evidence/ippeveprinter.log" 2>&1 &
@@ -157,6 +157,13 @@ jobs:
           cmp "$RUNNER_TEMP/sample.pdf" "$object"
           printf '{"sha256":"%s","object":"%s"}\n' "$expected" "$object" \
             >"$RUNNER_TEMP/evidence/artifact.json"
+
+      - name: Validate pinned IPP Everywhere oracle
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/cups/examples"
+          timeout 180 ipptool -V 2.0 -tv             -f "$RUNNER_TEMP/sample.pdf"             ipp://127.0.0.1:8632/ipp/print             ./ipp-everywhere.test             | tee "$RUNNER_TEMP/evidence/ippeve-ipp-everywhere.txt"
 
       - name: Prove adapter replay and conflict behavior
         shell: bash
