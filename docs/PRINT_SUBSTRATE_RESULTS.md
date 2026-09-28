@@ -325,3 +325,59 @@ The production-candidate set remains:
 Do not narrow CUPS vs PAPPL yet. Remaining required software gates include TLS,
 discovery when enabled, final-runtime least privilege/hardening, and deeper
 standards/native-client qualification.
+
+
+## TLS, discovery, conformance, and runnable engineering profile
+
+The previously open hosted software gates for both active production candidates
+are now qualified.
+
+Public GitHub Actions evidence:
+
+- `IPP Ingress Phase 1 #84` (run ID `36378285282`): PASS.
+  - minimal CUPS: least-privilege envelope, dedicated TLS IPP surface, and the
+    pinned IPP Everywhere engineering conformance suite all pass;
+  - minimal PAPPL: least-privilege envelope, TLS IPP surface, and the same
+    pinned IPP Everywhere engineering conformance suite all pass;
+  - replay/conflict/restart, authority-outage, cancellation/status projection,
+    malformed/abusive pressure, and bounded spool-exhaustion gates remain green.
+- `Print Substrate Bakeoff #88` (run ID `36378285220`): PASS.
+  - isolated DNS-SD discovery profiles for both minimal CUPS and PAPPL advertise
+    the expected IPP service successfully.
+- `Engineering CUPS Runtime #11` (run ID `36378285205`): PASS.
+  - the provisional Compose-packaged CUPS profile builds, starts, accepts a real
+    print job into FolioRelay, preserves stable substrate identity across a CUPS
+    restart, and continues accepting work without idempotency conflicts.
+- `Formal State Models #101` and `Go Security Kernel #113`: PASS.
+
+The `ippeveprinter` oracle briefly made the overall Phase-1 workflow fail after
+the IPP Everywhere oracle was added ahead of the synthetic replay test. The
+conformance suite legitimately advanced the shared accepted counter, while the
+older replay assertion still assumed an absolute total of two accepted jobs.
+Commit `0b5d17922a2fa3ec5c15ef6c9e8d50084ce6d8a7` changed that oracle-only
+assertion to compare replay/conflict counter deltas against a captured baseline.
+Run #84 then passed. This was a test-isolation defect, not a FolioRelay state or
+substrate correctness failure.
+
+### Selection status
+
+The production selection remains intentionally open:
+
+- minimal upstream CUPS scheduler — active;
+- minimal PAPPL service — active;
+- ippeveprinter — production-vetoed, retained as protocol/interoperability oracle.
+
+The runnable CUPS engineering profile is an operational bridge, not evidence by
+itself that CUPS has won the bake-off.
+
+Highest remaining software-only work before narrowing the active candidates:
+
+1. harden the packaged engineering runtime to read-only roots, explicit writable
+   paths, dropped capabilities, and no-new-privileges, then requalify it;
+2. produce comparable final-runtime surface/package evidence for PAPPL so the
+   selection comparison is symmetric;
+3. extend native-client interoperability evidence beyond the common `ipptool`
+   oracle where hosted runners can faithfully exercise the platform print path;
+4. qualify the upstream security-update/rebuild path and immutable
+   supply-chain inputs;
+5. only then apply the documented survivor/maintenance/surface selection rule.
