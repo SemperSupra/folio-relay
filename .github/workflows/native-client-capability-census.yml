@@ -112,7 +112,7 @@ jobs:
 
           $spooler = Get-Service Spooler -ErrorAction SilentlyContinue
           $module = Get-Module -ListAvailable PrintManagement | Select-Object -First 1
-          $commandNames = @('Add-Printer','Get-Printer','Get-PrinterDriver','Get-PrinterPort','Out-Printer')
+          $commandNames = @('Add-Printer','Get-Printer','Get-PrinterDriver','Get-PrinterPort','Out-Printer','wsl','docker','podman','cloudflared','ssh','curl')
           $commands = @{}
           foreach ($name in $commandNames) {
             $cmd = Get-Command $name -ErrorAction SilentlyContinue
@@ -138,6 +138,52 @@ jobs:
             $cimPrinterClass = Get-CimClass -Namespace root/StandardCimv2 -ClassName MSFT_Printer -ErrorAction Stop
           } catch {}
 
+          $hostStrategy = [ordered]@{}
+          $wsl = Get-Command wsl.exe -ErrorAction SilentlyContinue
+          if ($wsl) {
+            $hostStrategy.wsl_present = $true
+            foreach ($probe in @(
+              @{name='status'; args=@('--status')},
+              @{name='version'; args=@('--version')},
+              @{name='list'; args=@('--list','--verbose')}
+            )) {
+              $stdout = Join-Path $out ("wsl-" + $probe.name + ".stdout.txt")
+              $stderr = Join-Path $out ("wsl-" + $probe.name + ".stderr.txt")
+              $p = Start-Process -FilePath $wsl.Source -ArgumentList $probe.args -Wait -PassThru -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+              $hostStrategy[("wsl_" + $probe.name + "_rc")] = $p.ExitCode
+            }
+          } else {
+            $hostStrategy.wsl_present = $false
+          }
+
+          $features = @{}
+          foreach ($feature in @('Microsoft-Windows-Subsystem-Linux','VirtualMachinePlatform','Microsoft-Hyper-V-All')) {
+            try {
+              $f = Get-WindowsOptionalFeature -Online -FeatureName $feature -ErrorAction Stop
+              $features[$feature] = $f.State.ToString()
+            } catch {
+              $features[$feature] = 'query-failed'
+            }
+          }
+          $hostStrategy.optional_features = $features
+
+          $serviceStates = @{}
+          foreach ($serviceName in @('vmcompute','hns','docker')) {
+            $svc = Get-Service $serviceName -ErrorAction SilentlyContinue
+            $serviceStates[$serviceName] = if ($svc) { $svc.Status.ToString() } else { $null }
+          }
+          $hostStrategy.services = $serviceStates
+
+          $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
+          $hostStrategy.virtualization = [ordered]@{
+            firmware_enabled = $cpu.VirtualizationFirmwareEnabled
+            second_level_address_translation = $cpu.SecondLevelAddressTranslationExtensions
+          }
+
+          $addPrinter = Get-Command Add-Printer -ErrorAction SilentlyContinue
+          $hostStrategy.add_printer_parameters = if ($addPrinter) { @($addPrinter.Parameters.Keys | Sort-Object) } else { @() }
+          $hostStrategy.add_printer_has_ipp_url = if ($addPrinter) { $addPrinter.Parameters.ContainsKey('IppURL') } else { $false }
+
           $result = [ordered]@{
             platform = 'windows-2025'
             os = [ordered]@{
@@ -152,6 +198,7 @@ jobs:
             driver_count = $drivers.Count
             ipp_named_drivers = @($drivers | Where-Object { $_.Name -match 'IPP|Mopria' } | Select-Object -ExpandProperty Name)
             port_count = $ports.Count
+            host_strategy = $hostStrategy
           }
 
           $result | ConvertTo-Json -Depth 8 | Tee-Object -FilePath (Join-Path $out 'windows-capabilities.json')
@@ -159,6 +206,7 @@ jobs:
           $ports | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $out 'windows-printer-ports.json')
           Get-Service Spooler | Format-List * | Out-String | Set-Content (Join-Path $out 'spooler-service.txt')
           Get-Module -ListAvailable PrintManagement | Format-List * | Out-String | Set-Content (Join-Path $out 'printmanagement-module.txt')
+          $hostStrategy | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $out 'windows-host-strategy.txt')
 
       - name: Upload Windows capability evidence
         if: always()

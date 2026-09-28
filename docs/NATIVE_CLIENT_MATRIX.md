@@ -14,7 +14,7 @@ does not count as that platform's native-print qualification.
 |---|---:|---:|---|
 | Linux Ubuntu 24.04 native libcups direct Print-Job | PASS | PASS | qualified |
 | Ubuntu local CUPS `-m everywhere` + `lp` conversion | host filter crash | host filter crash | negative-space evidence; not a candidate gate |
-| macOS 15 native print subsystem | — | experiment running | capability interview passed |
+| macOS 15 native print subsystem | experiment running | PASS | PAPPL qualified through system CUPS `lpadmin -m everywhere` + native `lp` |
 | Windows Server 2025 native print subsystem | — | — | capability interview passed; candidate-host strategy required |
 | Android print service / Mopria-compatible path | — | — | unqualified; require faithful hosted execution |
 | iOS/iPadOS AirPrint path | — | — | unqualified; require faithful simulator/device execution |
@@ -89,7 +89,31 @@ The hosted runner also exposes a credible native print stack:
 - the `MSFT_Printer` CIM class is available;
 - `Microsoft IPP Class Driver` is installed.
 
-Windows therefore remains eligible for a real native rep. The next engineering
-question is how to host an actual FolioRelay CUPS/PAPPL candidate on or
-reachable from the Windows runner without substituting a synthetic IPP server.
-No printer is created until that candidate-host strategy is qualified.
+Windows therefore remains eligible for a real native rep. The capability
+interview now also inventories WSL, optional virtualization features,
+container/runtime tools, relevant services, and the exact `Add-Printer`
+parameter surface (including whether `-IppURL` is available). The preferred
+strategy is a real local candidate through WSL/container execution if the hosted
+runner can support it faithfully; otherwise the next course is a bounded
+ephemeral network-reachable real candidate. If neither can be qualified without
+distorting the native path, Windows remains deferred to HIL rather than using a
+synthetic IPP substitute.
+
+
+### macOS PAPPL native result
+
+`macOS Native Client Qualification #1` (run ID `36411288637`) passed on
+the public macOS 15 arm64 runner. The workflow built the exact PAPPL v1.4.12
+source commit and the real FolioRelay bridge natively, then used the runner's
+system CUPS scheduler to create a temporary driverless queue with
+`lpadmin -m everywhere`. Native `lp` submitted the generated one-page PDF;
+the request was accepted by the PAPPL candidate, FolioRelay durable acceptance
+advanced, and the idempotency-conflict counter did not advance.
+
+This is promoted admission evidence because it exercises the actual macOS print
+subsystem rather than a platform-labeled protocol script.
+
+A symmetric exact-CUPS macOS job is now part of the same workflow. It builds the
+pinned CUPS v2.4.19 commit natively, runs the isolated FolioRelay CUPS candidate,
+and submits through the same macOS system queue/client path before CUPS can be
+marked qualified on macOS.

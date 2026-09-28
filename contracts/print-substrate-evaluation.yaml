@@ -287,8 +287,9 @@ platform_client_matrix:
     cups-minimal: pass
     pappl: pass
   macos_15:
-    status: capability-interview-pass
-    mutation_allowed: false
+    status: candidate-qualification-in-progress
+    native_path: system-cups-lpadmin-everywhere-plus-lp
+    runner: macos-15-arm64
     observed:
       cups_scheduler_running: true
       lp_lpadmin_lpstat: present
@@ -296,10 +297,17 @@ platform_client_matrix:
       cups_config: present
       dns_sd: present
       cups_sdk_header_link_probe: pass
-    next_rep:
-      candidate: pappl
-      native_path: system-cups-lpadmin-everywhere-plus-lp
-      status: in-progress
+    candidates:
+      pappl:
+        status: pass
+        exact_source_commit: 6db8e137557ad84662e78d24fdb2a591c621f4ac
+        native_submission: pass
+        durable_acceptance: pass
+        idempotency_conflicts: 0
+        evidence_run: 36411288637
+      cups-minimal:
+        status: in-progress
+        exact_source_commit: 6ba0487abb05afc93d639f37676add8fd65d3756
   windows_2025:
     status: capability-interview-pass
     mutation_allowed: false
@@ -310,7 +318,11 @@ platform_client_matrix:
       msft_printer_cim_class: present
       microsoft_ipp_class_driver: present
     next_rep:
-      status: candidate-host-strategy-required
+      status: candidate-host-strategy-census-in-progress
+      preferred_order:
+        - local-wsl-or-container-if-faithful
+        - bounded-ephemeral-network-reachable-real-candidate
+        - defer-to-hil-if-neither-is-faithful
   android:
     status: unqualified
     requirement: faithful-native-print-service-path
