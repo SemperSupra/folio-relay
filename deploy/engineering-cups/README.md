@@ -4,9 +4,12 @@ This is a provisional, directly runnable engineering profile intended to make
 the already-qualified CUPS ingress path usable while the CUPS-vs-PAPPL product
 selection and full IPP Everywhere conformance work continue.
 
-It is **not** the final production image.  In particular, the image bases are
-not digest-pinned and the CUPS runtime has not yet received the final
-read-only-root/supply-chain hardening pass.
+It is **not** the final production image. The image bases are not yet
+digest-pinned and the immutable supply-chain/rebuild policy is still a release
+gate. The packaged runtime authority envelope is, however, qualified in public
+CI: both services run as UID 10001 with read-only root filesystems,
+`CAP_DROP=ALL`, and `no-new-privileges`; only the documented state/spool/
+artifact and bounded cache/log paths are writable.
 
 ## Start
 

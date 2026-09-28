@@ -381,3 +381,27 @@ Highest remaining software-only work before narrowing the active candidates:
 4. qualify the upstream security-update/rebuild path and immutable
    supply-chain inputs;
 5. only then apply the documented survivor/maintenance/surface selection rule.
+
+
+## Packaged CUPS authority-envelope qualification
+
+`Engineering CUPS Runtime #14` (run ID `36378584624`) passed at commit
+`20472040f27f7aec96efbccd5d187290420b35dd`.
+
+The directly runnable engineering profile now proves, in the same rep:
+
+- state and CUPS services execute as UID 10001;
+- both containers have read-only root filesystems;
+- all Linux capabilities are dropped;
+- `no-new-privileges` is enforced;
+- the state journal, CUPS state/spool, immutable accepted-artifact store, and
+  bounded cache/log tmpfs surfaces remain writable as explicitly intended;
+- an attempted write to the image/root filesystem fails;
+- a real print job still reaches FolioRelay;
+- restarting CUPS preserves the stable substrate identity and subsequent work is
+  accepted without an idempotency conflict.
+
+This closes the packaged CUPS read-only-root/authority-envelope gate. It does
+**not** select CUPS over PAPPL: PAPPL still needs a comparable packaged-runtime
+surface rep before runtime packaging/surface can be used symmetrically in the
+selection decision.

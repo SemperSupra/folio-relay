@@ -26,6 +26,12 @@ candidates:
     discovery_profile: pass
     least_privilege: pass
     ipp_everywhere_engineering_conformance: pass
+    packaged_engineering_runtime:
+      runnable: pass
+      read_only_root: pass
+      cap_drop_all: pass
+      no_new_privileges: pass
+      explicit_writable_paths: pass
     production_status: active-candidate
     authority_outage_policy:
       upstream_error_policy: retry-job
