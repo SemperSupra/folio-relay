@@ -8,6 +8,7 @@ on:
       - 'internal/state/**'
       - 'experiments/print-substrate/pappl-ingress.c'
       - 'deploy/engineering-pappl/**'
+      - 'scripts/measure-runtime-surface.sh'
       - '.github/workflows/engineering-pappl-runtime.yml'
   workflow_dispatch:
 
@@ -182,6 +183,14 @@ jobs:
           printf '%s\n' "$instance_before" >"$RUNNER_TEMP/engineering-pappl-runtime/substrate-instance.txt"
           printf '%s\n' "$before" >"$RUNNER_TEMP/engineering-pappl-runtime/pre-restart-stats.json"
           printf '%s\n' "$after" >"$RUNNER_TEMP/engineering-pappl-runtime/post-restart-stats.json"
+
+      - name: Measure packaged PAPPL runtime surface
+        run: |
+          bash scripts/measure-runtime-surface.sh \
+            deploy/engineering-pappl/compose.yaml \
+            pappl \
+            "$RUNNER_TEMP/engineering-pappl-runtime/surface" \
+            /usr/local/bin/foliorelay-pappl-ingress
 
       - name: Capture logs and runtime surface
         if: always()

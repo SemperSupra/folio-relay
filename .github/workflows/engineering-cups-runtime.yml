@@ -8,6 +8,7 @@ on:
       - 'internal/state/**'
       - 'experiments/print-substrate/cups-*'
       - 'deploy/engineering-cups/**'
+      - 'scripts/measure-runtime-surface.sh'
       - '.github/workflows/engineering-cups-runtime.yml'
   workflow_dispatch:
 
@@ -146,6 +147,15 @@ jobs:
           assert after["accepted"] > before["accepted"], (before, after)
           assert after["conflicts"] == before["conflicts"], (before, after)
           PY
+
+      - name: Measure packaged CUPS runtime surface
+        run: |
+          bash scripts/measure-runtime-surface.sh \
+            deploy/engineering-cups/compose.yaml \
+            cups \
+            "$RUNNER_TEMP/engineering-runtime/surface" \
+            /usr/sbin/cupsd \
+            /usr/lib/cups/daemon/cups-exec
 
       - name: Capture logs
         if: always()
