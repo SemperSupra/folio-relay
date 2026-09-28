@@ -47,11 +47,13 @@ RUN mkdir -p /out /runtime \
  && awk '/=> \/[^ ]+/ {print $3}' /out/foliorelay-pappl-ingress.ldd \
     | sort -u | while read -r lib; do \
       test -n "$lib" || continue; \
-      resolved="$(readlink -f "$lib")"; \
-      case "$resolved" in \
-        /usr/lib/*) cp --parents "$resolved" /runtime ;; \
-        *) echo "unexpected PAPPL runtime library path: $lib -> $resolved" >&2; exit 1 ;; \
+      case "$lib" in \
+        /lib/*) dest="/runtime/usr/lib/${lib#/lib/}" ;; \
+        /usr/lib/*) dest="/runtime${lib}" ;; \
+        *) echo "unexpected PAPPL runtime library path: $lib" >&2; exit 1 ;; \
       esac; \
+      mkdir -p "$(dirname "$dest")"; \
+      cp -L "$lib" "$dest"; \
     done
 
 FROM ubuntu:24.04 AS state
