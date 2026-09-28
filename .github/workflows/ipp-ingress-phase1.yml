@@ -176,6 +176,9 @@ jobs:
           FOLIORELAY_SUBSTRATE_INSTANCE: gha-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           set -euo pipefail
+          curl -fsS http://127.0.0.1:18080/v1/stats \
+            | tee "$RUNNER_TEMP/evidence/replay-baseline-stats.json"
+
           "$RUNNER_TEMP/bin/foliorelay-ipp-ingest" "$RUNNER_TEMP/sample.pdf" \
             2>>"$RUNNER_TEMP/evidence/adapter.log"
           "$RUNNER_TEMP/bin/foliorelay-ipp-ingest" "$RUNNER_TEMP/sample.pdf" \
@@ -191,12 +194,13 @@ jobs:
 
           curl -fsS http://127.0.0.1:18080/v1/stats \
             | tee "$RUNNER_TEMP/evidence/stats.json"
-          python3 - "$RUNNER_TEMP/evidence/stats.json" <<'PY'
+          python3 - "$RUNNER_TEMP/evidence/replay-baseline-stats.json" "$RUNNER_TEMP/evidence/stats.json" <<'PY'
           import json, pathlib, sys
-          stats = json.loads(pathlib.Path(sys.argv[1]).read_text())
-          assert stats["accepted"] == 2, stats
-          assert stats["replayed"] == 1, stats
-          assert stats["conflicts"] == 1, stats
+          baseline = json.loads(pathlib.Path(sys.argv[1]).read_text())
+          stats = json.loads(pathlib.Path(sys.argv[2]).read_text())
+          assert stats["accepted"] == baseline["accepted"] + 1, (baseline, stats)
+          assert stats["replayed"] == baseline["replayed"] + 1, (baseline, stats)
+          assert stats["conflicts"] == baseline["conflicts"] + 1, (baseline, stats)
           PY
 
       - name: Prove state-authority restart preserves idempotency
