@@ -27,7 +27,6 @@ def snapshot(out: pathlib.Path, label: str) -> ET.Element:
     adb("shell", "uiautomator", "dump", "/sdcard/foliorelay-window.xml", check=False)
     result = adb("exec-out", "cat", "/sdcard/foliorelay-window.xml", check=False)
     (out / f"{label}.xml").write_text(result.stdout)
-    adb("exec-out", "screencap", "-p", check=False)
     with (out / f"{label}.png").open("wb") as handle:
         raw = subprocess.run(
             ["adb", "exec-out", "screencap", "-p"],
