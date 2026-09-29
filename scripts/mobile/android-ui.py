@@ -131,33 +131,10 @@ def main() -> None:
             x, y = center(node)
             adb("shell", "input", "tap", str(x), str(y))
             time.sleep(0.25)
-        # BIPS can expose the field as focused while ignoring cursor movement
-        # and repeated delete injection. Android 15's input shell supports a
-        # real modifier key combination, so first select the whole EditText and
-        # delete the selection. Retain the cursor-based path only as fallback.
-        adb(
-            "shell",
-            "input",
-            "keycombination",
-            "KEYCODE_CTRL_LEFT",
-            "KEYCODE_A",
-        )
-        adb("shell", "input", "keyevent", "KEYCODE_DEL")
-        time.sleep(0.25)
-
-        root = snapshot(out, "clear-after-select-all")
-        selected_edits = [
-            item for item in nodes(root)
-            if item.attrib.get("class", "") == "android.widget.EditText"
-            and (
-                args.kind != "res"
-                or item.attrib.get("resource-id", "") == args.value
-            )
-        ]
-        if selected_edits and selected_edits[0].attrib.get("text", "") == "":
-            print(f"cleared edit text ({len(current)} characters) via select-all")
-            return
-
+        # Some Android/BIPS EditTexts keep the cursor at the beginning even
+        # after KEYCODE_MOVE_END, making backspace a no-op. Try the ordinary
+        # end/backspace path first, then fall back to home/forward-delete based
+        # on the actual remaining text observed from the UI hierarchy.
         adb("shell", "input", "keyevent", "KEYCODE_MOVE_END")
         for _ in current:
             adb("shell", "input", "keyevent", "KEYCODE_DEL")

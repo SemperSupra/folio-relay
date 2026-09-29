@@ -41,10 +41,7 @@ if "${ui[@]}" wait contains "Add printer by IP address" --timeout 8; then
   "${ui[@]}" tap contains "Add printer by IP address" --timeout 5
 fi
 
-"${ui[@]}" clear res "com.android.bips:id/hostname" --timeout 15
-adb shell input text '10.0.2.2'
-"${ui[@]}" wait text "10.0.2.2" --timeout 10
-"${ui[@]}" tap text "Add" --timeout 15
+# BIPS renders 192.168.0.4 as a hint, not entered text.\n# Type directly into the empty field and verify the actual value.\nadb shell input text '10.0.2.2'\n"${ui[@]}" wait text "10.0.2.2" --timeout 10\n"${ui[@]}" tap text "Add" --timeout 15
 
 # BIPS probes standard IPP URIs on port 631. The host maps the real candidate
 # to that port for this qualification only. The native Android path stays the
