@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	frinbox "github.com/SemperSupra/folio-relay/internal/inbox"
+	frprinter "github.com/SemperSupra/folio-relay/internal/printer"
 	frstate "github.com/SemperSupra/folio-relay/internal/state"
 )
 
@@ -37,7 +38,7 @@ func TestIngestInboxArtifactSurvivesRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server, err := New(state, store, testToken)
+	server, err := New(state, store, testToken, testPrinter(t), Profiles{WindowsIPP: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +72,7 @@ func TestIngestInboxArtifactSurvivesRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer state.Close()
-	server, err = New(state, store, testToken)
+	server, err = New(state, store, testToken, testPrinter(t), Profiles{WindowsIPP: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +114,7 @@ func TestManagementEndpointsRequireBearerToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer state.Close()
-	server, err := New(state, t.TempDir(), testToken)
+	server, err := New(state, t.TempDir(), testToken, testPrinter(t), Profiles{WindowsIPP: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +131,7 @@ func TestIngestRequiresStagedArtifact(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer state.Close()
-	server, err := New(state, t.TempDir(), testToken)
+	server, err := New(state, t.TempDir(), testToken, testPrinter(t), Profiles{WindowsIPP: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,4 +144,42 @@ func TestIngestRequiresStagedArtifact(t *testing.T) {
 	if resp.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("expected 422, got %d: %s", resp.Code, resp.Body.String())
 	}
+}
+
+func TestCapabilityDocumentUsesCanonicalPrinterIdentity(t *testing.T) {
+	state, err := frstate.OpenDurableEngine(filepath.Join(t.TempDir(), "journal.frj"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer state.Close()
+	identity := testPrinter(t)
+	server, err := New(state, t.TempDir(), testToken, identity, Profiles{WindowsIPP: true, AirPrint: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp := httptest.NewRecorder()
+	server.Handler().ServeHTTP(resp, httptest.NewRequest(http.MethodGet, "/.well-known/foliorelay", nil))
+	if resp.Code != http.StatusOK {
+		t.Fatalf("capability document failed: %d %s", resp.Code, resp.Body.String())
+	}
+	var doc struct {
+		Product  string             `json:"product"`
+		Printer  frprinter.Identity `json:"printer"`
+		Profiles Profiles           `json:"profiles"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc.Product != "FolioRelay" || doc.Printer != identity || !doc.Profiles.WindowsIPP || doc.Profiles.AirPrint {
+		t.Fatalf("unexpected capability document: %+v", doc)
+	}
+}
+
+func testPrinter(t *testing.T) frprinter.Identity {
+	t.Helper()
+	identity, err := frprinter.New("FolioRelay", "Lab", "ipp://foliorelay.local:8634/printers/FolioRelay")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return identity
 }
