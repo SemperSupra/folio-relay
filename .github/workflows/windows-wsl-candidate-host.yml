@@ -144,6 +144,25 @@ jobs:
           & wsl.exe --shutdown
           Start-Sleep -Seconds 2
 
+          $wslStatus = (& wsl.exe --status 2>&1 | Out-String).Trim()
+          $wslStatusRc = $LASTEXITCODE
+          $wslStatus | Set-Content (Join-Path $evidence 'wsl-status.txt')
+          "wsl_status_rc=$wslStatusRc" | Add-Content (Join-Path $evidence 'host-capabilities.txt')
+          if ($wslStatusRc -ne 0) {
+            @{
+              platform = '${{ matrix.runner }}'
+              native_print_subsystem = 'PrintManagement/Spooler'
+              candidate_host_substrate = 'WSL2'
+              candidate = 'pappl-v1.4.12'
+              candidate_qualification = 'unqualified'
+              classification = 'host-substrate-unavailable'
+              wsl_status_rc = $wslStatusRc
+              reason = 'GitHub-hosted runner does not expose a usable furnished WSL2 substrate'
+            } | ConvertTo-Json -Depth 5 |
+              Set-Content (Join-Path $evidence 'result.json')
+            return
+          }
+
           $wslVmCreatorId = '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}'
           $rulePrefix = "FolioRelay-Native-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
           $hyperVFirewallCommands = @(
@@ -483,6 +502,25 @@ jobs:
           "@ | Set-Content -Encoding ascii $wslConfig
           & wsl.exe --shutdown
           Start-Sleep -Seconds 2
+
+          $wslStatus = (& wsl.exe --status 2>&1 | Out-String).Trim()
+          $wslStatusRc = $LASTEXITCODE
+          $wslStatus | Set-Content (Join-Path $evidence 'wsl-status.txt')
+          "wsl_status_rc=$wslStatusRc" | Add-Content (Join-Path $evidence 'host-capabilities.txt')
+          if ($wslStatusRc -ne 0) {
+            @{
+              platform = '${{ matrix.runner }}'
+              native_print_subsystem = 'PrintManagement/Spooler'
+              candidate_host_substrate = 'WSL2'
+              candidate = 'cups-v2.4.19'
+              candidate_qualification = 'unqualified'
+              classification = 'host-substrate-unavailable'
+              wsl_status_rc = $wslStatusRc
+              reason = 'GitHub-hosted runner does not expose a usable furnished WSL2 substrate'
+            } | ConvertTo-Json -Depth 5 |
+              Set-Content (Join-Path $evidence 'result.json')
+            return
+          }
 
           $wslVmCreatorId = '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}'
           $rulePrefix = "FolioRelay-CUPS-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
