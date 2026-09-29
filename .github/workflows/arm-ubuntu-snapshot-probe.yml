@@ -1,0 +1,48 @@
+name: ARM Ubuntu Snapshot Probe
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/arm-ubuntu-snapshot-probe.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 12
+    steps:
+      - name: Probe exact snapshot URI on native ARM64
+        shell: bash
+        run: |
+          set -euo pipefail
+          image='ubuntu:24.04@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3'
+          snap='20260928T000000Z'
+
+          docker pull "$image"
+          test "$(docker image inspect -f '{{.Architecture}}' "$image")" = arm64
+
+          docker run --rm -e SNAP="$snap" "$image" bash -euxo pipefail -c '
+            cat /etc/apt/sources.list.d/ubuntu.sources
+
+            cat >/etc/apt/sources.list.d/ubuntu.sources <<EOF
+          Types: deb
+          URIs: https://snapshot.ubuntu.com/ubuntu/$SNAP
+          Suites: noble noble-updates noble-backports noble-security
+          Components: main universe restricted multiverse
+          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+          EOF
+
+            printf "%s\n" "Acquire::Retries \"5\";" > /etc/apt/apt.conf.d/50snapshot-retries
+            apt-get update
+
+            candidate="$(apt-cache policy build-essential | awk "/Candidate:/ {print \$2}")"
+            printf "build-essential candidate=%s\n" "$candidate"
+            test -n "$candidate"
+            test "$candidate" != "(none)"
+
+            apt-get install -y --no-install-recommends \
+              autoconf build-essential ca-certificates git libssl-dev pkg-config zlib1g-dev
+          '
