@@ -52,6 +52,39 @@ def nodes(root: ET.Element):
     yield from root.iter("node")
 
 
+def dismiss_known_emulator_noise(root: ET.Element) -> bool:
+    """Dismiss only known host-emulator noise, never target-app failures."""
+    alert = next(
+        (
+            node
+            for node in nodes(root)
+            if node.attrib.get("package") == "android"
+            and node.attrib.get("text") == "Pixel Launcher isn't responding"
+        ),
+        None,
+    )
+    if alert is None:
+        return False
+
+    close = next(
+        (
+            node
+            for node in nodes(root)
+            if node.attrib.get("package") == "android"
+            and node.attrib.get("text") == "Close app"
+            and node.attrib.get("enabled", "true").lower() == "true"
+        ),
+        None,
+    )
+    if close is None:
+        return False
+
+    x, y = center(close)
+    adb("shell", "input", "tap", str(x), str(y))
+    print("dismissed known Pixel Launcher ANR dialog")
+    return True
+
+
 def matches(node: ET.Element, kind: str, value: str) -> bool:
     if kind == "text":
         return node.attrib.get("text", "") == value
@@ -79,6 +112,9 @@ def find(
     while time.time() < deadline:
         attempt += 1
         root = snapshot(out, f"wait-{kind}-{attempt:02d}")
+        if dismiss_known_emulator_noise(root):
+            time.sleep(0.5)
+            continue
         for node in nodes(root):
             if not matches(node, kind, value):
                 continue
