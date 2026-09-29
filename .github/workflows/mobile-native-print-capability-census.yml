@@ -162,8 +162,8 @@ jobs:
           target: google_apis
           arch: x86_64
           profile: pixel_7
-          cores: 2
-          ram-size: 2048M
+          cores: 3
+          ram-size: 4096M
           emulator-boot-timeout: 900
           script: bash scripts/mobile/android-print-capability.sh "$RUNNER_TEMP/android-print-capability"
 
@@ -478,8 +478,8 @@ jobs:
           target: google_apis
           arch: x86_64
           profile: pixel_7
-          cores: 2
-          ram-size: 2048M
+          cores: 3
+          ram-size: 4096M
           emulator-boot-timeout: 900
           script: bash scripts/mobile/build-android-print-probe.sh "$RUNNER_TEMP/android-pappl-build" && bash scripts/mobile/android-pappl-print.sh "$RUNNER_TEMP/android-pappl-evidence" "$RUNNER_TEMP/android-pappl-build/FolioRelayPrintProbe.apk"
 
