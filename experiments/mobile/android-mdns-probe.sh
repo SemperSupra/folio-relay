@@ -26,6 +26,13 @@ host_ipv4=${HOST_IPV4:-}
 } >"$evidence/reachability.txt" 2>&1
 
 adb shell am start -W -a android.settings.ACTION_PRINT_SETTINGS   >"$evidence/print-settings-launch.txt" 2>&1
+# Hosted emulator load has produced a known Pixel Launcher ANR modal while
+# Print Settings is otherwise healthy. Dismiss only that exact system-noise
+# dialog before evaluating the real BIPS discovery surface.
+if "${ui[@]}" wait text "Pixel Launcher isn't responding" --timeout 3; then
+  "${ui[@]}" tap text "Close app" --timeout 5
+  sleep 1
+fi
 "${ui[@]}" tap contains "Default Print Service" --timeout 20
 sleep 3
 "${ui[@]}" snapshot --label default-print-service
