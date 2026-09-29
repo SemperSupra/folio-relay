@@ -176,6 +176,16 @@ if ! "${ui[@]}" tap res "com.android.printspooler:id/print_button" --timeout 10;
   "${ui[@]}" tap desc "Print" --timeout 5
 fi
 
+# On a clean Android profile, the first native submission through the newly
+# enabled Default Print Service can require an explicit framework confirmation:
+# "Use Default Print Service?". This is system PrintSpooler policy UI, not a
+# candidate prompt. Acknowledge it only when that exact dialog is present.
+if "${ui[@]}" wait contains "Use Default Print Service?" --timeout 5; then
+  "${ui[@]}" snapshot --label default-print-service-confirmation
+  "${ui[@]}" tap text "OK" --timeout 5
+  adb shell dumpsys print >"$evidence/print-after-service-confirmation.txt" 2>&1 || true
+fi
+
 accepted=0
 for _ in $(seq 1 60); do
   after="$(curl -fsS http://127.0.0.1:18081/v1/stats)"
