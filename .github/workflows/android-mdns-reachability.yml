@@ -26,7 +26,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends avahi-daemon avahi-utils dbus
+          sudo apt-get install -y --no-install-recommends avahi-daemon avahi-utils dbus cups-ipp-utils
           sudo mkdir -p /run/dbus
           pgrep -x dbus-daemon >/dev/null 2>&1 || sudo dbus-daemon --system --fork
           if ! avahi-browse -a -t >/dev/null 2>&1; then
@@ -77,6 +77,19 @@ jobs:
           evidence="$RUNNER_TEMP/android-mdns-evidence"
           mkdir -p "$evidence"
           service='FolioRelay CUPS Android'
+
+          # DNS-SD UUID must match the candidate's IPP printer-uuid exactly.
+          # A hard-coded projection was rejected by stock BIPS even though
+          # Android mDNS and Mopria filtering found the service.
+          ipptool -tv \
+            ipp://127.0.0.1:631/printers/FolioRelay \
+            /usr/share/cups/ipptool/get-printer-attributes.test \
+            >"$evidence/cups-get-printer-attributes.txt"
+          printer_uuid="$(awk '/printer-uuid .* = urn:uuid:/ {print $NF; exit}' "$evidence/cups-get-printer-attributes.txt")"
+          test -n "$printer_uuid"
+          dns_sd_uuid="${printer_uuid#urn:uuid:}"
+          printf '%s\n' "$printer_uuid" >"$evidence/candidate-printer-uuid.txt"
+
           avahi-publish-service "$service" _ipp._tcp 631 \
             'rp=printers/FolioRelay' \
             'pdl=application/pdf' \
@@ -85,7 +98,7 @@ jobs:
             'mopria-certified=1.3' \
             'txtvers=1' \
             'qtotal=1' \
-            'UUID=4f307ffc-c2ea-3b0d-7376-df0abb3c21d5' \
+            "UUID=$dns_sd_uuid" \
             >"$evidence/avahi-publish.log" 2>&1 &
           echo $! >"$evidence/avahi-publish.pid"
           for i in $(seq 1 20); do
