@@ -44,20 +44,14 @@ for i in $(seq 1 60); do
 done
 test "$ready" -eq 1
 
-# Exercise stock BIPS discovery first. The workflow publishes the exact CUPS
-# queue using its authoritative IPP printer-uuid and rp path.
-adb shell am start -W -a android.settings.ACTION_PRINT_SETTINGS \
-  >"$evidence/print-settings-launch.txt" 2>&1
-"${ui[@]}" tap contains "Default Print Service" --timeout 20
-"${ui[@]}" wait contains "FolioRelay" --timeout 60
-"${ui[@]}" snapshot --label cups-discovered
-adb shell dumpsys print >"$evidence/print-after-discovery.txt" 2>&1 || true
-
+# Keep discovery and selection inside one active PrintSpooler discovery
+# session. BIPS marks previously known printers not-found whenever a new
+# discovery session begins and reports them unavailable until onPrinterFound()
+# refreshes mFound. Pre-discovering in Settings and then launching PrintManager
+# therefore creates an avoidable cross-session race.
 before="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
 printf '%s\n' "$before" >"$evidence/stats-before.json"
 
-# Launch a real app PrintManager job and select the discovered printer through
-# the system PrintSpooler registry.
 adb shell am force-stop org.sempersupra.foliorelay.printprobe || true
 adb shell am start -W -n org.sempersupra.foliorelay.printprobe/.MainActivity \
   >"$evidence/probe-launch.txt" 2>&1
@@ -65,7 +59,13 @@ adb shell am start -W -n org.sempersupra.foliorelay.printprobe/.MainActivity \
 "${ui[@]}" wait res "com.android.printspooler:id/destination_spinner" --timeout 20
 "${ui[@]}" tap res "com.android.printspooler:id/destination_spinner" --timeout 10
 "${ui[@]}" tap contains "All printers" --timeout 15
-"${ui[@]}" wait contains "FolioRelay" --timeout 45
+
+# The workflow publishes the exact CUPS queue using its authoritative IPP
+# printer-uuid and rp path. Require discovery in this same All Printers session
+# before selecting it.
+"${ui[@]}" wait contains "FolioRelay" --timeout 60
+"${ui[@]}" snapshot --label cups-discovered-in-print-session
+adb shell dumpsys print >"$evidence/print-after-discovery.txt" 2>&1 || true
 "${ui[@]}" tap contains "FolioRelay" --timeout 15
 adb shell dumpsys print >"$evidence/print-after-selection.txt" 2>&1 || true
 
