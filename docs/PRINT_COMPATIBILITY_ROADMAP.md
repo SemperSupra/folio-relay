@@ -1,4 +1,4 @@
-# Modern print compatibility findings and execution roadmap
+# FolioRelay Virtual Printer compatibility findings and execution roadmap
 
 Status: 2026-09-29  
 Authority: FolioRelay runtime/product work, stacked on PR #1 without changing substrate-selection authority.
@@ -9,17 +9,66 @@ The modern client ecosystem is converging rather than fragmenting. Windows Ready
 
 The efficient strategy is therefore to qualify a small set of protocol/profile generations rather than build per-vendor drivers or test every OS point release.
 
-The current highest-value sequence is:
+The roadmap is split into an MVP admission path and a post-MVP release-expansion path.
+
+MVP critical path:
 
 1. close canonical public printer identity and discovery coherence;
-2. qualify libcups 3 clients;
-3. qualify Windows Protected Print Mode;
-4. maintain an IPP Everywhere 2.0 draft-forward conformance lane;
-5. add truthful PWG Raster + JPEG admission;
-6. add truthful URF/AirPrint admission and discovery;
-7. broaden representative native-client and deployment profiles.
+2. preserve/verify native Windows IPP printing through the inbox Microsoft IPP class path;
+3. add truthful URF/AirPrint admission and Bonjour discovery;
+4. prove a real Apple mobile device can discover FolioRelay and complete a native AirPrint job that reaches durable acceptance;
+5. select the production print substrate with both Windows native printing and AirPrint included as MVP veto gates;
+6. materialize the selected runtime as the installable TrueNAS reference application;
+7. repeat both Windows native-print and Apple AirPrint acceptance tests against the installed TrueNAS deployment.
 
-CUPS-versus-PAPPL selection remains a separate human authority decision. Every work package below is defined so that product semantics and acceptance gates remain symmetric across both active candidates.
+Post-MVP release expansion:
+
+1. qualify libcups 3 clients;
+2. qualify Windows Protected Print Mode specifically;
+3. maintain an IPP Everywhere 2.0 draft-forward conformance lane;
+4. add truthful PWG Raster + JPEG admission for broader IPP Everywhere coverage;
+5. broaden representative native-client and deployment profiles.
+
+CUPS-versus-PAPPL selection remains a separate human authority decision, but Windows native printing and AirPrint are now required inputs to that decision because they are MVP product requirements. Product semantics and acceptance gates remain symmetric across both active candidates until selection.
+
+## 1.1 MVP boundary
+
+The MVP is not merely a PDF-over-IPP endpoint. A usable MVP must:
+
+- appear as a native driverless printer to Windows and accept a real Windows print job through the inbox Microsoft IPP class path;
+- appear as an AirPrint printer to an Apple mobile device and accept a real native AirPrint job;
+- deliver both jobs into FolioRelay durable acceptance without duplicate effects.
+
+MVP admission gates:
+
+- durable FolioRelay job/artifact authority;
+- PDF virtual-printer ingress retained;
+- driverless IPP endpoint;
+- canonical externally reachable printer identity;
+- coherent DNS-SD UUID/resource path/host identity;
+- native Windows print path using the inbox Microsoft IPP Class Driver / Windows Ready Print family, without a vendor driver;
+- truthful URF (`image/urf`) admission;
+- AirPrint-correct Bonjour/DNS-SD advertisement including `_universal._sub`;
+- real iPhone/iPad AirPrint discovery and submission;
+- durable FolioRelay acceptance advances and idempotency conflicts do not for both Windows and Apple native jobs;
+- one production print substrate selected;
+- amd64/arm64 packaging retained where already qualified;
+- installable TrueNAS reference deployment;
+- real Windows and AirPrint smoke/acceptance reps against the installed TrueNAS application.
+
+Current Windows evidence is already strong: Windows Server 2025 native PrintManagement/Spooler with Microsoft IPP Class Driver has passed end to end for both active candidates. The MVP does **not** require Windows Protected Print Mode specifically; that remains a post-MVP hardening/forward-compatibility qualification unless separately promoted.
+
+Explicitly post-MVP unless later promoted by a concrete requirement:
+
+- full IPP Everywhere document-format breadth (PWG Raster/JPEG beyond what AirPrint itself requires);
+- Windows Protected Print Mode qualification;
+- libcups 3 native-client qualification;
+- IPP Everywhere 2.0 draft-forward conformance;
+- ChromeOS and broader OS-generation matrices;
+- routed/wide-area discovery beyond the normal local-LAN deployment profile;
+- Kylin/UOS/HarmonyOS and other regional breadth.
+
+AirPrint does **not** require FolioRelay to complete the entire IPP Everywhere release roadmap first. The MVP should implement the minimum truthful AirPrint profile that the Apple client actually requires, then defer broader standards breadth to release expansion.
 
 ## 2. Current evidence and newly discovered invariants
 
@@ -122,7 +171,9 @@ Profile A plus truthful current-standard document/capability support, including 
 
 ### Profile C - Apple AirPrint
 
-Profile B foundations plus:
+For MVP purposes, implement the minimum truthful Apple-required profile over Profile A rather than waiting for every broader IPP Everywhere Profile B format to be complete. Release hardening can later reconcile the full Profile B breadth.
+
+AirPrint profile requirements include:
 
 - URF admission;
 - truthful URF capability tokens;
@@ -188,6 +239,27 @@ Android/CUPS native parity is the first regression oracle.
 The deployment/materialization layer chooses the public identity from the real environment. Runtime images must not guess Docker hostnames, loopback, GitHub-runner addresses, or LAN topology.
 
 DONE when external clients never receive an unreachable self-reference.
+
+## WP0B - Native Windows MVP preservation and installed-deployment proof
+
+Priority: MVP  
+Effort: XS-S  
+ROI: very high
+
+### Current evidence
+
+Windows Server 2025 already passes end to end for both active candidates through the real Windows PrintManagement/Spooler path using Microsoft IPP Class Driver. That means this work package is primarily preservation and deployment proof, not a new product feature.
+
+### MVP qualification
+
+- install FolioRelay through the selected TrueNAS deployment;
+- add the printer from a real Windows client through the inbox IPP path;
+- submit a real document through the Windows print subsystem;
+- require durable FolioRelay acceptance to advance;
+- require idempotency conflicts to remain unchanged;
+- record the actual driver/class path and printer URI used.
+
+Windows Protected Print Mode is explicitly **not** an MVP blocker.
 
 ## WP1A - libcups 3 native-client qualification
 
@@ -300,9 +372,9 @@ All must stay inside existing hard budgets and must not advance durable accepted
 
 ## WP4 - URF / AirPrint profile
 
-Priority: after the raster harness exists  
+Priority: MVP  
 Effort: M  
-ROI: very high
+ROI: mandatory MVP capability
 
 ### Implementation
 
@@ -316,7 +388,8 @@ ROI: very high
 
 1. protocol-level generated URF;
 2. hosted macOS discovery/submission where faithful;
-3. real iPhone/iPad HIL as release admission.
+3. real iPhone/iPad HIL as **MVP admission**;
+4. repeat the real-device test against the installed TrueNAS application before declaring the MVP complete.
 
 The iOS simulator remains API/capability evidence, not network-delivery proof.
 
@@ -365,26 +438,33 @@ Never silently enable broad multicast reflection across security boundaries.
 ## 6. Execution DAG
 
 ```text
+MVP:
 WP0 canonical public identity
  |\
- | +--> WP1A libcups 3 client -----------+
- | +--> WP1B Windows WPP ----------------+----> WP5 native breadth
- |                                       |
- +--> WP2 IPP Everywhere 2.0 scaffold ---+
- |                  |                    |
- +--> WP3 PWG Raster/JPEG ---------------+
-          |                              |
-          +--> WP4 URF/AirPrint ---------+
- |
- +--> WP6 deployment discovery profiles
+ | +--> WP0B Windows native-print preservation/proof ----+
+ |                                                       |
+ +--> WP4 minimum truthful URF/AirPrint -----------------+--> substrate selection
+                                                          |
+                                                          +--> TrueNAS materialization
+                                                                  |
+                                                                  +--> Windows + AirPrint installed E2E
+
+Post-MVP:
+WP1A libcups 3 client -----------+
+WP1B Windows WPP ----------------+----> WP5 native breadth
+WP2 IPP Everywhere 2.0 scaffold -+
+WP3 PWG Raster/JPEG -------------+----> broader standards coverage
+WP6 deployment discovery profiles
 ```
 
 Rules:
 
-- WP1A, WP1B, and the WP2 scaffold may proceed in parallel once WP0's identity contract is defined.
-- WP3 does not wait for the entire 2.0 draft lane.
-- WP4 reuses the raster/security harness from WP3.
-- HIL-limited work never blocks CI-qualifiable work.
+- WP0, WP0B, and WP4 are MVP work.
+- AirPrint implementation may reuse raster/security harness components, but MVP AirPrint must not wait on the full post-MVP PWG Raster/JPEG breadth if a smaller truthful Apple-compatible path is sufficient.
+- Substrate selection happens only after both Windows native printing and AirPrint meet the MVP gates on the candidate being selected.
+- The selected substrate is then materialized to TrueNAS and both native paths are repeated against the installed application.
+- WP1A, WP1B, WP2, WP3 broader-format work, WP5, and WP6 beyond the normal LAN profile are post-MVP unless new evidence promotes them.
+- HIL-limited AirPrint work is allowed to be an MVP gate because a real Apple-device print path is an explicit product requirement; unrelated HIL work must not block MVP.
 
 ## 7. Per-work-package execution TTP
 
@@ -507,12 +587,22 @@ Adjacent watchlist only:
 - malformed/resource-abusive input fails closed;
 - a client forced away from PDF still succeeds.
 
-### AirPrint
+### Windows MVP native printing
 
-- URF accepted;
+- real Windows native print subsystem uses the inbox Microsoft IPP class path;
+- printer points at the canonical external FolioRelay URI;
+- durable acceptance advances;
+- conflicts remain unchanged;
+- the same acceptance test passes against the installed TrueNAS application.
+
+### AirPrint MVP
+
+- URF accepted truthfully;
 - `_universal._sub` and URF TXT are correct;
 - hosted macOS profile passes where faithful;
-- real Apple mobile device completes native AirPrint E2E.
+- real Apple mobile device discovers FolioRelay and completes native AirPrint E2E;
+- durable acceptance advances and conflicts remain unchanged;
+- the same acceptance test passes against the installed TrueNAS application.
 
 ## 11. Deferred/watchlist
 
