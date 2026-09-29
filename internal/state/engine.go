@@ -18,11 +18,14 @@ var (
 )
 
 type Command struct {
-	Type               string
-	AggregateID        string
-	IdempotencyKey     string
+	Type                string
+	AggregateID         string
+	IdempotencyKey      string
 	SemanticFingerprint string
-	ExpectedGeneration *uint64
+	ExpectedGeneration  *uint64
+	// Metadata is durable command context used by product projections such as
+	// the Inbox. The state engine does not interpret these values.
+	Metadata map[string]string `json:"metadata,omitempty"`
 }
 
 type Snapshot struct {
