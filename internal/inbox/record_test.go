@@ -22,8 +22,11 @@ func TestProjectReturnsNewestFirstAndIgnoresLegacyRecords(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("expected two projected jobs, got %d", len(got))
 	}
-	if got[0].JobID != "ingress/pappl/job-2" || got[1].JobID != "ingress/pappl/job-1" {
+	if got[0].AggregateID != "ingress/pappl/job-2" || got[1].AggregateID != "ingress/pappl/job-1" {
 		t.Fatalf("unexpected projection order: %+v", got)
+	}
+	if got[0].JobID != JobID(got[0].AggregateID) || got[0].JobID == got[0].AggregateID {
+		t.Fatalf("expected deterministic URL-safe opaque job ID: %+v", got[0])
 	}
 	if got[0].Copies != 2 || got[0].ArtifactBytes != 1234 {
 		t.Fatalf("projection lost metadata: %+v", got[0])

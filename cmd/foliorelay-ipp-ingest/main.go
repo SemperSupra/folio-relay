@@ -114,7 +114,24 @@ func main() {
 		url = "http://127.0.0.1:18080"
 	}
 	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Post(url+"/v1/ingest", "application/json", bytes.NewReader(payload))
+	httpReq, err := http.NewRequest(http.MethodPost, url+"/v1/ingest", bytes.NewReader(payload))
+	if err != nil {
+		fail("unable to construct state request")
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	if tokenFile := os.Getenv("FOLIORELAY_STATE_TOKEN_FILE"); tokenFile != "" {
+		rawToken, readErr := os.ReadFile(tokenFile)
+		if readErr != nil {
+			fail("state token unavailable")
+		}
+		token := strings.TrimSpace(string(rawToken))
+		if len(token) < 16 {
+			fail("state token is invalid")
+		}
+		httpReq.Header.Set("Authorization", "Bearer "+token)
+		httpReq.Header.Set("Idempotency-Key", key)
+	}
+	resp, err := client.Do(httpReq)
 	if err != nil {
 		fail("state authority unavailable")
 	}
