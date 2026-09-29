@@ -20,12 +20,38 @@ adb shell dumpsys cpuinfo >"$evidence/cpuinfo-before.txt" 2>&1 || true
 adb shell dumpsys meminfo com.android.bips >"$evidence/bips-meminfo-before.txt" 2>&1 || true
 
 host_ipv4=${HOST_IPV4:-}
+
+# The hosted emulator can report boot-complete before its virtual Wi-Fi/NAT
+# route is usable. The first v2 rep saw mDNS packets in Android's system
+# discovery manager while even 10.0.2.2 still returned "Network is
+# unreachable". Gate only on the emulator's standard host alias becoming
+# reachable so the product discovery rep does not race network bring-up.
+network_ready=false
+: >"$evidence/network-readiness.txt"
+for attempt in $(seq 1 45); do
+  printf 'attempt=%s time=' "$attempt" >>"$evidence/network-readiness.txt"
+  date -Ins >>"$evidence/network-readiness.txt"
+  if adb shell ping -c 1 -W 2 10.0.2.2 >>"$evidence/network-readiness.txt" 2>&1; then
+    network_ready=true
+    break
+  fi
+  adb shell ip route >>"$evidence/network-readiness.txt" 2>&1 || true
+  sleep 2
+done
+if [ "$network_ready" != true ]; then
+  adb shell dumpsys connectivity >"$evidence/connectivity-not-ready.txt" 2>&1 || true
+  echo "Android network never reached the emulator host alias" >&2
+  exit 1
+fi
+
 {
   echo "host_ipv4=$host_ipv4"
   adb shell ping -c 1 -W 2 10.0.2.2 || true
   if [ -n "$host_ipv4" ]; then
     adb shell ping -c 1 -W 2 "$host_ipv4" || true
   fi
+  adb shell ip route || true
+  adb shell dumpsys wifi | grep -E 'Wi-Fi is|mNetworkInfo|VALIDATED|AndroidWifi' || true
 } >"$evidence/reachability.txt" 2>&1
 
 adb shell am start -W -a android.settings.ACTION_PRINT_SETTINGS   >"$evidence/print-settings-launch.txt" 2>&1
