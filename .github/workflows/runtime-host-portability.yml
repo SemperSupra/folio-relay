@@ -1,0 +1,71 @@
+name: Runtime Host Portability
+
+on:
+  pull_request:
+    paths:
+      - 'cmd/foliorelay-ipp-ingest/**'
+      - 'cmd/foliorelay-state-fixture/**'
+      - 'internal/state/**'
+      - 'internal/security/**'
+      - 'experiments/print-substrate/**'
+      - 'deploy/engineering-cups/**'
+      - 'deploy/engineering-pappl/**'
+      - 'scripts/make-probe-pdf.py'
+      - 'scripts/runtime-host-portability.sh'
+      - '.github/workflows/runtime-host-portability.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  portability:
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        runner:
+          - ubuntu-22.04
+          - ubuntu-22.04-arm
+          - ubuntu-24.04
+          - ubuntu-24.04-arm
+          - ubuntu-26.04
+          - ubuntu-26.04-arm
+        candidate:
+          - cups
+          - pappl
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout FolioRelay
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Install native IPP probe dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cups-ipp-utils curl
+
+      - name: Execute real candidate portability rep
+        shell: bash
+        env:
+          RUNNER_LABEL: ${{ matrix.runner }}
+        run: |
+          bash scripts/runtime-host-portability.sh \
+            "${{ matrix.candidate }}" \
+            "$RUNNER_TEMP/runtime-host-portability"
+
+      - name: Upload portability evidence
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: runtime-host-portability-${{ matrix.runner }}-${{ matrix.candidate }}
+          path: ${{ runner.temp }}/runtime-host-portability
+          if-no-files-found: warn
+          retention-days: 14
