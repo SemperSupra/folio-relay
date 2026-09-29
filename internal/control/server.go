@@ -16,14 +16,22 @@ import (
 	"time"
 
 	frinbox "github.com/SemperSupra/folio-relay/internal/inbox"
+	frprinter "github.com/SemperSupra/folio-relay/internal/printer"
 	frsecurity "github.com/SemperSupra/folio-relay/internal/security"
 	frstate "github.com/SemperSupra/folio-relay/internal/state"
 )
+
+type Profiles struct {
+	WindowsIPP bool `json:"windows_ipp"`
+	AirPrint   bool `json:"airprint"`
+}
 
 type Server struct {
 	state         *frstate.DurableEngine
 	artifactStore string
 	token         string
+	printer       frprinter.Identity
+	profiles      Profiles
 }
 
 type ingestRequest struct {
@@ -38,7 +46,7 @@ type ingestRequest struct {
 	Copies              int64  `json:"copies"`
 }
 
-func New(state *frstate.DurableEngine, artifactStore, token string) (*Server, error) {
+func New(state *frstate.DurableEngine, artifactStore, token string, printer frprinter.Identity, profiles Profiles) (*Server, error) {
 	if state == nil {
 		return nil, errors.New("durable state is required")
 	}
@@ -48,10 +56,16 @@ func New(state *frstate.DurableEngine, artifactStore, token string) (*Server, er
 	if len(token) < 16 {
 		return nil, errors.New("management token must be at least 16 bytes")
 	}
+	if err := printer.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid printer identity: %w", err)
+	}
 	if err := os.MkdirAll(artifactStore, 0o700); err != nil {
 		return nil, fmt.Errorf("create artifact store: %w", err)
 	}
-	return &Server{state: state, artifactStore: artifactStore, token: token}, nil
+	return &Server{
+		state: state, artifactStore: artifactStore, token: token,
+		printer: printer, profiles: profiles,
+	}, nil
 }
 
 func (s *Server) Handler() http.Handler {
@@ -60,7 +74,9 @@ func (s *Server) Handler() http.Handler {
 		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("GET /readyz", s.handleReady)
+	mux.HandleFunc("GET /.well-known/foliorelay", s.handleCapabilities)
 	mux.Handle("GET /api/v1/status", s.requireAuth(http.HandlerFunc(s.handleStatus)))
+	mux.Handle("GET /api/v1/printer", s.requireAuth(http.HandlerFunc(s.handlePrinter)))
 	mux.Handle("GET /api/v1/jobs", s.requireAuth(http.HandlerFunc(s.handleJobs)))
 	mux.Handle("GET /api/v1/jobs/{job_id}", s.requireAuth(http.HandlerFunc(s.handleJob)))
 	mux.Handle("GET /api/v1/jobs/{job_id}/artifact", s.requireAuth(http.HandlerFunc(s.handleArtifact)))
@@ -95,6 +111,30 @@ func (s *Server) handleReady(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleCapabilities(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"product":     "FolioRelay",
+		"api_version": "v1",
+		"status":      "ready",
+		"printer":     s.printer,
+		"profiles":    s.profiles,
+		"links": map[string]string{
+			"openapi":   "/openapi.json",
+			"status":    "/api/v1/status",
+			"jobs":      "/api/v1/jobs",
+			"self_test": "/api/v1/self-test",
+		},
+	})
+}
+
+func (s *Server) handlePrinter(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"identity": s.printer,
+		"public_uri": s.printer.URI(),
+		"profiles": s.profiles,
+	})
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
