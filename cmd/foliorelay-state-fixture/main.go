@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"sync/atomic"
+	"time"
 
 	frsecurity "github.com/SemperSupra/folio-relay/internal/security"
 	frstate "github.com/SemperSupra/folio-relay/internal/state"
@@ -92,11 +94,22 @@ func main() {
 			return
 		}
 
+		acceptedAt := time.Now().UTC().Format(time.RFC3339Nano)
 		result, err := engine.Apply(frstate.Command{
 			Type:                "ingest-artifact",
 			AggregateID:         req.AggregateID,
 			IdempotencyKey:      req.IdempotencyKey,
 			SemanticFingerprint: req.SemanticFingerprint,
+			Metadata: map[string]string{
+				"inbox_version":    "1",
+				"accepted_at":       acceptedAt,
+				"artifact_sha256":   req.ArtifactSHA256,
+				"artifact_bytes":    strconv.FormatInt(req.ArtifactBytes, 10),
+				"media_type":        req.MediaType,
+				"copies":            strconv.FormatInt(req.Copies, 10),
+				"substrate":         req.Substrate,
+				"substrate_job_id":  req.SubstrateJobID,
+			},
 		}, func(current frstate.Snapshot, _ frstate.Command) (frstate.TransitionResult, error) {
 			if current.Generation != 0 {
 				return frstate.TransitionResult{State: current.State, Changed: false}, nil
