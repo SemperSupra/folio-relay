@@ -483,6 +483,29 @@ jobs:
           cat "$RUNNER_TEMP/discovery/evidence/avahi-ipp.txt"
           test "$found" -eq 1
 
+          # Discovery identity must agree with the live IPP endpoint. Android
+          # BIPS/Mopria rejects otherwise-valid advertisements when DNS-SD
+          # UUID and IPP printer-uuid diverge, so name/port presence alone is
+          # not a sufficient discovery qualification.
+          uri="$(cat "$RUNNER_TEMP/discovery/evidence/uri.txt")"
+          getattr="$(find /usr/share/cups -type f -name get-printer-attributes.test -print -quit)"
+          test -n "$getattr"
+          ipptool -tv "$uri" "$getattr" \
+            >"$RUNNER_TEMP/discovery/evidence/ipp-printer-attributes.txt"
+          printer_uuid="$(awk '/printer-uuid .* = urn:uuid:/ {print $NF; exit}' \
+            "$RUNNER_TEMP/discovery/evidence/ipp-printer-attributes.txt")"
+          test -n "$printer_uuid"
+          ipp_uuid="$(printf '%s' "${printer_uuid#urn:uuid:}" | tr '[:upper:]' '[:lower:]')"
+          dns_sd_uuid="$(grep 'FolioRelay' "$RUNNER_TEMP/discovery/evidence/avahi-ipp.txt" \
+            | grep -oiE 'UUID=[0-9a-f-]{36}' \
+            | head -n1 \
+            | cut -d= -f2 \
+            | tr '[:upper:]' '[:lower:]')"
+          printf '%s\n' "$printer_uuid" >"$RUNNER_TEMP/discovery/evidence/ipp-printer-uuid.txt"
+          printf '%s\n' "$dns_sd_uuid" >"$RUNNER_TEMP/discovery/evidence/dnssd-printer-uuid.txt"
+          test -n "$dns_sd_uuid"
+          test "$dns_sd_uuid" = "$ipp_uuid"
+
           set +e
           timeout 4 avahi-browse -rt _ipps._tcp \
             >"$RUNNER_TEMP/discovery/evidence/avahi-ipps.txt" 2>&1
