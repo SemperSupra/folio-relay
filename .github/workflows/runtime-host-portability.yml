@@ -62,7 +62,16 @@ jobs:
           COMPOSE_PROJECT_NAME: foliorelay-portability
         run: |
           set -euo pipefail
-          docker compose -f "${{ matrix.compose }}" build state "${{ matrix.service }}"
+          built=false
+          for attempt in 1 2 3; do
+            if docker compose -f "${{ matrix.compose }}" build state "${{ matrix.service }}"; then
+              built=true
+              break
+            fi
+            echo "native bundle build attempt $attempt failed; retaining successful layers and retrying" >&2
+            sleep $((attempt * 30))
+          done
+          test "$built" = "true"
 
           state_image="foliorelay-portability-state"
           candidate_image="foliorelay-portability-${{ matrix.service }}"
