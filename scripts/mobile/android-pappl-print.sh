@@ -47,34 +47,43 @@ adb shell logcat -c || true
   echo "tcp_probe_rc=$probe_rc"
 } >"$evidence/android-host-reachability.txt" 2>&1
 
-# The stock BIPS service is the printer bridge under test. Try its privileged
-# add-printer activity directly first; if shell cannot launch that protected
-# activity, navigate through the system Print Settings UI instead.
-set +e
-adb shell am start -W -n com.android.bips/.ui.AddPrintersActivity   >"$evidence/add-printer-direct.txt" 2>&1
-direct_rc=$?
-set -e
+# Capture the durable baseline before launching the real Android PrintManager
+# client. Printer setup itself must never advance FolioRelay durable state.
+before="$(curl -fsS http://127.0.0.1:18081/v1/stats)"
+printf '%s\n' "$before" >"$evidence/stats-before.json"
 
-if [ "$direct_rc" -ne 0 ]; then
-  adb shell am start -W -a android.settings.ACTION_PRINT_SETTINGS     >"$evidence/print-settings-launch.txt" 2>&1
-  "${ui[@]}" tap contains "Default Print Service" --timeout 20
-  sleep 2
-  if ! "${ui[@]}" tap contains "Add printer" --timeout 8; then
-    "${ui[@]}" tap desc "More options" --timeout 8 || true
-    "${ui[@]}" tap contains "Add printer" --timeout 8
-  fi
-fi
+# Start the probe first so PrintSpooler owns the active discovery/selection
+# session while the manual printer is added. This mirrors the user journey:
+# Print -> All printers -> Add printer -> Default Print Service -> manual IP.
+adb shell am force-stop org.sempersupra.foliorelay.printprobe || true
+adb shell am start -W -n org.sempersupra.foliorelay.printprobe/.MainActivity \
+  >"$evidence/probe-launch.txt" 2>&1
 
-sleep 2
-if "${ui[@]}" wait contains "Add printer by IP address" --timeout 8; then
-  "${ui[@]}" tap contains "Add printer by IP address" --timeout 5
+"${ui[@]}" wait res "com.android.printspooler:id/destination_spinner" --timeout 20
+"${ui[@]}" tap res "com.android.printspooler:id/destination_spinner" --timeout 10
+"${ui[@]}" tap contains "All printers" --timeout 15
+"${ui[@]}" snapshot --label all-printers-before-add
+adb shell dumpsys print >"$evidence/print-all-printers-before-add.txt" 2>&1 || true
+
+# SelectPrinterActivity exposes an Add Printer action for enabled print
+# services with a declared add-printers activity. Prefer its accessibility
+# description and retain a text fallback for platform rendering differences.
+if ! "${ui[@]}" tap desc "Add printer" --timeout 15; then
+  "${ui[@]}" tap contains "Add printer" --timeout 8
 fi
+"${ui[@]}" wait contains "Choose print service" --timeout 10 || true
+"${ui[@]}" tap contains "Default Print Service" --timeout 15
+
+# BIPS is now launched by PrintSpooler itself, not by a privileged shell or
+# through Settings. Add the candidate while the printer-selection workflow is
+# already active.
+"${ui[@]}" wait contains "Add printer by IP address" --timeout 15
+"${ui[@]}" tap contains "Add printer by IP address" --timeout 8
 
 # BIPS renders 192.168.0.4 as the EditText hint. UIAutomator exposes that
 # hint through the node text attribute even though the field is actually empty.
-# On the hosted emulator, a single fast "input text" lost the leading digit
-# under load (10.0.2.2 -> 0.0.2.2). Type explicit key events with pacing, then
-# verify the exact value before allowing BIPS to probe anything.
+# Whole-string shell input proved lossy under hosted-emulator load, so type
+# paced key events and require exact text before allowing capability probing.
 "${ui[@]}" wait res "com.android.bips:id/hostname" --timeout 10
 sleep 1
 
@@ -91,9 +100,6 @@ type_emulator_host() {
 
 type_emulator_host
 if ! "${ui[@]}" wait text "10.0.2.2" --timeout 4; then
-  # At this point any non-hint content is real typed text, so an ordinary
-  # cursor-to-end/backspace cleanup is earned. If the field is still empty and
-  # only exposing its hint, these deletes are harmless no-ops.
   adb shell input keyevent KEYCODE_MOVE_END
   for _ in $(seq 1 16); do
     adb shell input keyevent KEYCODE_DEL
@@ -105,27 +111,39 @@ if ! "${ui[@]}" wait text "10.0.2.2" --timeout 4; then
 fi
 "${ui[@]}" tap text "Add" --timeout 15
 
-# BIPS probes standard IPP URIs on port 631. The host maps the real PAPPL
-# candidate to that port for this qualification only.
+# A successful BIPS capability exchange makes the manual printer visible in its
+# add-printer activity. Capture that evidence, then return to PrintSpooler's
+# still-active All Printers selector.
 "${ui[@]}" wait contains "FolioRelay" --timeout 45
-"${ui[@]}" snapshot --label printer-added
-adb shell dumpsys print >"$evidence/print-after-add.txt" 2>&1 || true
+"${ui[@]}" snapshot --label bips-printer-added
+adb shell dumpsys print >"$evidence/print-after-bips-add.txt" 2>&1 || true
+adb shell input keyevent KEYCODE_BACK
+sleep 2
 
-before="$(curl -fsS http://127.0.0.1:18081/v1/stats)"
-printf '%s\n' "$before" >"$evidence/stats-before.json"
+# The selection row must be actionable. android-ui.py's tap command filters out
+# disabled nodes, so this refuses to select a stale STATUS_UNAVAILABLE printer.
+"${ui[@]}" snapshot --label all-printers-after-add
+"${ui[@]}" tap contains "FolioRelay" --timeout 30
+adb shell dumpsys print >"$evidence/print-after-live-selection.txt" 2>&1 || true
 
-adb shell am force-stop org.sempersupra.foliorelay.printprobe || true
-adb shell am start -W -n org.sempersupra.foliorelay.printprobe/.MainActivity   >"$evidence/probe-launch.txt" 2>&1
+# Back in PrintActivity, wait for the live destination and the real print
+# control. Preserve intermediate dumpsys receipts so a discovery regression is
+# classifiable without guessing from a missing button.
+"${ui[@]}" wait contains "FolioRelay" --timeout 20
+for i in $(seq 1 15); do
+  adb shell dumpsys print >"$evidence/print-preview-state-$(printf '%02d' "$i").txt" 2>&1 || true
+  if "${ui[@]}" wait res "com.android.printspooler:id/print_button" --timeout 1; then
+    break
+  fi
+  sleep 1
+done
 
-# If FolioRelay is not already the selected destination, use the real system
-# print-spooler destination picker and select the BIPS-discovered printer.
-if ! "${ui[@]}" wait contains "FolioRelay" --timeout 12; then
-  "${ui[@]}" tap res "com.android.printspooler:id/destination_spinner" --timeout 15
-  "${ui[@]}" tap contains "FolioRelay" --timeout 20
+"${ui[@]}" snapshot --label print-preview-live
+if ! "${ui[@]}" tap res "com.android.printspooler:id/print_button" --timeout 10; then
+  # Accessibility text is the semantic fallback if this Android build renders
+  # the control under a different resource id.
+  "${ui[@]}" tap desc "Print" --timeout 5
 fi
-
-"${ui[@]}" snapshot --label print-preview
-"${ui[@]}" tap res "com.android.printspooler:id/print_button" --timeout 30
 
 accepted=0
 for _ in $(seq 1 60); do
