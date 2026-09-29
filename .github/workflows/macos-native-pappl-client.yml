@@ -1,0 +1,541 @@
+name: macOS Native Client Qualification
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/macos-native-pappl-client.yml'
+      - 'experiments/print-substrate/pappl-ingress.c'
+      - 'experiments/print-substrate/cups-backend.sh'
+      - 'experiments/print-substrate/cups-foliorelay.ppd'
+      - 'scripts/make-probe-pdf.py'
+      - 'cmd/foliorelay-ipp-ingest/**'
+      - 'cmd/foliorelay-state-fixture/**'
+      - 'internal/state/**'
+      - 'internal/security/**'
+      - 'go.mod'
+      - 'go.sum'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-pappl:
+    name: macOS 15 native CUPS client -> PAPPL
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - name: Checkout FolioRelay
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set up Go 1.27
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.1'
+          cache: false
+
+      - name: Install PAPPL build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew install openssl@3 jpeg-turbo libpng zlib
+          {
+            sw_vers
+            uname -a
+            cups-config --version
+            clang --version | head -1
+            go version
+            brew list --versions openssl@3 jpeg-turbo libpng zlib
+          } | tee "$RUNNER_TEMP/macos-toolchain.txt"
+
+      - name: Build FolioRelay state authority and ingest adapter
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/bin"
+          go build -trimpath -o "$RUNNER_TEMP/bin/foliorelay-state-fixture" ./cmd/foliorelay-state-fixture
+          go build -trimpath -o "$RUNNER_TEMP/bin/foliorelay-ipp-ingest" ./cmd/foliorelay-ipp-ingest
+
+      - name: Build exact PAPPL v1.4.12 bridge natively
+        shell: bash
+        run: |
+          set -euo pipefail
+          pappl="$RUNNER_TEMP/pappl"
+          prefix="$RUNNER_TEMP/pappl-prefix"
+          arch="$(uname -m)"
+
+          git init "$pappl"
+          cd "$pappl"
+          git remote add origin https://github.com/michaelrsweet/pappl.git
+          git fetch --depth 1 origin 6db8e137557ad84662e78d24fdb2a591c621f4ac
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "6db8e137557ad84662e78d24fdb2a591c621f4ac"
+
+          export PKG_CONFIG_PATH="$(brew --prefix openssl@3)/lib/pkgconfig:$(brew --prefix jpeg-turbo)/lib/pkgconfig:$(brew --prefix libpng)/lib/pkgconfig:$(brew --prefix zlib)/lib/pkgconfig"
+          export CPPFLAGS="-I$(brew --prefix openssl@3)/include -I$(brew --prefix jpeg-turbo)/include -I$(brew --prefix libpng)/include -I$(brew --prefix zlib)/include"
+          export CFLAGS="-O2 -arch $arch"
+          export LDFLAGS="-arch $arch -L$(brew --prefix openssl@3)/lib -L$(brew --prefix jpeg-turbo)/lib -L$(brew --prefix libpng)/lib -L$(brew --prefix zlib)/lib"
+
+          ./configure \
+            --prefix="$prefix" \
+            --with-dnssd=no \
+            --with-tls=openssl \
+            --disable-libpam \
+            --disable-libusb \
+            --disable-shared
+          make -j"$(sysctl -n hw.ncpu)"
+          make install
+
+          export PKG_CONFIG_PATH="$prefix/lib/pkgconfig:$PKG_CONFIG_PATH"
+          cd "$GITHUB_WORKSPACE"
+          cc -D_DARWIN_C_SOURCE \
+            $(pkg-config --cflags pappl) \
+            -o "$RUNNER_TEMP/bin/foliorelay-pappl-ingress" \
+            experiments/print-substrate/pappl-ingress.c \
+            $(pkg-config --static --libs pappl)
+
+          file "$RUNNER_TEMP/bin/foliorelay-pappl-ingress"
+          otool -L "$RUNNER_TEMP/bin/foliorelay-pappl-ingress"
+
+      - name: Start FolioRelay authority and PAPPL candidate
+        shell: bash
+        env:
+          FOLIORELAY_INGEST_BIN: ${{ runner.temp }}/bin/foliorelay-ipp-ingest
+          FOLIORELAY_STATE_URL: http://127.0.0.1:18080
+          FOLIORELAY_INGRESS_STORE: ${{ runner.temp }}/ingress
+          FOLIORELAY_MAX_INGRESS_BYTES: '104857600'
+          FOLIORELAY_SUBSTRATE_INSTANCE: macos-${{ github.run_id }}-${{ github.run_attempt }}
+          FOLIORELAY_PAPPL_SPOOL: ${{ runner.temp }}/pappl-spool
+          FOLIORELAY_PAPPL_PORT: '8633'
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/state" "$RUNNER_TEMP/ingress" "$FOLIORELAY_PAPPL_SPOOL" "$RUNNER_TEMP/evidence"
+
+          "$RUNNER_TEMP/bin/foliorelay-state-fixture" \
+            -listen 127.0.0.1:18080 \
+            -journal "$RUNNER_TEMP/state/journal.frj" \
+            >"$RUNNER_TEMP/evidence/state.log" 2>&1 &
+          echo $! >"$RUNNER_TEMP/evidence/state.pid"
+
+          for i in $(seq 1 30); do
+            curl -fsS -o /dev/null http://127.0.0.1:18080/health && break
+            sleep 1
+          done
+          curl -fsS -o /dev/null http://127.0.0.1:18080/health
+
+          "$RUNNER_TEMP/bin/foliorelay-pappl-ingress" \
+            >"$RUNNER_TEMP/evidence/pappl.log" 2>&1 &
+          echo $! >"$RUNNER_TEMP/evidence/pappl.pid"
+
+          testfile="$(find /usr/share/cups -type f -name get-printer-attributes.test -print -quit)"
+          test -n "$testfile"
+          for i in $(seq 1 45); do
+            ipptool -q ipp://127.0.0.1:8633/ipp/print "$testfile" && break
+            sleep 1
+          done
+          ipptool -q ipp://127.0.0.1:8633/ipp/print "$testfile"
+
+      - name: Prove macOS native print-system path
+        shell: bash
+        run: |
+          set -euo pipefail
+          queue=FolioRelayNative
+          evidence="$RUNNER_TEMP/evidence"
+          sudo lpadmin -x "$queue" >/dev/null 2>&1 || true
+
+          sudo lpadmin -p "$queue" -E \
+            -v ipp://127.0.0.1:8633/ipp/print \
+            -m everywhere
+
+          lpstat -p "$queue" -l | tee "$RUNNER_TEMP/evidence/macos-queue.txt"
+          lpoptions -p "$queue" -l >"$RUNNER_TEMP/evidence/macos-options.txt" 2>&1 || true
+
+          python3 scripts/make-probe-pdf.py "$RUNNER_TEMP/macos-native.pdf"
+          file "$RUNNER_TEMP/macos-native.pdf" | tee "$RUNNER_TEMP/evidence/macos-native-file.txt"
+
+          before="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+          lp -d "$queue" "$RUNNER_TEMP/macos-native.pdf" \
+            | tee "$RUNNER_TEMP/evidence/macos-lp-submit.txt"
+
+          for i in $(seq 1 45); do
+            after="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+            b="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["accepted"])' <<<"$before")"
+            a="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["accepted"])' <<<"$after")"
+            [ "$a" -gt "$b" ] && break
+            sleep 1
+          done
+
+          after="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+          printf '%s\n' "$before" >"$evidence/macos-before.json"
+          printf '%s\n' "$after" >"$evidence/macos-after.json"
+          lpstat -W all -l -o "$queue" >"$evidence/macos-jobs.txt" 2>&1 || true
+          lpstat -p "$queue" -l >"$evidence/macos-printer.txt" 2>&1 || true
+          sudo cp /var/log/cups/error_log "$evidence/macos-host-cups-error.log" 2>/dev/null || true
+
+          python3 - "$before" "$after" <<'PY'
+          import json, sys
+          before=json.loads(sys.argv[1])
+          after=json.loads(sys.argv[2])
+          assert after["accepted"] > before["accepted"], (before, after)
+          assert after["conflicts"] == before["conflicts"], (before, after)
+          PY
+
+          lpstat -W completed -o "$queue" >"$evidence/macos-completed.txt" 2>&1 || true
+
+      - name: Capture evidence
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/evidence"
+          cp "$RUNNER_TEMP/macos-toolchain.txt" "$RUNNER_TEMP/evidence/" 2>/dev/null || true
+          curl -fsS http://127.0.0.1:18080/v1/stats >"$RUNNER_TEMP/evidence/stats.json" || true
+          lpstat -t >"$RUNNER_TEMP/evidence/lpstat.txt" 2>&1 || true
+          if [ -f "$RUNNER_TEMP/evidence/pappl.pid" ]; then
+            kill "$(cat "$RUNNER_TEMP/evidence/pappl.pid")" 2>/dev/null || true
+          fi
+          if [ -f "$RUNNER_TEMP/evidence/state.pid" ]; then
+            kill "$(cat "$RUNNER_TEMP/evidence/state.pid")" 2>/dev/null || true
+          fi
+          sudo lpadmin -x FolioRelayNative >/dev/null 2>&1 || true
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: macos-native-pappl-client
+          path: ${{ runner.temp }}/evidence
+          if-no-files-found: error
+          retention-days: 14
+
+
+  native-cups:
+    name: macOS 15 native CUPS client -> CUPS
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - name: Checkout FolioRelay
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set up Go 1.27
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.1'
+          cache: false
+
+      - name: Build FolioRelay state authority and ingest adapter
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/bin"
+          go build -trimpath -o "$RUNNER_TEMP/bin/foliorelay-state-fixture" ./cmd/foliorelay-state-fixture
+          go build -trimpath -o "$RUNNER_TEMP/bin/foliorelay-ipp-ingest" ./cmd/foliorelay-ipp-ingest
+
+      - name: Install CUPS build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew install openssl@3
+
+      - name: Build exact CUPS v2.4.19 candidate natively
+        shell: bash
+        run: |
+          set -euo pipefail
+          cups="$RUNNER_TEMP/cups"
+          stage="$RUNNER_TEMP/cups-stage"
+          libdir="$RUNNER_TEMP/cups-lib"
+
+          git init "$cups"
+          cd "$cups"
+          git remote add origin https://github.com/OpenPrinting/cups.git
+          git fetch --depth 1 origin 6ba0487abb05afc93d639f37676add8fd65d3756
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "6ba0487abb05afc93d639f37676add8fd65d3756"
+
+          export PKG_CONFIG_PATH="$(brew --prefix openssl@3)/lib/pkgconfig"
+          export CPPFLAGS="-I$(brew --prefix openssl@3)/include"
+          export DSOFLAGS="-L$(brew --prefix openssl@3)/lib -Wl,-not_for_dyld_shared_cache"
+          export LDFLAGS="-L$(brew --prefix openssl@3)/lib"
+
+          ./configure \
+            --prefix=/usr \
+            --libdir="$libdir" \
+            --sysconfdir=/etc \
+            --localstatedir=/var \
+            --with-tls=openssl \
+            --with-dnssd=no \
+            --disable-pam \
+            --disable-gssapi \
+            --disable-libusb \
+            --disable-webif \
+            --disable-browsing \
+            --disable-default-shared \
+            --disable-raw-printing \
+            --with-languages=none \
+            --with-printcap=no \
+            --with-max-copies=1000
+          make -j"$(sysctl -n hw.ncpu)"
+          mkdir -p "$stage" "$libdir"
+          cp "$cups/cups/libcups.2.dylib" "$libdir/libcups.2.dylib"
+          make BUILDROOT="$stage" install
+
+          cupsd="$(find "$stage" -type f -path '*/sbin/cupsd' -print -quit)"
+          cups_exec="$(find "$stage" -type f -path '*/cups/daemon/cups-exec' -print -quit)"
+          data_dir="$(find "$stage" -type d -path '*/share/cups' -print -quit)"
+          test -n "$cupsd"
+          test -n "$cups_exec"
+          test -n "$data_dir"
+
+          {
+            sw_vers
+            uname -a
+            echo "cupsd=$cupsd"
+            echo "cups_exec=$cups_exec"
+            echo "data_dir=$data_dir"
+            "$cupsd" -h 2>&1 | head -20 || true
+            file "$cupsd"
+            otool -L "$cupsd"
+            otool -L "$cups_exec"
+            otool -L "$libdir/libcups.2.dylib"
+          } | tee "$RUNNER_TEMP/macos-cups-toolchain.txt"
+
+      - name: Start FolioRelay authority and exact CUPS candidate
+        shell: bash
+        env:
+          FOLIORELAY_STATE_URL: http://127.0.0.1:18080
+          FOLIORELAY_MAX_INGRESS_BYTES: '104857600'
+          FOLIORELAY_SUBSTRATE_INSTANCE: macos-cups-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          stage="$RUNNER_TEMP/cups-stage"
+          sandbox_root="/private/tmp/foliorelay-cups-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          base="$sandbox_root/runtime"
+          ingress="/private/var/spool/foliorelay-ingress-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          ingest_bin="$sandbox_root/bin/foliorelay-ipp-ingest"
+          evidence="$RUNNER_TEMP/evidence-cups"
+          sudo rm -rf "$sandbox_root" "$ingress"
+          mkdir -p "$evidence" "$RUNNER_TEMP/state"
+          mkdir -p "$sandbox_root/bin"
+          sudo mkdir -p "$ingress"
+          sudo chown "$(id -u):$(id -g)" "$ingress"
+          chmod 0700 "$ingress"
+          mkdir -p "$base"/{bin/backend,bin/daemon,bin/filter,spool/temp,log,ppd,cache}
+          install -m 0555 "$RUNNER_TEMP/bin/foliorelay-ipp-ingest" "$ingest_bin"
+
+          cups_exec="$(find "$stage" -type f -path '*/cups/daemon/cups-exec' -print -quit)"
+          cupsd="$(find "$stage" -type f -path '*/sbin/cupsd' -print -quit)"
+          data_dir="$(find "$stage" -type d -path '*/share/cups' -print -quit)"
+          test -n "$cups_exec"
+          test -n "$cupsd"
+          test -n "$data_dir"
+
+          sudo install -o root -g wheel -m 0555 \
+            "$cups_exec" "$base/bin/daemon/cups-exec"
+          sudo install -o root -g wheel -m 0555 \
+            experiments/print-substrate/cups-backend.sh "$base/bin/backend/foliorelay"
+          install -m 0644 experiments/print-substrate/cups-foliorelay.ppd \
+            "$base/ppd/FolioRelay.ppd"
+
+          user="$(id -un)"
+          group="$(id -gn)"
+          cat >"$base/cups-files.conf" <<EOF
+          User $user
+          Group $group
+          ServerRoot $base
+          StateDir $base
+          ServerBin $base/bin
+          CacheDir $base/cache
+          DataDir $data_dir
+          RequestRoot $base/spool
+          TempDir $base/spool/temp
+          AccessLog $base/log/access_log
+          ErrorLog $base/log/error_log
+          PageLog $base/log/page_log
+          FileDevice No
+          PassEnv FOLIORELAY_INGEST_BIN
+          PassEnv FOLIORELAY_STATE_URL
+          PassEnv FOLIORELAY_INGRESS_STORE
+          PassEnv FOLIORELAY_MAX_INGRESS_BYTES
+          PassEnv FOLIORELAY_SUBSTRATE_INSTANCE
+          EOF
+
+          cat >"$base/cupsd.conf" <<EOF
+          StrictConformance Yes
+          Browsing Off
+          WebInterface No
+          DefaultShared No
+          ServerName localhost
+          Listen 127.0.0.1:8634
+          MaxLogSize 0
+          LogLevel debug2
+          ErrorPolicy retry-job
+          JobRetryInterval 1
+          JobRetryLimit 10
+          PreserveJobFiles Off
+          PreserveJobHistory 30
+          <Location />
+            Order allow,deny
+            Allow localhost
+          </Location>
+          <Location /printers>
+            Order allow,deny
+            Allow localhost
+          </Location>
+          <Policy default>
+            <Limit All>
+              Order allow,deny
+              Allow localhost
+            </Limit>
+          </Policy>
+          EOF
+
+          cat >"$base/printers.conf" <<'EOF'
+          <Printer FolioRelay>
+          Accepting Yes
+          DeviceURI foliorelay:/
+          Info FolioRelay PDF Ingress
+          JobSheets none none
+          State Idle
+          StateMessage Ready
+          Shared No
+          </Printer>
+          EOF
+
+          "$RUNNER_TEMP/bin/foliorelay-state-fixture" \
+            -listen 127.0.0.1:18080 \
+            -journal "$RUNNER_TEMP/state/journal.frj" \
+            >"$evidence/state.log" 2>&1 &
+          echo $! >"$evidence/state.pid"
+
+          for i in $(seq 1 30); do
+            curl -fsS -o /dev/null http://127.0.0.1:18080/health && break
+            sleep 1
+          done
+          curl -fsS -o /dev/null http://127.0.0.1:18080/health
+
+          FOLIORELAY_INGEST_BIN="$ingest_bin" \
+          FOLIORELAY_STATE_URL="$FOLIORELAY_STATE_URL" \
+          FOLIORELAY_INGRESS_STORE="$ingress" \
+          FOLIORELAY_MAX_INGRESS_BYTES="$FOLIORELAY_MAX_INGRESS_BYTES" \
+          FOLIORELAY_SUBSTRATE_INSTANCE="$FOLIORELAY_SUBSTRATE_INSTANCE" \
+          CUPS_SERVERROOT="$base" \
+          CUPS_STATEDIR="$base" \
+          CUPS_DATADIR="$data_dir" \
+            "$cupsd" -f -c "$base/cupsd.conf" -s "$base/cups-files.conf" \
+            >"$evidence/cupsd.log" 2>&1 &
+          echo $! >"$evidence/cups.pid"
+
+          testfile="$(find /usr/share/cups -type f -name get-printer-attributes.test -print -quit)"
+          test -n "$testfile"
+          for i in $(seq 1 45); do
+            ipptool -q ipp://127.0.0.1:8634/printers/FolioRelay "$testfile" && break
+            sleep 1
+          done
+          ipptool -q ipp://127.0.0.1:8634/printers/FolioRelay "$testfile"
+
+      - name: Prove macOS native print-system path to CUPS candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          queue=FolioRelayNativeCUPS
+          evidence="$RUNNER_TEMP/evidence-cups"
+          sudo lpadmin -x "$queue" >/dev/null 2>&1 || true
+          trap 'sudo lpadmin -x "$queue" >/dev/null 2>&1 || true' EXIT
+
+          sudo lpadmin -p "$queue" -E \
+            -v ipp://127.0.0.1:8634/printers/FolioRelay \
+            -m everywhere
+
+          lpstat -p "$queue" -l | tee "$evidence/macos-queue.txt"
+          lpoptions -p "$queue" -l >"$evidence/macos-options.txt" 2>&1 || true
+
+          python3 scripts/make-probe-pdf.py "$RUNNER_TEMP/macos-native-cups.pdf"
+          file "$RUNNER_TEMP/macos-native-cups.pdf" \
+            | tee "$evidence/macos-native-file.txt"
+
+          printtest="$(find /usr/share/cups -type f -name print-job.test -print -quit)"
+          test -n "$printtest"
+          direct_before="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+          ipptool -q -f "$RUNNER_TEMP/macos-native-cups.pdf" \
+            ipp://127.0.0.1:8634/printers/FolioRelay "$printtest"
+          for i in $(seq 1 30); do
+            direct_after="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+            db="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["accepted"])' <<<"$direct_before")"
+            da="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["accepted"])' <<<"$direct_after")"
+            [ "$da" -gt "$db" ] && break
+            sleep 1
+          done
+          direct_after="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+          printf '%s\n' "$direct_before" >"$evidence/direct-before.json"
+          printf '%s\n' "$direct_after" >"$evidence/direct-after.json"
+          python3 - "$direct_before" "$direct_after" <<'PY'
+          import json, sys
+          before=json.loads(sys.argv[1])
+          after=json.loads(sys.argv[2])
+          assert after["accepted"] > before["accepted"], (before, after)
+          assert after["conflicts"] == before["conflicts"], (before, after)
+          PY
+
+          before="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+          lp -d "$queue" "$RUNNER_TEMP/macos-native-cups.pdf" \
+            | tee "$evidence/macos-lp-submit.txt"
+
+          for i in $(seq 1 45); do
+            after="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+            b="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["accepted"])' <<<"$before")"
+            a="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["accepted"])' <<<"$after")"
+            [ "$a" -gt "$b" ] && break
+            sleep 1
+          done
+
+          after="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+          printf '%s\n' "$before" >"$evidence/macos-before.json"
+          printf '%s\n' "$after" >"$evidence/macos-after.json"
+          lpstat -W all -l -o "$queue" >"$evidence/macos-jobs.txt" 2>&1 || true
+          lpstat -p "$queue" -l >"$evidence/macos-printer.txt" 2>&1 || true
+          sudo cp /var/log/cups/error_log "$evidence/macos-host-cups-error.log" 2>/dev/null || true
+          cp "/private/tmp/foliorelay-cups-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}/runtime/log/error_log" "$evidence/candidate-cups-error.log" 2>/dev/null || true
+          cp "/private/tmp/foliorelay-cups-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}/runtime/log/access_log" "$evidence/candidate-cups-access.log" 2>/dev/null || true
+
+          python3 - "$before" "$after" <<'PY'
+          import json, sys
+          before=json.loads(sys.argv[1])
+          after=json.loads(sys.argv[2])
+          assert after["accepted"] > before["accepted"], (before, after)
+          assert after["conflicts"] == before["conflicts"], (before, after)
+          PY
+          lpstat -W completed -o "$queue" >"$evidence/macos-completed.txt" 2>&1 || true
+
+      - name: Capture CUPS evidence
+        if: always()
+        shell: bash
+        run: |
+          evidence="$RUNNER_TEMP/evidence-cups"
+          mkdir -p "$evidence"
+          cp "$RUNNER_TEMP/macos-cups-toolchain.txt" "$evidence/" 2>/dev/null || true
+          curl -fsS http://127.0.0.1:18080/v1/stats >"$evidence/stats.json" || true
+          lpstat -t >"$evidence/lpstat.txt" 2>&1 || true
+          sudo cp /var/log/cups/error_log "$evidence/macos-host-cups-error.log" 2>/dev/null || true
+          cp "/private/tmp/foliorelay-cups-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}/runtime/log/error_log" "$evidence/candidate-cups-error.log" 2>/dev/null || true
+          cp "/private/tmp/foliorelay-cups-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}/runtime/log/access_log" "$evidence/candidate-cups-access.log" 2>/dev/null || true
+          if [ -f "$evidence/cups.pid" ]; then
+            kill "$(cat "$evidence/cups.pid")" 2>/dev/null || true
+          fi
+          if [ -f "$evidence/state.pid" ]; then
+            kill "$(cat "$evidence/state.pid")" 2>/dev/null || true
+          fi
+          sudo lpadmin -x FolioRelayNativeCUPS >/dev/null 2>&1 || true
+          sudo rm -rf "/private/tmp/foliorelay-cups-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            "/private/var/spool/foliorelay-ingress-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" 2>/dev/null || true
+
+      - name: Upload CUPS evidence
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: macos-native-cups-client
+          path: ${{ runner.temp }}/evidence-cups
+          if-no-files-found: error
+          retention-days: 14

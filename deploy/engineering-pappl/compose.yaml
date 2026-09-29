@@ -1,0 +1,42 @@
+services:
+  state:
+    build:
+      context: ../..
+      dockerfile: deploy/engineering-pappl/Dockerfile
+      target: state
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - state-data:/state
+    ports:
+      - "127.0.0.1:18081:18080"
+
+  pappl:
+    build:
+      context: ../..
+      dockerfile: deploy/engineering-pappl/Dockerfile
+      target: pappl
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      - state
+    ports:
+      - "8633:8633"
+    volumes:
+      - pappl-state:/var/lib/pappl
+      - artifacts:/var/lib/foliorelay-artifacts
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m,uid=10001,gid=10001,mode=0750
+
+volumes:
+  state-data:
+  pappl-state:
+  artifacts:

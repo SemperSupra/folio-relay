@@ -1,0 +1,520 @@
+schema_version: 3
+product: FolioRelay
+experiment: print-substrate-bakeoff
+autonomous: true
+user_manual_steps: prohibited
+
+sources:
+  cups:
+    repository: OpenPrinting/cups
+    version: v2.4.19
+    annotated_tag_object: f095f335b55607ae7ab7fdf9291113da81264959
+    commit: 6ba0487abb05afc93d639f37676add8fd65d3756
+  ippeveprinter:
+    repository: OpenPrinting/cups
+    version: v2.4.19
+    annotated_tag_object: f095f335b55607ae7ab7fdf9291113da81264959
+    commit: 6ba0487abb05afc93d639f37676add8fd65d3756
+  pappl:
+    repository: michaelrsweet/pappl
+    version: v1.4.12
+    annotated_tag_object: 4f6a8d87dde5ab99d33abe172f767e6db1beb20d
+    commit: 6db8e137557ad84662e78d24fdb2a591c621f4ac
+
+supply_chain_inputs:
+  ubuntu_base: ubuntu:24.04@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3
+  golang_base: golang:1.27.1-bookworm@sha256:69a7b9788769bec032d238959b61854e9ae87f57be9029ec04e9885fabf99195
+  ubuntu_archive_snapshot: 20260928T000000Z
+  source_checkout_by_commit: required
+  floating_source_tag_checkout: prohibited
+  mutable_apt_latest_resolution: prohibited
+  qualification_status: pass
+  release_tag_authority_verified: pass
+  pinned_base_resolution: pass
+  pinned_ubuntu_snapshot_resolution: pass
+  repeated_no_cache_builds: pass
+  repeated_package_manifest_match:
+    cups-minimal: pass
+    pappl: pass
+  repeated_key_binary_hash_match:
+    cups-minimal: pass
+    pappl: pass
+  repeated_image_size_match:
+    cups-minimal:
+      status: pass
+      bytes: 90321940
+    pappl:
+      status: pass
+      bytes: 90328920
+  upstream_update_rehearsal:
+    candidate: pappl
+    from_version: v1.4.11
+    from_commit: ad86a0a8473f0f83233a374226561181570d4f81
+    to_version: v1.4.12
+    to_commit: 6db8e137557ad84662e78d24fdb2a591c621f4ac
+    release_published: 2026-08-20
+    reason: upstream bug-fix release with overflow-protection and error/locking fixes
+    qualification_status: pass
+
+candidates:
+  cups-minimal:
+    hypothesis: general scheduler can be sufficiently subordinated and stripped
+    permanent_fork_allowed: false
+    phase0: pass
+    phase1: pass
+    upstream_scheduler_suite: pass
+    tls: pass
+    discovery_profile: pass
+    least_privilege: pass
+    ipp_everywhere_engineering_conformance: pass
+    packaged_engineering_runtime:
+      runnable: pass
+      read_only_root: pass
+      cap_drop_all: pass
+      no_new_privileges: pass
+      explicit_writable_paths: pass
+    production_status: active-candidate
+    authority_outage_policy:
+      upstream_error_policy: retry-job
+      qualification_retry_interval_seconds: 1
+      qualification_retry_limit: 10
+      rationale: fail closed during authority outage without permanently stopping the virtual queue
+
+  ippeveprinter:
+    hypothesis: simple upstream IPP Everywhere server is sufficient as ingress
+    permanent_fork_allowed: false
+    phase0: pass
+    production_status: vetoed
+    retained_role: interoperability-and-protocol-oracle
+    veto_reasons:
+      - upstream implementation explicitly accepts only one active job at a time
+      - concurrent bursts return IPP server-error-busy while another job is printing
+      - adding a queue or patching upstream would defeat the no-fork/minimal-substrate objective
+    concurrency_observations:
+      - attempts: 100
+        accepted: 6
+        rejected_or_failed: 94
+        observed_status: server-error-busy
+      - attempts: 100
+        accepted: 8
+        rejected_or_failed: 92
+        observed_status: server-error-busy
+
+  pappl:
+    hypothesis: production-oriented IPP framework can be constrained to a narrow adapter
+    permanent_fork_allowed: false
+    phase0: pass
+    phase1: pass
+    tls: pass
+    discovery_profile: pass
+    least_privilege: pass
+    ipp_everywhere_engineering_conformance: pass
+    packaged_engineering_runtime:
+      runnable: pass
+      read_only_root: pass
+      cap_drop_all: pass
+      no_new_privileges: pass
+      explicit_writable_paths: pass
+      source_identity_restart_continuity: pass
+      projection_state_load_failure: fail-closed
+    production_status: active-candidate
+    concurrency_observations:
+      - clients: 25
+        requests_per_client: 100
+        status: pass
+        errors: 0
+      - clients: 100
+        requests_per_client: 100
+        status: pass
+        errors: 0
+      - clients: 250
+        requests_per_client: 100
+        status: pass
+        errors: 0
+      - clients: 500
+        requests_per_client: 20
+        status: pass
+        errors: 0
+      - clients: 100
+        requests_per_client: 1000
+        status: characterization-degraded
+        observed_errors:
+          - 7
+          - 12
+        note: repeated long-run observations vary and require root-cause characterization
+
+
+operating_envelope:
+  interpretation:
+    measured_throughput_is_characterization_not_capacity_limit: true
+    passing_concurrency_is_minimum_proven_envelope_not_capacity_claim: true
+    github_hosted_runner_results_are_not_production_sizing: true
+  qualified_gates:
+    real_print_job_concurrency:
+      cups-minimal:
+        concurrent_submissions: 25
+        status: pass
+      pappl:
+        concurrent_submissions: 25
+        status: pass
+    pappl_minimal_external_client_pressure:
+      - clients: 100
+        requests_per_client: 100
+        failed_clients: 0
+        timed_out_clients: 0
+        status: pass
+      - clients: 100
+        requests_per_client: 1000
+        failed_clients: 0
+        timed_out_clients: 0
+        status: pass
+    authority_outage:
+      cups-minimal: pass
+      pappl: pass
+    cancellation_status_projection:
+      cups-minimal: pass
+      pappl: pass
+    malformed_and_slow_client_resilience:
+      cups-minimal: pass
+      pappl: pass
+    abusive_copy_admission:
+      cups-minimal: pass
+      pappl: pass
+    bounded_spool_exhaustion:
+      cups-minimal: pass
+      pappl: pass
+      fixture_bytes: 2097152
+      invariant: substrate exhaustion does not advance durable accepted state or take down the state authority
+    architecture_build_smoke:
+      cups-minimal:
+        amd64: pass
+        arm64: pass
+      pappl:
+        amd64: pass
+        arm64: pass
+    tls:
+      cups-minimal: pass
+      pappl: pass
+    dns_sd_discovery:
+      cups-minimal: pass
+      pappl: pass
+    least_privilege:
+      cups-minimal: pass
+      pappl: pass
+    ipp_everywhere_engineering_conformance:
+      cups-minimal: pass
+      pappl: pass
+    linux_native_libcups_direct_print_job:
+      cups-minimal: pass
+      pappl: pass
+      client_library: ubuntu-24.04-libcups-2.4.7
+      operation: Print-Job
+      observed_status: successful-ok
+      note: direct native client bypasses unrelated local scheduler/filter conversion
+    upstream_security_update_path:
+      status: pass
+      rehearsal: pappl-v1.4.11-to-v1.4.12
+    packaged_runtime_surface:
+      normalized_against_pinned_minimal_libcups: true
+      immutable_input_tuple: true
+      cups-minimal:
+        image_size_bytes: 90336412
+        rootfs_accessible_file_count: 2746
+        rootfs_accessible_file_bytes: 93338528
+        executable_file_count: 508
+        executable_file_bytes: 41598430
+        package_count: 94
+        package_installed_size_kib: 96801
+        measured_dynamic_dependency_count: 8
+      pappl:
+        image_size_bytes: 90328920
+        rootfs_accessible_file_count: 2756
+        rootfs_accessible_file_bytes: 93324474
+        executable_file_count: 505
+        executable_file_bytes: 40761702
+        package_count: 96
+        package_installed_size_kib: 97719
+        measured_dynamic_dependency_count: 9
+      interpretation: characterization-only-not-selection
+  hard_product_limits:
+    artifact_bytes: 104857600
+    copies_per_job: 1000
+    state_journal_record_bytes: 4194304
+    substrate_spool: deployment-bounded-separate-filesystem
+
+client_oracle_findings:
+  macos_cups_sandbox_findings:
+    status: resolved-with-upstream-policy
+    process_exec_under_users: denied-by-upstream-sandbox
+    arbitrary_private_tmp_writes: denied-by-upstream-sandbox
+    bounded_resolution:
+      executable_surface: /private/tmp
+      accepted_artifact_store: /private/var/spool
+    sandbox_disabled: false
+    source_patch_used: false
+  ubuntu_local_everywhere_queue:
+    status: non-candidate-specific-host-filter-defect
+    affected_candidates:
+      - cups-minimal
+      - pappl
+    observed_failure: cups-filters universal process signal-11 before IPP transport
+    valid_pdf_reproduced: true
+    admission_gate: false
+    retained_as_negative_space_evidence: true
+
+flow_control:
+  throttle_basis: resource-budget-and-work-pressure
+  throughput_rps_limit_derived_from_ci_measurement: prohibited
+  admission:
+    hard_budget_exhaustion: retryable-backpressure-before-durable-accept
+    permanent_policy_violation: resource-rejected
+    backpressure_consumes_idempotency_key: false
+    backpressure_creates_effect_intent: false
+  retries:
+    finite_budget_required: true
+    stable_identity_preserved: true
+    unbounded_retry: prohibited
+  observability:
+    structured_warning_events: required
+    external_event_bus: optional
+    warning_delivery_required_for_correctness: false
+    rate_limited: true
+    recommended_signals:
+      - substrate_spool_utilization
+      - durable_store_free_capacity
+      - pending_or_active_work
+      - oldest_pending_age
+      - state_authority_unavailable
+      - retry_budget_consumption
+      - resource_rejections
+      - idempotency_conflicts
+      - journal_fsync_latency
+
+platform_client_matrix:
+  linux_ubuntu_24_04:
+    native_client: libcups-direct-print-job
+    cups-minimal: pass
+    pappl: pass
+  macos_15:
+    status: pass
+    native_path: system-cups-lpadmin-everywhere-plus-lp
+    runner: macos-15-arm64
+    observed:
+      cups_scheduler_running: true
+      lp_lpadmin_lpstat: present
+      ippfind_ipptool: present
+      cups_config: present
+      dns_sd: present
+      cups_sdk_header_link_probe: pass
+    candidates:
+      pappl:
+        status: pass
+        exact_source_commit: 6db8e137557ad84662e78d24fdb2a591c621f4ac
+        native_submission: pass
+        durable_acceptance: pass
+        idempotency_conflicts: 0
+        evidence_runs:
+          - 36411288637
+          - 36427659628
+      cups-minimal:
+        status: pass
+        exact_source_commit: 6ba0487abb05afc93d639f37676add8fd65d3756
+        tls_backend_for_native_build: openssl
+        native_submission: pass
+        durable_acceptance: pass
+        idempotency_conflicts: 0
+        evidence_run: 36427659628
+        upstream_macos_sandbox:
+          disabled: false
+          source_patch_used: false
+          execution_surface: /private/tmp/foliorelay-cups-<run>
+          artifact_store: /private/var/spool/foliorelay-ingress-<run>
+          rationale: honor upstream process-exec and writable-path policy
+  windows_2025:
+    status: pass
+    native_path: printmanagement-add-printer-ippurl-plus-out-printer
+    runner: windows-2025
+    host_strategy:
+      candidate_host: imported-pinned-wsl2-rootfs
+      networking: nat-direct-ip
+      localhost_forwarding_required: false
+      hyperv_firewall_bounded_to_candidate_ports: true
+    observed:
+      spooler: running
+      print_management_module: present
+      add_printer_ipp_url_parameter: present
+      microsoft_ipp_class_driver: present
+      wsl2_import: pass
+      windows_to_wsl_direct_ip: pass
+    candidates:
+      pappl:
+        status: pass
+        exact_source_commit: 6db8e137557ad84662e78d24fdb2a591c621f4ac
+        native_submission: pass
+        durable_acceptance: pass
+        idempotency_conflicts: 0
+        evidence_run: 36441803876
+      cups-minimal:
+        status: pass
+        exact_source_commit: 6ba0487abb05afc93d639f37676add8fd65d3756
+        native_submission: pass
+        durable_acceptance: pass
+        idempotency_conflicts: 0
+        evidence_run: 36441803876
+        windows_transport_requirement:
+          upstream_filter: gziptoany
+          rationale: Microsoft IPP Class Driver submits gzip-encoded IPP document data
+          broader_legacy_filter_stack_required: false
+  android:
+    status: qualification-in-progress
+    capability_census:
+      android_release: "15"
+      sdk: "35"
+      feature_printing: true
+      print_spooler_present: true
+      default_print_service_bips_present: true
+      enabled_print_services_default: null
+      dumpsys_print_available: true
+    active_rep: real-printmanager-spooler-bips-to-pappl
+    requirement: faithful-native-print-service-path
+  ios_ipados:
+    status: unqualified
+    capability_census:
+      simulator_runtime: ios-26.2
+      printing_available: true
+      can_print_pdf: true
+      explicit_ui_printer_constructed: true
+      ui_print_controller_constructed: true
+    hosted_simulator_delivery_rep:
+      ui_printer_contact_available: true
+      ui_print_completion_reported: true
+      durable_foliorelay_acceptance_observed: false
+      interpretation: simulator-native-api-success-without-network-job-delivery
+      admission_evidence: false
+    requirement: faithful-airprint-path-on-real-device-or-other-faithful-substrate
+  synthetic_protocol_client_can_substitute_for_native_path: false
+
+veto_gates:
+  - native_ipp_interoperability
+  - ipp_everywhere_engineering_conformance
+  - canonical_artifact_handoff
+  - stable_job_effect_correlation
+  - bounded_concurrency
+  - bounded_input_resources
+  - crash_restart_safety
+  - no_duplicate_effects
+  - tls
+  - discovery_when_enabled
+  - least_privilege
+  - malformed_request_resilience
+  - no_competing_durable_authority
+  - amd64
+  - arm64
+  - upstream_security_update_path
+
+metrics:
+  - executable_bytes
+  - runtime_dependency_bytes
+  - dynamic_library_count
+  - executable_count
+  - package_count
+  - cve_surface
+  - startup_latency
+  - idle_rss
+  - loaded_rss
+  - throughput
+  - concurrent_clients
+  - capabilities
+  - writable_paths
+  - listening_sockets
+  - duplicated_state
+  - folio_relay_glue_loc
+  - carried_patch_count
+
+security_surface_characterization:
+  reviewed_at: 2026-09-28
+  raw_advisory_count_can_select: false
+  cups_minimal:
+    upstream_version: v2.4.19
+    scheduler_present: true
+    required_upstream_filters:
+      - gziptoany
+    only_backend: foliorelay
+    absent_advisory_surfaces:
+      - pstops
+      - rastertopwg
+      - foomatic-rip
+      - generic-ipp-backend
+      - snmp-backend
+      - mailto-notifier
+      - banner-data-tree
+      - sendmail
+    runtime_printer_management_operations_admitted: false
+    runtime_subscription_operations_admitted: false
+    residual_scheduler_code_requires_monitoring: true
+  pappl:
+    upstream_version: v1.4.12
+    cupsd_present: false
+    shared_minimized_libcups_present: true
+    cups_scheduler_backend_advisories_directly_applicable: false
+    shared_libcups_call_path_review_required: true
+  evidence_document: docs/PRINT_SUBSTRATE_SECURITY_SURFACE.md
+
+selection_characterization:
+  evidence_head: 253edbfc3ae1605a17a767c46c78ae3aff384d26
+  windows_native_parity: pass
+  operating_footprint:
+    cups-minimal:
+      process_vm_rss_kib: 5668
+      cgroup_memory_current_bytes: 6094848
+      cgroup_memory_peak_bytes: 14684160
+      process_open_fd_count: 11
+      process_socket_fd_count: 2
+      listening_tcp_ports:
+        - 8634
+        - 8635
+      persistent_projection_bytes: 3781
+      restart_to_ipp_ready_ms:
+        min: 227
+        median: 228
+        max: 235
+    pappl:
+      process_vm_rss_kib: 9160
+      cgroup_memory_current_bytes: 7217152
+      cgroup_memory_peak_bytes: 14630912
+      process_open_fd_count: 5
+      process_socket_fd_count: 2
+      listening_tcp_ports:
+        - 8633
+      persistent_projection_bytes: 2371
+      restart_to_ipp_ready_ms:
+        min: 166
+        median: 171
+        max: 178
+    interpretation: characterization-only-ci-runtime-not-capacity-limit
+  maintenance_surface:
+    cups-minimal:
+      folio_relay_glue_loc: 34
+      candidate_configuration_loc: 249
+      carried_patch_count: 0
+    pappl:
+      folio_relay_glue_loc: 258
+      candidate_configuration_loc: 182
+      carried_patch_count: 0
+  minimal_cups_runtime_policy:
+    required_upstream_filters:
+      - gziptoany
+    excluded_surfaces_proven_absent:
+      - /usr/lib/cups/filter/pstops
+      - /usr/lib/cups/filter/rastertopwg
+      - /usr/lib/cups/filter/foomatic-rip
+      - /usr/lib/cups/backend/ipp
+      - /usr/lib/cups/backend/snmp
+      - /usr/lib/cups/notifier/mailto
+      - /usr/sbin/sendmail
+    only_installed_backend: /usr/lib/cups/backend/foliorelay
+
+selection:
+  rule: smallest-upstream-maintained-substrate-that-passes-all-required-gates
+  size_alone_can_select: false
+  permanent_source_fork_is_veto: true

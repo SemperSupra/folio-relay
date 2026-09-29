@@ -1,0 +1,519 @@
+name: Print Substrate Bakeoff
+
+on:
+  pull_request:
+    paths:
+      - 'docs/ADR-PRINT-SUBSTRATE.md'
+      - 'docs/RED_BLUE_PRINT_SUBSTRATE.md'
+      - 'contracts/print-substrate-evaluation.yaml'
+      - '.github/workflows/print-substrate-bakeoff.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'docs/ADR-PRINT-SUBSTRATE.md'
+      - 'docs/RED_BLUE_PRINT_SUBSTRATE.md'
+      - 'contracts/print-substrate-evaluation.yaml'
+      - '.github/workflows/print-substrate-bakeoff.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  phase0:
+    name: Phase 0 - ${{ matrix.candidate }} (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - candidate: cups-minimal
+            arch: amd64
+            runner: ubuntu-24.04
+          - candidate: ippeveprinter
+            arch: amd64
+            runner: ubuntu-24.04
+          - candidate: pappl
+            arch: amd64
+            runner: ubuntu-24.04
+          - candidate: cups-minimal
+            arch: arm64
+            runner: ubuntu-24.04-arm
+          - candidate: pappl
+            arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Checkout FolioRelay
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Install build and probe dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            autoconf build-essential pkg-config git ca-certificates curl \
+            libssl-dev zlib1g-dev libavahi-client-dev \
+            libcups2-dev cups-client cups-ipp-utils
+
+      - name: Build candidate
+        shell: bash
+        env:
+          CANDIDATE: ${{ matrix.candidate }}
+          EXPECTED_ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/substrate" "$RUNNER_TEMP/evidence"
+          actual_arch="$(uname -m)"
+          printf '%s\n' "$actual_arch" | tee "$RUNNER_TEMP/evidence/runner-arch.txt"
+          case "$EXPECTED_ARCH" in
+            amd64) test "$actual_arch" = "x86_64" ;;
+            arm64) test "$actual_arch" = "aarch64" ;;
+            *) echo "unsupported expected architecture: $EXPECTED_ARCH" >&2; exit 2 ;;
+          esac
+          cd "$RUNNER_TEMP/substrate"
+
+          case "$CANDIDATE" in
+            cups-minimal)
+              git clone --depth 1 --branch v2.4.19 https://github.com/OpenPrinting/cups.git cups
+              cd cups
+              ./configure \
+                --prefix=/usr \
+                --sysconfdir=/etc \
+                --localstatedir=/var \
+                --with-tls=openssl \
+                --with-dnssd=avahi \
+                --disable-pam \
+                --disable-gssapi \
+                --disable-libusb \
+                --disable-webif \
+                --disable-browsing \
+                --disable-default-shared \
+                --disable-raw-printing \
+                --with-languages=none \
+                --with-printcap=no \
+                --with-max-copies=1000
+              make -j"$(nproc)"
+              mkdir -p stage
+              make BUILDROOT="$PWD/stage" install
+              scheduler/cupsd -h >"$RUNNER_TEMP/evidence/smoke.txt" 2>&1 || true
+              echo "$PWD/scheduler/cupsd" >"$RUNNER_TEMP/evidence/binary-path"
+              echo "$PWD/stage" >"$RUNNER_TEMP/evidence/stage-path"
+              ;;
+
+            ippeveprinter)
+              git clone --depth 1 --branch v2.4.19 https://github.com/OpenPrinting/cups.git cups
+              cd cups
+              ./configure \
+                --prefix=/usr \
+                --with-tls=openssl \
+                --with-dnssd=no \
+                --disable-pam \
+                --disable-gssapi \
+                --disable-libusb \
+                --disable-webif \
+                --disable-browsing \
+                --disable-default-shared \
+                --disable-raw-printing \
+                --with-languages=none
+              make -C cups -j"$(nproc)"
+              make -C tools -j"$(nproc)" ippeveprinter-static
+              tools/ippeveprinter-static --version | tee "$RUNNER_TEMP/evidence/smoke.txt"
+              mkdir -p "$RUNNER_TEMP/ippeve-spool" "$RUNNER_TEMP/ippeve-output"
+              tools/ippeveprinter-static \
+                -r off \
+                -p 8632 \
+                -d "$RUNNER_TEMP/ippeve-spool" \
+                -D "$RUNNER_TEMP/ippeve-output" \
+                -k \
+                -f application/pdf,image/pwg-raster \
+                "FolioRelay Bakeoff" \
+                >"$RUNNER_TEMP/evidence/ippeveprinter.log" 2>&1 &
+              echo $! >"$RUNNER_TEMP/evidence/server.pid"
+              for i in $(seq 1 30); do
+                if curl -fsS http://127.0.0.1:8632/ >/dev/null 2>&1; then
+                  break
+                fi
+                sleep 1
+              done
+              testfile="$(find /usr/share/cups -type f -name get-printer-attributes.test -print -quit)"
+              test -n "$testfile"
+              ipptool -tv ipp://127.0.0.1:8632/ipp/print "$testfile" \
+                | tee "$RUNNER_TEMP/evidence/ipp-smoke.txt"
+              kill "$(cat "$RUNNER_TEMP/evidence/server.pid")"
+              wait "$(cat "$RUNNER_TEMP/evidence/server.pid")" || true
+              echo "$PWD/tools/ippeveprinter-static" >"$RUNNER_TEMP/evidence/binary-path"
+              echo "$PWD/tools/ippeveprinter-static" >"$RUNNER_TEMP/evidence/stage-path"
+              ;;
+
+            pappl)
+              sudo apt-get install -y --no-install-recommends libpng-dev libjpeg-dev
+              git init pappl
+              cd pappl
+              git remote add origin https://github.com/michaelrsweet/pappl.git
+              git fetch --depth 1 origin 6db8e137557ad84662e78d24fdb2a591c621f4ac
+              git checkout --detach FETCH_HEAD
+              test "$(git rev-parse HEAD)" = "6db8e137557ad84662e78d24fdb2a591c621f4ac"
+              ./configure \
+                --with-dnssd=avahi \
+                --with-tls=openssl \
+                --disable-libpam \
+                --disable-libusb \
+                --disable-shared
+              make -j"$(nproc)"
+              make -C testsuite -j"$(nproc)"
+              testsuite/testpappl --version | tee "$RUNNER_TEMP/evidence/smoke.txt"
+              timeout 180 testsuite/testpappl \
+                -c \
+                -l "$RUNNER_TEMP/evidence/testpappl.log" \
+                -L warn \
+                -o "$RUNNER_TEMP/pappl-output" \
+                -t api,client,pwg-raster \
+                >"$RUNNER_TEMP/evidence/pappl-tests.txt" 2>&1
+              echo "$PWD/testsuite/testpappl" >"$RUNNER_TEMP/evidence/binary-path"
+              echo "$PWD/pappl/libpappl.a" >"$RUNNER_TEMP/evidence/stage-path"
+              ;;
+          esac
+
+      - name: Measure executable and dependency surface
+        shell: bash
+        env:
+          CANDIDATE: ${{ matrix.candidate }}
+        run: |
+          set -euo pipefail
+          binary="$(cat "$RUNNER_TEMP/evidence/binary-path")"
+          stage="$(cat "$RUNNER_TEMP/evidence/stage-path")"
+
+          file "$binary" | tee "$RUNNER_TEMP/evidence/file.txt"
+          stat -c '%s' "$binary" >"$RUNNER_TEMP/evidence/executable-bytes.txt"
+          sha256sum "$binary" >"$RUNNER_TEMP/evidence/executable-sha256.txt"
+          size "$binary" >"$RUNNER_TEMP/evidence/sections.txt" || true
+          ldd "$binary" >"$RUNNER_TEMP/evidence/ldd.txt" 2>&1 || true
+
+          if [ -d "$stage" ]; then
+            du -sb "$stage" | awk '{print $1}' >"$RUNNER_TEMP/evidence/stage-bytes.txt"
+            find "$stage" -type f | wc -l >"$RUNNER_TEMP/evidence/stage-files.txt"
+            find "$stage" -type f -perm /111 | sort >"$RUNNER_TEMP/evidence/stage-executables.txt"
+          else
+            stat -c '%s' "$stage" >"$RUNNER_TEMP/evidence/stage-bytes.txt"
+            echo 1 >"$RUNNER_TEMP/evidence/stage-files.txt"
+            printf '%s\n' "$stage" >"$RUNNER_TEMP/evidence/stage-executables.txt"
+          fi
+
+          python3 - <<'PY'
+          import json, os, pathlib, re
+          root = pathlib.Path(os.environ["RUNNER_TEMP"]) / "evidence"
+          def read(name, default=""):
+              p = root / name
+              return p.read_text(errors="replace").strip() if p.exists() else default
+          ldd = read("ldd.txt")
+          libs = []
+          for line in ldd.splitlines():
+              m = re.search(r"=>\s+(/\S+)", line)
+              if m:
+                  libs.append(m.group(1))
+              elif line.strip().startswith("/"):
+                  libs.append(line.strip().split()[0])
+          runtime_bytes = 0
+          for lib in sorted(set(libs)):
+              try:
+                  runtime_bytes += os.stat(lib).st_size
+              except OSError:
+                  pass
+          report = {
+              "candidate": os.environ["CANDIDATE"],
+              "executable_bytes": int(read("executable-bytes.txt", "0")),
+              "stage_bytes": int(read("stage-bytes.txt", "0")),
+              "stage_files": int(read("stage-files.txt", "0")),
+              "dynamic_library_count": len(set(libs)),
+              "dynamic_library_file_bytes": runtime_bytes,
+              "binary_description": read("file.txt"),
+              "sha256": read("executable-sha256.txt").split()[0] if read("executable-sha256.txt") else None,
+          }
+          (root / "surface.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+          print(json.dumps(report, indent=2, sort_keys=True))
+          PY
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: print-substrate-${{ matrix.candidate }}-${{ matrix.arch }}
+          path: ${{ runner.temp }}/evidence
+          if-no-files-found: error
+          retention-days: 14
+
+
+  discovery-profile:
+    name: Discovery profile - ${{ matrix.candidate }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        candidate: [cups-minimal, pappl]
+    steps:
+      - name: Checkout FolioRelay
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Install discovery build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            autoconf build-essential pkg-config git ca-certificates curl \
+            libssl-dev zlib1g-dev libcups2-dev cups-client cups-ipp-utils \
+            libavahi-client-dev avahi-daemon avahi-utils dbus \
+            libpng-dev libjpeg-dev
+
+      - name: Start isolated DNS-SD support
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/discovery/evidence"
+          sudo mkdir -p /run/dbus
+          if ! pgrep -x dbus-daemon >/dev/null 2>&1; then
+            sudo dbus-daemon --system --fork
+          fi
+
+          # Package installation can already start Avahi on hosted Ubuntu.
+          # Reuse a healthy daemon; only recover it when the client cannot
+          # reach the system bus/service.
+          if ! avahi-browse -a -t >/dev/null 2>&1; then
+            if command -v systemctl >/dev/null 2>&1; then
+              sudo systemctl restart avahi-daemon \
+                >"$RUNNER_TEMP/discovery/evidence/avahi-start.txt" 2>&1 || true
+            fi
+          fi
+          if ! avahi-browse -a -t >/dev/null 2>&1; then
+            sudo pkill -x avahi-daemon 2>/dev/null || true
+            sudo rm -f /run/avahi-daemon/pid
+            sudo avahi-daemon --daemonize --no-drop-root \
+              >>"$RUNNER_TEMP/discovery/evidence/avahi-start.txt" 2>&1
+          fi
+
+          for i in $(seq 1 20); do
+            if avahi-browse -a -t \
+              >"$RUNNER_TEMP/discovery/evidence/avahi-ready.txt" 2>&1; then
+              exit 0
+            fi
+            sleep 1
+          done
+          sudo avahi-daemon --check \
+            >>"$RUNNER_TEMP/discovery/evidence/avahi-ready.txt" 2>&1 || true
+          exit 1
+
+      - name: Build and launch discovery profile
+        shell: bash
+        env:
+          CANDIDATE: ${{ matrix.candidate }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/discovery/evidence"
+          cd "$RUNNER_TEMP/discovery"
+
+          case "$CANDIDATE" in
+            pappl)
+              git init pappl
+              cd pappl
+              git remote add origin https://github.com/michaelrsweet/pappl.git
+              git fetch --depth 1 origin 6db8e137557ad84662e78d24fdb2a591c621f4ac
+              git checkout --detach FETCH_HEAD
+              test "$(git rev-parse HEAD)" = "6db8e137557ad84662e78d24fdb2a591c621f4ac"
+              ./configure \
+                --with-dnssd=avahi \
+                --with-tls=openssl \
+                --disable-libpam \
+                --disable-libusb \
+                --disable-shared
+              make -j"$(nproc)"
+              cd "$GITHUB_WORKSPACE"
+              cc -D_GNU_SOURCE \
+                -I"$RUNNER_TEMP/discovery/pappl" -I"$RUNNER_TEMP/discovery/pappl/pappl" \
+                $(cups-config --cflags) \
+                -o "$RUNNER_TEMP/discovery/foliorelay-pappl-ingress" \
+                experiments/print-substrate/pappl-ingress.c \
+                "$RUNNER_TEMP/discovery/pappl/pappl/libpappl.a" \
+                $(cups-config --image --libs) \
+                $(pkg-config --libs openssl libjpeg libpng zlib avahi-client) \
+                -lpthread -lm
+
+              mkdir -p "$RUNNER_TEMP/discovery/pappl-spool"
+              FOLIORELAY_INGEST_BIN=/bin/true \
+              FOLIORELAY_PAPPL_SPOOL="$RUNNER_TEMP/discovery/pappl-spool" \
+              FOLIORELAY_PAPPL_PORT=8650 \
+                setpriv --no-new-privs -- "$RUNNER_TEMP/discovery/foliorelay-pappl-ingress" \
+                >"$RUNNER_TEMP/discovery/evidence/server.log" 2>&1 &
+              echo $! >"$RUNNER_TEMP/discovery/evidence/server.pid"
+              uri="ipp://127.0.0.1:8650/ipp/print"
+              expected_port=8650
+              ;;
+
+            cups-minimal)
+              git clone --depth 1 --branch v2.4.19 https://github.com/OpenPrinting/cups.git cups
+              cd cups
+              ./configure \
+                --prefix=/usr \
+                --sysconfdir=/etc \
+                --localstatedir=/var \
+                --with-tls=openssl \
+                --with-dnssd=avahi \
+                --disable-pam \
+                --disable-gssapi \
+                --disable-libusb \
+                --disable-webif \
+                --disable-default-shared \
+                --disable-raw-printing \
+                --with-languages=none \
+                --with-printcap=no \
+                --with-max-copies=1000
+              make -j"$(nproc)"
+              mkdir -p stage
+              make BUILDROOT="$PWD/stage" install
+
+              base="$RUNNER_TEMP/discovery/cups-runtime"
+              mkdir -p "$base"/{bin/backend,bin/daemon,bin/filter,spool/temp,log,ppd,cache}
+              install -m 0755 "$RUNNER_TEMP/discovery/cups/stage/usr/lib/cups/daemon/cups-exec" "$base/bin/daemon/cups-exec"
+              sudo install -o root -g root -m 0555 "$GITHUB_WORKSPACE/experiments/print-substrate/cups-backend.sh" "$base/bin/backend/foliorelay"
+              install -m 0644 "$GITHUB_WORKSPACE/experiments/print-substrate/cups-foliorelay.ppd" "$base/ppd/FolioRelay.ppd"
+              user="$(id -un)"
+              group="$(id -gn)"
+              printf '%s\n' \
+                "User $user" \
+                "Group $group" \
+                "ServerRoot $base" \
+                "StateDir $base" \
+                "ServerBin $base/bin" \
+                "CacheDir $base/cache" \
+                "DataDir $RUNNER_TEMP/discovery/cups/stage/usr/share/cups" \
+                "RequestRoot $base/spool" \
+                "TempDir $base/spool/temp" \
+                "AccessLog $base/log/access_log" \
+                "ErrorLog $base/log/error_log" \
+                "PageLog $base/log/page_log" \
+                "FileDevice No" \
+                "PassEnv FOLIORELAY_INGEST_BIN" \
+                >"$base/cups-files.conf"
+              printf '%s\n' \
+                "StrictConformance Yes" \
+                "Browsing On" \
+                "BrowseLocalProtocols dnssd" \
+                "DefaultShared Yes" \
+                "WebInterface No" \
+                "Listen *:8651" \
+                "PreserveJobFiles Off" \
+                "PreserveJobHistory 10" \
+                "<Location />" \
+                "  Order allow,deny" \
+                "  Allow all" \
+                "</Location>" \
+                "<Location /printers>" \
+                "  Order allow,deny" \
+                "  Allow all" \
+                "</Location>" \
+                "<Policy default>" \
+                "  <Limit All>" \
+                "    Order allow,deny" \
+                "    Allow all" \
+                "  </Limit>" \
+                "</Policy>" \
+                >"$base/cupsd.conf"
+              printf '%s\n' \
+                "<Printer FolioRelay>" \
+                "Accepting Yes" \
+                "DeviceURI foliorelay:/" \
+                "Info FolioRelay Discovery" \
+                "JobSheets none none" \
+                "State Idle" \
+                "StateMessage Ready" \
+                "Shared Yes" \
+                "</Printer>" \
+                >"$base/printers.conf"
+              FOLIORELAY_INGEST_BIN=/bin/true \
+              LD_LIBRARY_PATH="$RUNNER_TEMP/discovery/cups/cups" \
+              CUPS_SERVERROOT="$base" \
+              CUPS_STATEDIR="$base" \
+              CUPS_DATADIR="$RUNNER_TEMP/discovery/cups/stage/usr/share/cups" \
+                setpriv --no-new-privs -- "$RUNNER_TEMP/discovery/cups/scheduler/cupsd" -c "$base/cupsd.conf" -f \
+                >"$RUNNER_TEMP/discovery/evidence/server.log" 2>&1 &
+              echo $! >"$RUNNER_TEMP/discovery/evidence/server.pid"
+              uri="ipp://127.0.0.1:8651/printers/FolioRelay"
+              expected_port=8651
+              ;;
+          esac
+
+          printf '%s\n' "$uri" >"$RUNNER_TEMP/discovery/evidence/uri.txt"
+          printf '%s\n' "$expected_port" >"$RUNNER_TEMP/discovery/evidence/expected-port.txt"
+
+          getattr="$(find /usr/share/cups -type f -name get-printer-attributes.test -print -quit)"
+          test -n "$getattr"
+          for i in $(seq 1 30); do
+            if timeout 5 ipptool -q "$uri" "$getattr"; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/discovery/evidence/server.log" >&2 || true
+          exit 1
+
+      - name: Prove DNS-SD IPP advertisement
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_port="$(cat "$RUNNER_TEMP/discovery/evidence/expected-port.txt")"
+          found=0
+          for i in $(seq 1 30); do
+            set +e
+            timeout 4 avahi-browse -rt _ipp._tcp \
+              >"$RUNNER_TEMP/discovery/evidence/avahi-ipp.txt" 2>&1
+            set -e
+            if grep -q 'FolioRelay' "$RUNNER_TEMP/discovery/evidence/avahi-ipp.txt" &&
+               grep -q "$expected_port" "$RUNNER_TEMP/discovery/evidence/avahi-ipp.txt"; then
+              found=1
+              break
+            fi
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/discovery/evidence/avahi-ipp.txt"
+          test "$found" -eq 1
+
+          set +e
+          timeout 4 avahi-browse -rt _ipps._tcp \
+            >"$RUNNER_TEMP/discovery/evidence/avahi-ipps.txt" 2>&1
+          echo "$?" >"$RUNNER_TEMP/discovery/evidence/avahi-ipps.rc"
+          set -e
+
+          pid="$(cat "$RUNNER_TEMP/discovery/evidence/server.pid")"
+          status="/proc/$pid/status"
+          euid="$(awk '/^Uid:/ {print $3}' "$status")"
+          capeff="$(awk '/^CapEff:/ {print $2}' "$status")"
+          nnp="$(awk '/^NoNewPrivs:/ {print $2}' "$status")"
+          test "$euid" -ne 0
+          python3 - "$capeff" <<'PY'
+          import sys
+          assert int(sys.argv[1], 16) == 0, sys.argv[1]
+          PY
+          test "$nnp" -eq 1
+
+      - name: Stop discovery fixture
+        if: always()
+        shell: bash
+        run: |
+          if [ -f "$RUNNER_TEMP/discovery/evidence/server.pid" ]; then
+            kill "$(cat "$RUNNER_TEMP/discovery/evidence/server.pid")" 2>/dev/null || true
+          fi
+
+      - name: Upload discovery evidence
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: print-substrate-discovery-${{ matrix.candidate }}
+          path: ${{ runner.temp }}/discovery/evidence
+          if-no-files-found: error
+          retention-days: 14
