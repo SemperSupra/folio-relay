@@ -1,0 +1,247 @@
+openapi: 3.1.0
+info:
+  title: FolioRelay MVP API
+  version: 0.1.0
+  description: >
+    Versioned product API shared by the embedded human UI, automation, agents,
+    CI, and HIL validators. Durable FolioRelay state remains the success oracle.
+servers:
+  - url: /
+paths:
+  /healthz:
+    get:
+      operationId: health
+      responses:
+        "204":
+          description: Process is alive.
+  /readyz:
+    get:
+      operationId: readiness
+      responses:
+        "204":
+          description: FolioRelay can admit new jobs.
+        "503":
+          description: Admission is not currently safe.
+  /.well-known/foliorelay:
+    get:
+      operationId: capabilities
+      responses:
+        "200":
+          description: Machine-readable product capabilities.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CapabilityDocument"
+  /api/v1/status:
+    get:
+      operationId: getStatus
+      security: [{bearerAuth: []}]
+      responses:
+        "200":
+          description: Product status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Status"
+  /api/v1/printer:
+    get:
+      operationId: getPrinter
+      security: [{bearerAuth: []}]
+      responses:
+        "200":
+          description: Canonical printer identity and enabled profiles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Printer"
+  /api/v1/jobs:
+    get:
+      operationId: listJobs
+      security: [{bearerAuth: []}]
+      parameters:
+        - in: query
+          name: limit
+          schema: {type: integer, minimum: 1, maximum: 200, default: 50}
+        - in: query
+          name: cursor
+          schema: {type: string}
+      responses:
+        "200":
+          description: Reverse-chronological Inbox page.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: {$ref: "#/components/schemas/InboxRecord"}
+                  next_cursor:
+                    type: [string, "null"]
+  /api/v1/jobs/{job_id}:
+    get:
+      operationId: getJob
+      security: [{bearerAuth: []}]
+      parameters:
+        - in: path
+          name: job_id
+          required: true
+          schema: {type: string}
+      responses:
+        "200":
+          description: Inbox record.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/InboxRecord"}
+        "404": {$ref: "#/components/responses/NotFound"}
+  /api/v1/jobs/{job_id}/artifact:
+    get:
+      operationId: getArtifact
+      security: [{bearerAuth: []}]
+      parameters:
+        - in: path
+          name: job_id
+          required: true
+          schema: {type: string}
+      responses:
+        "200":
+          description: Original accepted source artifact.
+          content:
+            application/octet-stream: {}
+        "404": {$ref: "#/components/responses/NotFound"}
+  /api/v1/self-test:
+    post:
+      operationId: runSelfTest
+      security: [{bearerAuth: []}]
+      responses:
+        "200":
+          description: Structured diagnostic receipt.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SelfTestReceipt"
+  /api/v1/ingest:
+    post:
+      operationId: ingest
+      description: Internal print-adapter contract. Not exposed as a normal user API.
+      security: [{bearerAuth: []}]
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema: {type: string, minLength: 1, maxLength: 512}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/IngestRequest"}
+      responses:
+        "200":
+          description: Accepted or replayed durable job.
+        "409":
+          description: Idempotency conflict.
+        "422":
+          description: Resource policy rejection.
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  responses:
+    NotFound:
+      description: Object not found.
+  schemas:
+    PrinterIdentity:
+      type: object
+      required: [display_name, printer_uuid, scheme, host, port, resource_path]
+      properties:
+        display_name: {type: string}
+        location: {type: string}
+        printer_uuid: {type: string}
+        scheme: {enum: [ipp, ipps]}
+        host: {type: string}
+        port: {type: integer, minimum: 1, maximum: 65535}
+        resource_path: {type: string}
+    CapabilityDocument:
+      type: object
+      required: [product, api_version, status, printer, profiles, links]
+      properties:
+        product: {const: FolioRelay}
+        api_version: {const: v1}
+        status: {enum: [ready, degraded, action-required]}
+        printer: {$ref: "#/components/schemas/PrinterIdentity"}
+        profiles:
+          type: object
+          required: [windows_ipp, airprint]
+          properties:
+            windows_ipp: {type: boolean}
+            airprint: {type: boolean}
+        links:
+          type: object
+          additionalProperties: {type: string}
+    Status:
+      type: object
+      required: [status]
+      properties:
+        status: {enum: [ready, degraded, action-required]}
+        last_successful_print_at: {type: [string, "null"], format: date-time}
+        inbox_jobs: {type: integer, minimum: 0}
+    Printer:
+      type: object
+      required: [identity, profiles]
+      properties:
+        identity: {$ref: "#/components/schemas/PrinterIdentity"}
+        profiles:
+          type: object
+          properties:
+            windows_ipp: {type: boolean}
+            airprint: {type: boolean}
+    InboxRecord:
+      type: object
+      required:
+        [job_id, aggregate_id, accepted_at, state, artifact_sha256,
+         artifact_bytes, media_type, copies, substrate, substrate_job_id]
+      properties:
+        job_id: {type: string}
+        aggregate_id: {type: string}
+        accepted_at: {type: string, format: date-time}
+        state: {enum: [accepted, replayed, rejected, conflict]}
+        artifact_sha256: {type: string}
+        artifact_bytes: {type: integer, minimum: 0}
+        media_type: {type: string}
+        copies: {type: integer, minimum: 1, maximum: 1000}
+        substrate: {type: string}
+        substrate_job_id: {type: string}
+    IngestRequest:
+      type: object
+      additionalProperties: false
+      required:
+        [aggregate_id, semantic_fingerprint, artifact_sha256, artifact_bytes,
+         media_type, substrate, substrate_job_id, copies]
+      properties:
+        aggregate_id: {type: string}
+        semantic_fingerprint: {type: string}
+        artifact_sha256: {type: string}
+        artifact_bytes: {type: integer, minimum: 0}
+        media_type: {type: string}
+        substrate: {type: string}
+        substrate_job_id: {type: string}
+        copies: {type: integer, minimum: 1, maximum: 1000}
+    SelfTestCheck:
+      type: object
+      required: [code, status, message]
+      properties:
+        code: {type: string}
+        status: {enum: [pass, fail, warn, skipped]}
+        message: {type: string}
+        detail: {type: string}
+        remediation: {type: string}
+    SelfTestReceipt:
+      type: object
+      required: [status, checks]
+      properties:
+        status: {enum: [pass, fail, warn]}
+        checks:
+          type: array
+          items: {$ref: "#/components/schemas/SelfTestCheck"}
