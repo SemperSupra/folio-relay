@@ -118,10 +118,23 @@ fi
 "${ui[@]}" snapshot --label bips-printer-added
 adb shell dumpsys print >"$evidence/print-after-bips-add.txt" 2>&1 || true
 adb shell input keyevent KEYCODE_BACK
-sleep 2
+sleep 1
 
-# The selection row must be actionable. android-ui.py's tap command filters out
-# disabled nodes, so this refuses to select a stale STATUS_UNAVAILABLE printer.
+# Returning from BIPS can reveal the PrintSpooler Add printer service chooser
+# that launched it. On the hosted Android 15 flow that chooser is a modal over
+# the still-live All Printers activity, so its window hides the actionable
+# FolioRelay row from UIAutomator even though the row is already present behind
+# it. Dismiss only that chooser if it is still active; do not blindly send a
+# second BACK that could leave All Printers when the chooser already closed.
+if "${ui[@]}" wait contains "Default Print Service" --timeout 3; then
+  "${ui[@]}" snapshot --label add-printer-chooser-returned
+  adb shell input keyevent KEYCODE_BACK
+  sleep 1
+fi
+"${ui[@]}" wait contains "All printers" --timeout 10
+
+# The selection row must be actionable. android-ui.py tap filters disabled
+# nodes, so this refuses to select a stale STATUS_UNAVAILABLE printer.
 "${ui[@]}" snapshot --label all-printers-after-add
 "${ui[@]}" tap contains "FolioRelay" --timeout 30
 adb shell dumpsys print >"$evidence/print-after-live-selection.txt" 2>&1 || true
