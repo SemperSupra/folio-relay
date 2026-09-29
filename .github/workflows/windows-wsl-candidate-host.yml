@@ -146,23 +146,39 @@ jobs:
 
           $wslVmCreatorId = '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}'
           $rulePrefix = "FolioRelay-Native-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
-          $hyperVSetting = Get-NetFirewallHyperVVMSetting -Name $wslVmCreatorId -ErrorAction SilentlyContinue
-          if ($hyperVSetting) {
-            Set-NetFirewallHyperVVMSetting -Name $wslVmCreatorId -LoopbackEnabled True
-          } else {
-            New-NetFirewallHyperVVMSetting -Name $wslVmCreatorId -LoopbackEnabled True | Out-Null
-          }
-          foreach ($port in @(18080,8633)) {
-            $ruleName = "$rulePrefix-$port"
-            Remove-NetFirewallHyperVRule -Name $ruleName -ErrorAction SilentlyContinue
-            New-NetFirewallHyperVRule `
-              -Name $ruleName `
-              -DisplayName "FolioRelay native qualification TCP $port" `
-              -Direction Inbound `
-              -Action Allow `
-              -VMCreatorId $wslVmCreatorId `
-              -Protocol TCP `
-              -LocalPorts $port | Out-Null
+          $hyperVFirewallCommands = @(
+            'Get-NetFirewallHyperVVMSetting',
+            'Set-NetFirewallHyperVVMSetting',
+            'New-NetFirewallHyperVVMSetting',
+            'Remove-NetFirewallHyperVRule',
+            'New-NetFirewallHyperVRule'
+          )
+          $hasHyperVFirewall = @(
+            $hyperVFirewallCommands | Where-Object {
+              -not (Get-Command $_ -ErrorAction SilentlyContinue)
+            }
+          ).Count -eq 0
+          "hyperv_firewall_cmdlets=$hasHyperVFirewall" |
+            Set-Content (Join-Path $evidence 'host-capabilities.txt')
+          if ($hasHyperVFirewall) {
+            $hyperVSetting = Get-NetFirewallHyperVVMSetting -Name $wslVmCreatorId -ErrorAction SilentlyContinue
+            if ($hyperVSetting) {
+              Set-NetFirewallHyperVVMSetting -Name $wslVmCreatorId -LoopbackEnabled True
+            } else {
+              New-NetFirewallHyperVVMSetting -Name $wslVmCreatorId -LoopbackEnabled True | Out-Null
+            }
+            foreach ($port in @(18080,8633)) {
+              $ruleName = "$rulePrefix-$port"
+              Remove-NetFirewallHyperVRule -Name $ruleName -ErrorAction SilentlyContinue
+              New-NetFirewallHyperVRule `
+                -Name $ruleName `
+                -DisplayName "FolioRelay native qualification TCP $port" `
+                -Direction Inbound `
+                -Action Allow `
+                -VMCreatorId $wslVmCreatorId `
+                -Protocol TCP `
+                -LocalPorts $port | Out-Null
+            }
           }
 
           $stateProcess = $null
@@ -308,7 +324,7 @@ jobs:
             }
 
             @{
-              platform = 'windows-2025'
+              platform = '${{ matrix.runner }}'
               native_print_subsystem = 'PrintManagement/Spooler'
               add_printer_parameter = 'IppURL'
               driver = $printer.DriverName
@@ -331,8 +347,10 @@ jobs:
             }
             & wsl.exe --terminate $distro 2>$null | Out-Null
             & wsl.exe --unregister $distro 2>$null | Out-Null
-            foreach ($port in @(18080,8633)) {
-              Remove-NetFirewallHyperVRule -Name "$rulePrefix-$port" -ErrorAction SilentlyContinue
+            if ($hasHyperVFirewall) {
+              foreach ($port in @(18080,8633)) {
+                Remove-NetFirewallHyperVRule -Name "$rulePrefix-$port" -ErrorAction SilentlyContinue
+              }
             }
           }
 
@@ -468,23 +486,39 @@ jobs:
 
           $wslVmCreatorId = '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}'
           $rulePrefix = "FolioRelay-CUPS-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
-          $hyperVSetting = Get-NetFirewallHyperVVMSetting -Name $wslVmCreatorId -ErrorAction SilentlyContinue
-          if ($hyperVSetting) {
-            Set-NetFirewallHyperVVMSetting -Name $wslVmCreatorId -LoopbackEnabled True
-          } else {
-            New-NetFirewallHyperVVMSetting -Name $wslVmCreatorId -LoopbackEnabled True | Out-Null
-          }
-          foreach ($port in @(18080,8634,8635)) {
-            $ruleName = "$rulePrefix-$port"
-            Remove-NetFirewallHyperVRule -Name $ruleName -ErrorAction SilentlyContinue
-            New-NetFirewallHyperVRule `
-              -Name $ruleName `
-              -DisplayName "FolioRelay CUPS native qualification TCP $port" `
-              -Direction Inbound `
-              -Action Allow `
-              -VMCreatorId $wslVmCreatorId `
-              -Protocol TCP `
-              -LocalPorts $port | Out-Null
+          $hyperVFirewallCommands = @(
+            'Get-NetFirewallHyperVVMSetting',
+            'Set-NetFirewallHyperVVMSetting',
+            'New-NetFirewallHyperVVMSetting',
+            'Remove-NetFirewallHyperVRule',
+            'New-NetFirewallHyperVRule'
+          )
+          $hasHyperVFirewall = @(
+            $hyperVFirewallCommands | Where-Object {
+              -not (Get-Command $_ -ErrorAction SilentlyContinue)
+            }
+          ).Count -eq 0
+          "hyperv_firewall_cmdlets=$hasHyperVFirewall" |
+            Set-Content (Join-Path $evidence 'host-capabilities.txt')
+          if ($hasHyperVFirewall) {
+            $hyperVSetting = Get-NetFirewallHyperVVMSetting -Name $wslVmCreatorId -ErrorAction SilentlyContinue
+            if ($hyperVSetting) {
+              Set-NetFirewallHyperVVMSetting -Name $wslVmCreatorId -LoopbackEnabled True
+            } else {
+              New-NetFirewallHyperVVMSetting -Name $wslVmCreatorId -LoopbackEnabled True | Out-Null
+            }
+            foreach ($port in @(18080,8634,8635)) {
+              $ruleName = "$rulePrefix-$port"
+              Remove-NetFirewallHyperVRule -Name $ruleName -ErrorAction SilentlyContinue
+              New-NetFirewallHyperVRule `
+                -Name $ruleName `
+                -DisplayName "FolioRelay CUPS native qualification TCP $port" `
+                -Direction Inbound `
+                -Action Allow `
+                -VMCreatorId $wslVmCreatorId `
+                -Protocol TCP `
+                -LocalPorts $port | Out-Null
+            }
           }
 
           $stateProcess = $null
@@ -624,7 +658,7 @@ jobs:
             }
 
             @{
-              platform = 'windows-2025'
+              platform = '${{ matrix.runner }}'
               native_print_subsystem = 'PrintManagement/Spooler'
               add_printer_parameter = 'IppURL'
               driver = $printer.DriverName
@@ -649,8 +683,10 @@ jobs:
             }
             & wsl.exe --terminate $distro 2>$null | Out-Null
             & wsl.exe --unregister $distro 2>$null | Out-Null
-            foreach ($port in @(18080,8634,8635)) {
-              Remove-NetFirewallHyperVRule -Name "$rulePrefix-$port" -ErrorAction SilentlyContinue
+            if ($hasHyperVFirewall) {
+              foreach ($port in @(18080,8634,8635)) {
+                Remove-NetFirewallHyperVRule -Name "$rulePrefix-$port" -ErrorAction SilentlyContinue
+              }
             }
           }
 
