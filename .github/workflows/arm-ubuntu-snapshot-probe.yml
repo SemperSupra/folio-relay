@@ -24,7 +24,10 @@ jobs:
           docker pull "$image"
           test "$(docker image inspect -f '{{.Architecture}}' "$image")" = arm64
 
-          docker run --rm -e SNAP="$snap" "$image" bash -euxo pipefail -c '
+          test -s /etc/ssl/certs/ca-certificates.crt
+          docker run --rm \
+            -v /etc/ssl/certs/ca-certificates.crt:/etc/ssl/certs/ca-certificates.crt:ro \
+            -e SNAP="$snap" "$image" bash -euxo pipefail -c '
             cat /etc/apt/sources.list.d/ubuntu.sources
 
             cat >/etc/apt/sources.list.d/ubuntu.sources <<EOF
