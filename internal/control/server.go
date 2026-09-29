@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	frapi "github.com/SemperSupra/folio-relay/api"
 	frinbox "github.com/SemperSupra/folio-relay/internal/inbox"
 	frprinter "github.com/SemperSupra/folio-relay/internal/printer"
 	frsecurity "github.com/SemperSupra/folio-relay/internal/security"
@@ -75,8 +76,10 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.HandleFunc("GET /readyz", s.handleReady)
 	mux.HandleFunc("GET /.well-known/foliorelay", s.handleCapabilities)
+	mux.HandleFunc("GET /openapi.yaml", s.handleOpenAPI)
 	mux.Handle("GET /api/v1/status", s.requireAuth(http.HandlerFunc(s.handleStatus)))
 	mux.Handle("GET /api/v1/printer", s.requireAuth(http.HandlerFunc(s.handlePrinter)))
+	mux.Handle("POST /api/v1/self-test", s.requireAuth(http.HandlerFunc(s.handleSelfTest)))
 	mux.Handle("GET /api/v1/jobs", s.requireAuth(http.HandlerFunc(s.handleJobs)))
 	mux.Handle("GET /api/v1/jobs/{job_id}", s.requireAuth(http.HandlerFunc(s.handleJob)))
 	mux.Handle("GET /api/v1/jobs/{job_id}/artifact", s.requireAuth(http.HandlerFunc(s.handleArtifact)))
@@ -121,11 +124,106 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, _ *http.Request) {
 		"printer":     s.printer,
 		"profiles":    s.profiles,
 		"links": map[string]string{
-			"openapi":   "/openapi.json",
+			"openapi":   "/openapi.yaml",
 			"status":    "/api/v1/status",
 			"jobs":      "/api/v1/jobs",
 			"self_test": "/api/v1/self-test",
 		},
+	})
+}
+
+func (s *Server) handleOpenAPI(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/yaml; charset=utf-8")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(frapi.OpenAPI)
+}
+
+type selfTestCheck struct {
+	Code        string `json:"code"`
+	Status      string `json:"status"`
+	Message     string `json:"message"`
+	Detail      string `json:"detail,omitempty"`
+	Remediation string `json:"remediation,omitempty"`
+}
+
+func (s *Server) handleSelfTest(w http.ResponseWriter, _ *http.Request) {
+	checks := make([]selfTestCheck, 0, 4)
+	overall := "pass"
+
+	if err := s.printer.Validate(); err != nil {
+		overall = "fail"
+		checks = append(checks, selfTestCheck{
+			Code: "printer.identity", Status: "fail",
+			Message: "Canonical printer identity is invalid.",
+			Detail: err.Error(),
+			Remediation: "Repair the durable printer identity before admitting print jobs.",
+		})
+	} else {
+		checks = append(checks, selfTestCheck{
+			Code: "printer.identity", Status: "pass",
+			Message: "Canonical printer identity is valid.",
+		})
+	}
+
+	if _, err := frinbox.Project(s.state.Records()); err != nil {
+		overall = "fail"
+		checks = append(checks, selfTestCheck{
+			Code: "state.inbox_projection", Status: "fail",
+			Message: "Durable Inbox projection cannot be reconstructed.",
+			Detail: err.Error(),
+			Remediation: "Preserve the journal and inspect the first invalid durable Inbox record.",
+		})
+	} else {
+		checks = append(checks, selfTestCheck{
+			Code: "state.inbox_projection", Status: "pass",
+			Message: "Durable Inbox projection is reconstructable.",
+		})
+	}
+
+	info, err := os.Stat(s.artifactStore)
+	if err != nil || !info.IsDir() {
+		overall = "fail"
+		detail := "artifact store is not a directory"
+		if err != nil {
+			detail = err.Error()
+		}
+		checks = append(checks, selfTestCheck{
+			Code: "storage.artifact_store", Status: "fail",
+			Message: "Artifact store is unavailable.",
+			Detail: detail,
+			Remediation: "Restore the configured FolioRelay data dataset/mount before accepting jobs.",
+		})
+	} else {
+		checks = append(checks, selfTestCheck{
+			Code: "storage.artifact_store", Status: "pass",
+			Message: "Artifact store is available.",
+		})
+	}
+
+	checks = append(checks, selfTestCheck{
+		Code: "profiles.windows_ipp", Status: "pass",
+		Message: "Windows inbox IPP profile is enabled.",
+	})
+	if s.profiles.AirPrint {
+		checks = append(checks, selfTestCheck{
+			Code: "profiles.airprint", Status: "pass",
+			Message: "AirPrint profile is enabled by qualified configuration.",
+		})
+	} else {
+		checks = append(checks, selfTestCheck{
+			Code: "profiles.airprint", Status: "warn",
+			Message: "AirPrint profile is not yet enabled.",
+			Remediation: "Enable only after the selected substrate passes the AirPrint MVP profile gate.",
+		})
+		if overall == "pass" {
+			overall = "warn"
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status": overall,
+		"checks": checks,
 	})
 }
 
