@@ -1,0 +1,164 @@
+name: Android mDNS Reachability Experiment
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/android-mdns-reachability.yml'
+      - 'experiments/mobile/android-mdns-probe.sh'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android-mdns:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Checkout FolioRelay
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Install DNS-SD support
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends avahi-daemon avahi-utils dbus
+          sudo mkdir -p /run/dbus
+          pgrep -x dbus-daemon >/dev/null 2>&1 || sudo dbus-daemon --system --fork
+          if ! avahi-browse -a -t >/dev/null 2>&1; then
+            sudo systemctl restart avahi-daemon || true
+          fi
+          for i in $(seq 1 20); do
+            avahi-browse -a -t >/dev/null 2>&1 && exit 0
+            sleep 1
+          done
+          exit 1
+
+      - name: Start exact packaged CUPS candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat >"$RUNNER_TEMP/android-cups-mdns-override.yml" <<'YAML'
+          services:
+            cups:
+              ports:
+                - "631:8634"
+          YAML
+          docker compose \
+            -f deploy/engineering-cups/compose.yaml \
+            -f "$RUNNER_TEMP/android-cups-mdns-override.yml" \
+            up -d --build
+          for i in $(seq 1 60); do
+            curl -fsS -o /dev/null http://127.0.0.1:18080/health && break
+            sleep 1
+          done
+          curl -fsS -o /dev/null http://127.0.0.1:18080/health
+          python3 - <<'PY'
+          import socket, time
+          deadline=time.time()+60
+          while time.time() < deadline:
+              try:
+                  with socket.create_connection(("127.0.0.1",631),timeout=1):
+                      break
+              except OSError:
+                  time.sleep(1)
+          else:
+              raise SystemExit("CUPS candidate did not reach host port 631")
+          PY
+
+      - name: Publish exact CUPS discovery projection
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/android-mdns-evidence"
+          mkdir -p "$evidence"
+          service='FolioRelay CUPS Android'
+          avahi-publish-service "$service" _ipp._tcp 631 \
+            'rp=printers/FolioRelay' \
+            'pdl=application/pdf' \
+            'product=(FolioRelay PDF Ingress)' \
+            'ty=FolioRelay PDF Ingress' \
+            'mopria-certified=1.3' \
+            'txtvers=1' \
+            'qtotal=1' \
+            'UUID=4f307ffc-c2ea-3b0d-7376-df0abb3c21d5' \
+            >"$evidence/avahi-publish.log" 2>&1 &
+          echo $! >"$evidence/avahi-publish.pid"
+          for i in $(seq 1 20); do
+            if timeout 3 avahi-browse -rt _ipp._tcp >"$evidence/avahi-browse.txt" 2>&1 &&
+               grep -q "$service" "$evidence/avahi-browse.txt" &&
+               grep -q 'rp=printers/FolioRelay' "$evidence/avahi-browse.txt"; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat "$evidence/avahi-browse.txt" >&2 || true
+          exit 1
+
+      - name: Record host IPv4
+        shell: bash
+        run: |
+          set -euo pipefail
+          host_ipv4="$(ip -4 route get 1.1.1.1 | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')"
+          test -n "$host_ipv4"
+          echo "HOST_IPV4=$host_ipv4" >>"$GITHUB_ENV"
+          echo "$host_ipv4" >"$RUNNER_TEMP/android-mdns-evidence/host-ipv4.txt"
+
+      - name: Enable KVM access
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm || true
+
+      - name: Ask stock Android BIPS to discover the service
+        uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_7
+          cores: 2
+          ram-size: 2048M
+          emulator-boot-timeout: 900
+          script: bash experiments/mobile/android-mdns-probe.sh "$RUNNER_TEMP/android-mdns-evidence" "FolioRelay CUPS Android"
+
+      - name: Capture candidate and DNS-SD evidence
+        if: always()
+        shell: bash
+        run: |
+          evidence="$RUNNER_TEMP/android-mdns-evidence"
+          mkdir -p "$evidence"
+          curl -fsS http://127.0.0.1:18080/v1/stats >"$evidence/stats.json" || true
+          docker compose \
+            -f deploy/engineering-cups/compose.yaml \
+            -f "$RUNNER_TEMP/android-cups-mdns-override.yml" \
+            logs --no-color >"$evidence/candidate.log" 2>&1 || true
+          timeout 4 avahi-browse -rt _ipp._tcp >"$evidence/avahi-final.txt" 2>&1 || true
+
+      - name: Upload experiment evidence
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: android-mdns-reachability
+          path: ${{ runner.temp }}/android-mdns-evidence
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Stop experiment
+        if: always()
+        shell: bash
+        run: |
+          if [ -f "$RUNNER_TEMP/android-mdns-evidence/avahi-publish.pid" ]; then
+            kill "$(cat "$RUNNER_TEMP/android-mdns-evidence/avahi-publish.pid")" 2>/dev/null || true
+          fi
+          docker compose \
+            -f deploy/engineering-cups/compose.yaml \
+            -f "$RUNNER_TEMP/android-cups-mdns-override.yml" \
+            down -v || true
