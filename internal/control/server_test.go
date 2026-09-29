@@ -183,3 +183,55 @@ func testPrinter(t *testing.T) frprinter.Identity {
 	}
 	return identity
 }
+
+func TestOpenAPIAndSelfTestUseSharedProductSurface(t *testing.T) {
+	state, err := frstate.OpenDurableEngine(filepath.Join(t.TempDir(), "journal.frj"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer state.Close()
+	server, err := New(state, t.TempDir(), testToken, testPrinter(t), Profiles{WindowsIPP: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	openapi := httptest.NewRecorder()
+	server.Handler().ServeHTTP(openapi, httptest.NewRequest(http.MethodGet, "/openapi.yaml", nil))
+	if openapi.Code != http.StatusOK || !bytes.Contains(openapi.Body.Bytes(), []byte("openapi: 3.1.0")) {
+		t.Fatalf("OpenAPI surface unavailable: %d %q", openapi.Code, openapi.Body.String())
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/self-test", nil)
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	resp := httptest.NewRecorder()
+	server.Handler().ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("self-test failed: %d %s", resp.Code, resp.Body.String())
+	}
+	var receipt struct {
+		Status string `json:"status"`
+		Checks []struct {
+			Code string `json:"code"`
+			Status string `json:"status"`
+		} `json:"checks"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &receipt); err != nil {
+		t.Fatal(err)
+	}
+	if receipt.Status != "warn" {
+		t.Fatalf("expected pre-AirPrint warning, got %+v", receipt)
+	}
+	seenIdentity := false
+	seenAirPrint := false
+	for _, check := range receipt.Checks {
+		if check.Code == "printer.identity" && check.Status == "pass" {
+			seenIdentity = true
+		}
+		if check.Code == "profiles.airprint" && check.Status == "warn" {
+			seenAirPrint = true
+		}
+	}
+	if !seenIdentity || !seenAirPrint {
+		t.Fatalf("missing structured self-test evidence: %+v", receipt)
+	}
+}
