@@ -168,7 +168,8 @@ jobs:
           test "$(jq -r .conflicts "$evidence/stats-after.json")" = "0"
 
           generated_sha="$(awk '{print $1}' "$evidence/generated-urf.sha256")"
-          stored_sha="$(docker compose             -f deploy/engineering-cups/compose.yaml             -f "$RUNNER_TEMP/airprint-override.yml"             exec -T cups sh -ec 'f="$(find /var/lib/foliorelay-artifacts/sha256 -type f | head -1)"; test -n "$f"; sha256sum "$f" | awk "{print \\$1}"')"
+          stored_line="$(docker compose             -f deploy/engineering-cups/compose.yaml             -f "$RUNNER_TEMP/airprint-override.yml"             exec -T cups sh -ec 'f="$(find /var/lib/foliorelay-artifacts/sha256 -type f | head -1)"; test -n "$f"; sha256sum "$f"')"
+          stored_sha="$(printf '%s\n' "$stored_line" | awk '{print $1}')"
           test "$stored_sha" = "$generated_sha"
           printf '%s\n' "$stored_sha" >"$evidence/stored-urf.sha256"
 
