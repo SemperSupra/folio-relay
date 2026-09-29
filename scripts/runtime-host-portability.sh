@@ -24,6 +24,7 @@ case "$candidate" in
 esac
 
 mkdir -p "$evidence"
+export COMPOSE_PROJECT_NAME=foliorelay-portability
 
 case "$(uname -m)" in
   x86_64) expected_arch="amd64" ;;
@@ -48,7 +49,11 @@ trap cleanup EXIT
 docker version >"$evidence/docker-version.txt"
 docker info >"$evidence/docker-info.txt"
 
-docker compose -f "$compose" up -d --build
+if [ "${FOLIORELAY_PORTABILITY_NO_BUILD:-false}" = "true" ]; then
+  docker compose -f "$compose" up -d --no-build
+else
+  docker compose -f "$compose" up -d --build
+fi
 docker compose -f "$compose" ps -a >"$evidence/compose-ps.txt"
 
 for container_service in state "$service"; do

@@ -23,27 +23,108 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  build-native-bundle:
+    name: build ${{ matrix.candidate }} / ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+            candidate: cups
+            service: cups
+            compose: deploy/engineering-cups/compose.yaml
+          - runner: ubuntu-24.04
+            arch: amd64
+            candidate: pappl
+            service: pappl
+            compose: deploy/engineering-pappl/compose.yaml
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+            candidate: cups
+            service: cups
+            compose: deploy/engineering-cups/compose.yaml
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+            candidate: pappl
+            service: pappl
+            compose: deploy/engineering-pappl/compose.yaml
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    steps:
+      - name: Checkout FolioRelay
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Build one native candidate bundle
+        shell: bash
+        env:
+          COMPOSE_PROJECT_NAME: foliorelay-portability
+        run: |
+          set -euo pipefail
+          docker compose -f "${{ matrix.compose }}" build state "${{ matrix.service }}"
+
+          state_image="foliorelay-portability-state"
+          candidate_image="foliorelay-portability-${{ matrix.service }}"
+          test "$(docker image inspect -f '{{.Architecture}}' "$state_image")" = "${{ matrix.arch }}"
+          test "$(docker image inspect -f '{{.Architecture}}' "$candidate_image")" = "${{ matrix.arch }}"
+
+          mkdir -p "$RUNNER_TEMP/portability-bundle"
+          docker image inspect "$state_image" "$candidate_image" \
+            >"$RUNNER_TEMP/portability-bundle/image-inspect.json"
+          docker save "$state_image" "$candidate_image" \
+            | gzip -1 >"$RUNNER_TEMP/portability-bundle/images.tar.gz"
+          sha256sum "$RUNNER_TEMP/portability-bundle/images.tar.gz" \
+            >"$RUNNER_TEMP/portability-bundle/images.tar.gz.sha256"
+
+      - name: Upload native candidate bundle
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: runtime-portability-images-${{ matrix.arch }}-${{ matrix.candidate }}
+          path: ${{ runner.temp }}/portability-bundle
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0
+
   portability:
+    name: run ${{ matrix.candidate }} on ${{ matrix.runner }}
+    needs: build-native-bundle
     strategy:
       fail-fast: false
       max-parallel: 2
       matrix:
-        runner:
-          - ubuntu-22.04
-          - ubuntu-22.04-arm
-          - ubuntu-24.04
-          - ubuntu-24.04-arm
-          - ubuntu-26.04
-          - ubuntu-26.04-arm
-        candidate:
-          - cups
-          - pappl
+        include:
+          - { runner: ubuntu-22.04,     arch: amd64, candidate: cups }
+          - { runner: ubuntu-22.04,     arch: amd64, candidate: pappl }
+          - { runner: ubuntu-24.04,     arch: amd64, candidate: cups }
+          - { runner: ubuntu-24.04,     arch: amd64, candidate: pappl }
+          - { runner: ubuntu-26.04,     arch: amd64, candidate: cups }
+          - { runner: ubuntu-26.04,     arch: amd64, candidate: pappl }
+          - { runner: ubuntu-22.04-arm, arch: arm64, candidate: cups }
+          - { runner: ubuntu-22.04-arm, arch: arm64, candidate: pappl }
+          - { runner: ubuntu-24.04-arm, arch: arm64, candidate: cups }
+          - { runner: ubuntu-24.04-arm, arch: arm64, candidate: pappl }
+          - { runner: ubuntu-26.04-arm, arch: arm64, candidate: cups }
+          - { runner: ubuntu-26.04-arm, arch: arm64, candidate: pappl }
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 40
-
+    timeout-minutes: 20
     steps:
       - name: Checkout FolioRelay
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Download native candidate bundle
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: runtime-portability-images-${{ matrix.arch }}-${{ matrix.candidate }}
+          path: ${{ runner.temp }}/portability-bundle
+
+      - name: Verify and load native images
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/portability-bundle"
+          sha256sum -c images.tar.gz.sha256
+          gzip -dc images.tar.gz | docker load
 
       - name: Install native IPP probe dependencies
         shell: bash
@@ -56,6 +137,7 @@ jobs:
         shell: bash
         env:
           RUNNER_LABEL: ${{ matrix.runner }}
+          FOLIORELAY_PORTABILITY_NO_BUILD: 'true'
         run: |
           bash scripts/runtime-host-portability.sh \
             "${{ matrix.candidate }}" \
