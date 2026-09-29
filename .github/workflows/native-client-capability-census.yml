@@ -17,8 +17,19 @@ concurrency:
 
 jobs:
   macos-capability:
-    name: macOS 15 native print capability interview
-    runs-on: macos-15
+    name: ${{ matrix.runner }} native print capability interview
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        runner:
+          - macos-14
+          - macos-15
+          - macos-15-intel
+          - macos-26
+          - macos-26-intel
+          - xcode-27
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 10
     steps:
       - name: Checkout FolioRelay
@@ -26,6 +37,8 @@ jobs:
 
       - name: Inventory native printing surface
         shell: bash
+        env:
+          FOLIORELAY_CLIENT_PLATFORM: ${{ matrix.runner }}
         run: |
           set -u
           out="$RUNNER_TEMP/native-client-census"
@@ -69,7 +82,7 @@ jobs:
           printf '%s\n' "$compile_rc" >"$out/cups-compile.rc"
 
           python3 - "$out" <<'PY'
-          import json, pathlib, shutil, subprocess, sys
+          import json, os, pathlib, shutil, subprocess, sys
           out = pathlib.Path(sys.argv[1])
           def command(name):
               return shutil.which(name)
@@ -80,7 +93,7 @@ jobs:
               except Exception as exc:
                   return {"rc":None,"output":repr(exc)}
           result={
-              "platform":"macos-15",
+              "platform":os.environ.get("FOLIORELAY_CLIENT_PLATFORM","unknown"),
               "commands":{name:command(name) for name in ["lp","lpstat","lpadmin","ippfind","ipptool","cups-config","dns-sd"]},
               "lpstat_scheduler":run(["lpstat","-r"]) if command("lpstat") else None,
               "native_cups_header_link_probe_rc":int((out/"cups-compile.rc").read_text().strip()),
@@ -94,14 +107,24 @@ jobs:
         if: always()
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
-          name: native-client-census-macos-15
+          name: native-client-census-${{ matrix.runner }}
           path: ${{ runner.temp }}/native-client-census
           if-no-files-found: error
           retention-days: 14
 
   windows-capability:
-    name: Windows 2025 native print capability interview
-    runs-on: windows-2025
+    name: ${{ matrix.runner }} native print capability interview
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        runner:
+          - windows-2022
+          - windows-2025
+          - windows-2025-vs2026
+          - windows-11-arm
+          - windows-11-vs2026-arm
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 10
     steps:
       - name: Checkout FolioRelay
@@ -109,6 +132,8 @@ jobs:
 
       - name: Inventory native printing surface
         shell: pwsh
+        env:
+          FOLIORELAY_CLIENT_PLATFORM: ${{ matrix.runner }}
         run: |
           $ErrorActionPreference = 'Continue'
           $out = Join-Path $env:RUNNER_TEMP 'native-client-census'
@@ -189,7 +214,7 @@ jobs:
           $hostStrategy.add_printer_has_ipp_url = if ($addPrinter) { $addPrinter.Parameters.ContainsKey('IppURL') } else { $false }
 
           $result = [ordered]@{
-            platform = 'windows-2025'
+            platform = $env:FOLIORELAY_CLIENT_PLATFORM
             os = [ordered]@{
               caption = (Get-CimInstance Win32_OperatingSystem).Caption
               version = [Environment]::OSVersion.VersionString
@@ -216,7 +241,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
-          name: native-client-census-windows-2025
+          name: native-client-census-${{ matrix.runner }}
           path: ${{ runner.temp }}\native-client-census
           if-no-files-found: error
           retention-days: 14
