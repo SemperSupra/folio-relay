@@ -111,15 +111,33 @@ if ! "${ui[@]}" wait text "10.0.2.2" --timeout 4; then
 fi
 "${ui[@]}" tap text "Add" --timeout 15
 
-# A successful BIPS capability exchange makes the manual printer visible in its
-# add-printer activity. Capture that evidence, then return to PrintSpooler's
-# still-active All Printers selector.
-"${ui[@]}" wait contains "FolioRelay" --timeout 45
-"${ui[@]}" snapshot --label bips-printer-added
-adb shell dumpsys print >"$evidence/print-after-bips-add.txt" 2>&1 || true
-adb shell input keyevent KEYCODE_BACK
-sleep 1
+# A successful BIPS Add is authoritative when the real print service reports
+# the printer and capabilities. Android 15 may immediately return from BIPS to
+# PrintSpooler's Add-printer service chooser, so foreground UI text is not a
+# stable success oracle. Poll dumpsys instead and retain every attempt.
+bips_added=0
+for i in $(seq 1 45); do
+  receipt="$evidence/print-after-bips-add-attempt-$(printf '%02d' "$i").txt"
+  adb shell dumpsys print >"$receipt" 2>&1 || true
+  if grep -q 'name=FolioRelay' "$receipt" && grep -q 'status=1' "$receipt"; then
+    cp "$receipt" "$evidence/print-after-bips-add.txt"
+    bips_added=1
+    break
+  fi
+  sleep 1
+done
+if [ "$bips_added" -ne 1 ]; then
+  echo 'BIPS never reported FolioRelay IDLE after Add' >&2
+  exit 1
+fi
+"${ui[@]}" snapshot --label bips-add-return-state
 
+# BIPS can either remain foreground or return automatically. If its activity
+# is still foreground, go back once; otherwise preserve the current chooser.
+if "${ui[@]}" wait contains "Add printer by IP address" --timeout 2; then
+  adb shell input keyevent KEYCODE_BACK
+  sleep 1
+fi
 # Returning from BIPS can reveal the PrintSpooler Add printer service chooser
 # that launched it. On the hosted Android 15 flow that chooser is a modal over
 # the still-live All Printers activity, so its window hides the actionable
