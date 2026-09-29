@@ -131,15 +131,21 @@ def main() -> None:
             x, y = center(node)
             adb("shell", "input", "tap", str(x), str(y))
             time.sleep(0.25)
-        # Some Android/BIPS EditTexts keep the cursor at the beginning even
-        # after KEYCODE_MOVE_END, making backspace a no-op. Try the ordinary
-        # end/backspace path first, then fall back to home/forward-delete based
-        # on the actual remaining text observed from the UI hierarchy.
-        adb("shell", "input", "keyevent", "KEYCODE_MOVE_END")
-        for _ in current:
-            adb("shell", "input", "keyevent", "KEYCODE_DEL")
+        # Android 15/BIPS can consume cursor-motion/delete key events without
+        # changing the field even though the EditText remains focused. Use the
+        # platform input shell's real modifier combination to select all text,
+        # then delete the selection. Preserve the older cursor fallbacks only
+        # as secondary compatibility paths.
+        adb(
+            "shell",
+            "input",
+            "keycombination",
+            "KEYCODE_CTRL_LEFT",
+            "KEYCODE_A",
+        )
+        adb("shell", "input", "keyevent", "KEYCODE_DEL")
 
-        root = snapshot(out, "clear-after-backspace")
+        root = snapshot(out, "clear-after-select-all")
         edits = [
             item for item in nodes(root)
             if item.attrib.get("class", "") == "android.widget.EditText"
@@ -149,6 +155,20 @@ def main() -> None:
             )
         ]
         remaining = edits[0].attrib.get("text", "") if edits else current
+        if remaining:
+            adb("shell", "input", "keyevent", "KEYCODE_MOVE_END")
+            for _ in remaining:
+                adb("shell", "input", "keyevent", "KEYCODE_DEL")
+            root = snapshot(out, "clear-after-backspace")
+            edits = [
+                item for item in nodes(root)
+                if item.attrib.get("class", "") == "android.widget.EditText"
+                and (
+                    args.kind != "res"
+                    or item.attrib.get("resource-id", "") == args.value
+                )
+            ]
+            remaining = edits[0].attrib.get("text", "") if edits else remaining
         if remaining:
             adb("shell", "input", "keyevent", "KEYCODE_MOVE_HOME")
             for _ in remaining:
