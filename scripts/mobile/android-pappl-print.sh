@@ -11,11 +11,41 @@ apk=$2
 ui=(python3 scripts/mobile/android-ui.py --evidence "$evidence/ui")
 mkdir -p "$evidence"
 
+capture_exit() {
+  rc=$?
+  set +e
+  adb shell dumpsys print >"$evidence/print-on-exit.txt" 2>&1
+  adb shell logcat -d -v time >"$evidence/logcat-on-exit.txt" 2>&1
+  if command -v sudo >/dev/null 2>&1; then
+    sudo pkill -INT -x tcpdump >/dev/null 2>&1 || true
+  fi
+  wait >/dev/null 2>&1 || true
+  exit "$rc"
+}
+trap capture_exit EXIT
+
+if command -v tcpdump >/dev/null 2>&1; then
+  sudo tcpdump -l -nn -i any 'tcp port 631' >"$evidence/tcp631.log" 2>&1 &
+fi
+
 adb wait-for-device
 adb install -r "$apk" | tee "$evidence/apk-install.txt"
 adb shell getprop >"$evidence/getprop.txt"
 adb shell dumpsys print >"$evidence/print-before-setup.txt" 2>&1 || true
 adb shell logcat -c || true
+
+{
+  echo "== toybox nc help =="
+  adb shell toybox nc --help || true
+  echo "== ping host alias =="
+  adb shell ping -c 1 -W 2 10.0.2.2 || true
+  echo "== tcp 631 probe =="
+  set +e
+  adb shell 'toybox nc -w 3 10.0.2.2 631 </dev/null'
+  probe_rc=$?
+  set -e
+  echo "tcp_probe_rc=$probe_rc"
+} >"$evidence/android-host-reachability.txt" 2>&1
 
 # The stock BIPS service is the printer bridge under test. Try its privileged
 # add-printer activity directly first; if shell cannot launch that protected
