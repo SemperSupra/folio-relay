@@ -1,6 +1,7 @@
 package inbox
 
 import (
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"strconv"
@@ -10,6 +11,11 @@ import (
 )
 
 const metadataVersion = "1"
+
+func JobID(aggregateID string) string {
+	sum := sha256.Sum256([]byte(aggregateID))
+	return "job-" + hex.EncodeToString(sum[:])
+}
 
 type Record struct {
 	JobID          string    `json:"job_id"`
@@ -76,7 +82,7 @@ func Project(records []frstate.CommitRecord) ([]Record, error) {
 		}
 
 		out = append(out, Record{
-			JobID:          record.Command.AggregateID,
+			JobID:          JobID(record.Command.AggregateID),
 			AggregateID:    record.Command.AggregateID,
 			AcceptedAt:     acceptedAt,
 			State:          "accepted",
