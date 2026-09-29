@@ -70,7 +70,12 @@ if "${ui[@]}" wait contains "Add printer by IP address" --timeout 8; then
   "${ui[@]}" tap contains "Add printer by IP address" --timeout 5
 fi
 
-# BIPS renders 192.168.0.4 as the EditText hint. UIAutomator exposes that\n# hint through the node text attribute even though the field is actually empty,\n# so clearing it would target placeholder text rather than user input.\nadb shell input text '10.0.2.2'\n"${ui[@]}" wait text "10.0.2.2" --timeout 10\n"${ui[@]}" tap text "Add" --timeout 15
+# BIPS renders 192.168.0.4 as the EditText hint. UIAutomator exposes that
+# hint through the node text attribute even though the field is actually empty,
+# so clearing it would target placeholder text rather than user input.
+adb shell input text '10.0.2.2'
+"${ui[@]}" wait text "10.0.2.2" --timeout 10
+"${ui[@]}" tap text "Add" --timeout 15
 
 # BIPS probes standard IPP URIs on port 631. The host maps the real PAPPL
 # candidate to that port for this qualification only.
