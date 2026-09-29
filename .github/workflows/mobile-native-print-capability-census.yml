@@ -511,3 +511,99 @@ jobs:
             -f deploy/engineering-pappl/compose.yaml \
             -f "$RUNNER_TEMP/android-pappl-override.yml" \
             down -v || true
+
+
+  android-cups-native-print:
+    name: Android 15 PrintManager/BIPS -> CUPS
+    needs: android-emulator
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Checkout FolioRelay
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Start real CUPS candidate on Android-reachable IPP port
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat >"$RUNNER_TEMP/android-cups-override.yml" <<'YAML'
+          services:
+            cups:
+              ports:
+                - "631:8634"
+          YAML
+          docker compose \
+            -f deploy/engineering-cups/compose.yaml \
+            -f "$RUNNER_TEMP/android-cups-override.yml" \
+            up -d --build
+
+          for i in $(seq 1 60); do
+            curl -fsS -o /dev/null http://127.0.0.1:18080/health && break
+            sleep 1
+          done
+          curl -fsS -o /dev/null http://127.0.0.1:18080/health
+
+          python3 - <<'PY'
+          import socket, time
+          deadline = time.time() + 60
+          last = None
+          while time.time() < deadline:
+              try:
+                  with socket.create_connection(("127.0.0.1", 631), timeout=1):
+                      break
+              except OSError as error:
+                  last = error
+                  time.sleep(1)
+          else:
+              raise SystemExit(f"CUPS candidate never listened on host port 631: {last}")
+          PY
+
+      - name: Enable KVM access
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm || true
+
+      - name: Print through Android PrintManager and stock BIPS
+        uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_7
+          cores: 2
+          ram-size: 2048M
+          emulator-boot-timeout: 900
+          script: FOLIORELAY_MOBILE_STATE_URL=http://127.0.0.1:18080 bash scripts/mobile/build-android-print-probe.sh "$RUNNER_TEMP/android-cups-build" && FOLIORELAY_MOBILE_STATE_URL=http://127.0.0.1:18080 bash scripts/mobile/android-pappl-print.sh "$RUNNER_TEMP/android-cups-evidence" "$RUNNER_TEMP/android-cups-build/FolioRelayPrintProbe.apk"
+
+      - name: Capture Android CUPS evidence
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/android-cups-evidence"
+          curl -fsS http://127.0.0.1:18080/v1/stats >"$RUNNER_TEMP/android-cups-evidence/stats-final.json" || true
+          docker compose \
+            -f deploy/engineering-cups/compose.yaml \
+            -f "$RUNNER_TEMP/android-cups-override.yml" \
+            logs --no-color >"$RUNNER_TEMP/android-cups-evidence/candidate.log" 2>&1 || true
+
+      - name: Upload Android CUPS evidence
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: android-native-cups
+          path: ${{ runner.temp }}/android-cups-evidence
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Stop Android CUPS runtime
+        if: always()
+        shell: bash
+        run: |
+          docker compose \
+            -f deploy/engineering-cups/compose.yaml \
+            -f "$RUNNER_TEMP/android-cups-override.yml" \
+            down -v || true
