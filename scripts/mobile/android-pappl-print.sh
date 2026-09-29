@@ -8,6 +8,7 @@ fi
 
 evidence=$1
 apk=$2
+state_url=${FOLIORELAY_MOBILE_STATE_URL:-http://127.0.0.1:18081}
 ui=(python3 scripts/mobile/android-ui.py --evidence "$evidence/ui")
 mkdir -p "$evidence"
 
@@ -111,7 +112,7 @@ fi
 "${ui[@]}" snapshot --label printer-added
 adb shell dumpsys print >"$evidence/print-after-add.txt" 2>&1 || true
 
-before="$(curl -fsS http://127.0.0.1:18081/v1/stats)"
+before="$(curl -fsS ${state_url}/v1/stats)"
 printf '%s\n' "$before" >"$evidence/stats-before.json"
 
 adb shell am force-stop org.sempersupra.foliorelay.printprobe || true
@@ -129,7 +130,7 @@ fi
 
 accepted=0
 for _ in $(seq 1 60); do
-  after="$(curl -fsS http://127.0.0.1:18081/v1/stats)"
+  after="$(curl -fsS ${state_url}/v1/stats)"
   b="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["accepted"])' <<<"$before")"
   a="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["accepted"])' <<<"$after")"
   if [ "$a" -gt "$b" ]; then
@@ -139,7 +140,7 @@ for _ in $(seq 1 60); do
   sleep 1
 done
 
-after="$(curl -fsS http://127.0.0.1:18081/v1/stats)"
+after="$(curl -fsS ${state_url}/v1/stats)"
 printf '%s\n' "$after" >"$evidence/stats-after.json"
 adb shell dumpsys print >"$evidence/print-after-job.txt" 2>&1 || true
 adb shell logcat -d -v time >"$evidence/logcat.txt" 2>&1 || true
