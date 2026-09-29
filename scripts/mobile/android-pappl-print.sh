@@ -71,10 +71,38 @@ if "${ui[@]}" wait contains "Add printer by IP address" --timeout 8; then
 fi
 
 # BIPS renders 192.168.0.4 as the EditText hint. UIAutomator exposes that
-# hint through the node text attribute even though the field is actually empty,
-# so clearing it would target placeholder text rather than user input.
-adb shell input text '10.0.2.2'
-"${ui[@]}" wait text "10.0.2.2" --timeout 10
+# hint through the node text attribute even though the field is actually empty.
+# On the hosted emulator, a single fast "input text" lost the leading digit
+# under load (10.0.2.2 -> 0.0.2.2). Type explicit key events with pacing, then
+# verify the exact value before allowing BIPS to probe anything.
+"${ui[@]}" wait res "com.android.bips:id/hostname" --timeout 10
+sleep 1
+
+type_emulator_host() {
+  local key
+  for key in \
+    KEYCODE_1 KEYCODE_0 KEYCODE_PERIOD KEYCODE_0 \
+    KEYCODE_PERIOD KEYCODE_2 KEYCODE_PERIOD KEYCODE_2
+  do
+    adb shell input keyevent "$key"
+    sleep 0.20
+  done
+}
+
+type_emulator_host
+if ! "${ui[@]}" wait text "10.0.2.2" --timeout 4; then
+  # At this point any non-hint content is real typed text, so an ordinary
+  # cursor-to-end/backspace cleanup is earned. If the field is still empty and
+  # only exposing its hint, these deletes are harmless no-ops.
+  adb shell input keyevent KEYCODE_MOVE_END
+  for _ in $(seq 1 16); do
+    adb shell input keyevent KEYCODE_DEL
+    sleep 0.05
+  done
+  sleep 0.5
+  type_emulator_host
+  "${ui[@]}" wait text "10.0.2.2" --timeout 10
+fi
 "${ui[@]}" tap text "Add" --timeout 15
 
 # BIPS probes standard IPP URIs on port 631. The host maps the real PAPPL
