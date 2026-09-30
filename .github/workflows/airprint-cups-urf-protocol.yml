@@ -27,7 +27,8 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends cups-ipp-utils
+          sudo apt-get install -y --no-install-recommends \
+            build-essential libcups2-dev cups-ipp-utils
 
       - name: Prepare externally reachable CUPS identity
         shell: bash
@@ -116,6 +117,7 @@ jobs:
 
           digest="$(sed -n 's/.*accepted artifact sha256:\([0-9a-f]\{64\}\).*/\1/p' "$evidence/cups.log" | tail -1)"
           test -n "$digest"
+          test "$digest" = "$expected"
           printf '%s\n' "$digest" >"$evidence/artifact-sha256.txt"
 
           docker compose             -f deploy/engineering-cups/compose.yaml             -f "$RUNNER_TEMP/airprint-cups-override.yml"             exec -T cups sh -eu -c '

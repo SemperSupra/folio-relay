@@ -9,14 +9,7 @@
   ATTR mimeMediaType document-format image/urf
   GROUP job-attributes-tag
   ATTR integer copies 1
-  GENERATE-FILE {
-    FORMAT image/urf
-    MEDIA iso_a4_210x297mm
-    COLORSPACE sgray_8
-    RESOLUTION 300dpi
-    SIDES one-sided
-    NUM-PAGES 1
-  }
+  FILE $filename
   STATUS successful-ok
   EXPECT job-id
 }
