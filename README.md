@@ -8,6 +8,13 @@ The project is currently being extracted from the Document Gateway candidate in
 and publication target, while FolioRelay owns the runtime, API/ABI contracts,
 portable deployment models, and product-level qualification.
 
+
+FolioRelay's production print substrate is the pinned, minimized upstream CUPS
+runtime. The previously qualified PAPPL implementation is retained as archived
+reference material for interoperability and potential future Printer
+Application/physical-printer-side products; it is not part of normal FolioRelay
+production qualification.
+
 ## Runtime principles
 
 - runtime instances are stateless and disposable;
