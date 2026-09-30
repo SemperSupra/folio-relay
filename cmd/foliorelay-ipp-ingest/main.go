@@ -114,7 +114,13 @@ func main() {
 		url = "http://127.0.0.1:18080"
 	}
 	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Post(url+"/v1/ingest", "application/json", bytes.NewReader(payload))
+	httpReq, err := newStateRequest(
+		url, payload, key, os.Getenv("FOLIORELAY_STATE_TOKEN_FILE"),
+	)
+	if err != nil {
+		fail(err.Error())
+	}
+	resp, err := client.Do(httpReq)
 	if err != nil {
 		fail("state authority unavailable")
 	}
@@ -124,6 +130,29 @@ func main() {
 		fail(fmt.Sprintf("state authority rejected ingest: status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body))))
 	}
 	fmt.Fprintf(os.Stderr, "INFO: FolioRelay accepted artifact sha256:%s (%d bytes)\n", digest, size)
+}
+
+func newStateRequest(url string, payload []byte, key, tokenFile string) (*http.Request, error) {
+	req, err := http.NewRequest(http.MethodPost, url+"/v1/ingest", bytes.NewReader(payload))
+	if err != nil {
+		return nil, errors.New("unable to construct state request")
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if tokenFile == "" {
+		return req, nil
+	}
+
+	rawToken, err := os.ReadFile(tokenFile)
+	if err != nil {
+		return nil, errors.New("state token unavailable")
+	}
+	token := strings.TrimSpace(string(rawToken))
+	if len(token) < 16 || strings.ContainsAny(token, "\r\n\x00") {
+		return nil, errors.New("state token is invalid")
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Idempotency-Key", key)
+	return req, nil
 }
 
 func firstBoundedEnv(max int, required bool, names ...string) (string, error) {

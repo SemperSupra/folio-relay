@@ -1,8 +1,10 @@
 package main
 
 import (
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -84,5 +86,66 @@ func TestStableJobIdentityRequiresInstanceWhenUUIDMissing(t *testing.T) {
 	}
 	if got != "instance-boot-a/job-1" {
 		t.Fatalf("unexpected fallback identity %q", got)
+	}
+}
+
+func TestNewStateRequestAddsBearerAndIdempotencyHeaders(t *testing.T) {
+	tokenFile := filepath.Join(t.TempDir(), "state.token")
+	if err := os.WriteFile(tokenFile, []byte("0123456789abcdef0123456789abcdef\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	req, err := newStateRequest(
+		"http://state:18080",
+		[]byte(`{"ok":true}`),
+		"ingress/cups/job-1",
+		tokenFile,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := req.Header.Get("Authorization"); got != "Bearer 0123456789abcdef0123456789abcdef" {
+		t.Fatalf("unexpected authorization header %q", got)
+	}
+	if got := req.Header.Get("Idempotency-Key"); got != "ingress/cups/job-1" {
+		t.Fatalf("unexpected idempotency header %q", got)
+	}
+	if got := req.Header.Get("Content-Type"); got != "application/json" {
+		t.Fatalf("unexpected content type %q", got)
+	}
+	body, err := io.ReadAll(req.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != `{"ok":true}` {
+		t.Fatalf("request body changed: %q", body)
+	}
+}
+
+func TestNewStateRequestKeepsLegacyFixtureCompatibilityWithoutToken(t *testing.T) {
+	req, err := newStateRequest(
+		"http://state:18080",
+		[]byte("{}"),
+		"legacy-key",
+		"",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := req.Header.Get("Authorization"); got != "" {
+		t.Fatalf("unexpected authorization header %q", got)
+	}
+	if got := req.Header.Get("Idempotency-Key"); got != "" {
+		t.Fatalf("legacy fixture unexpectedly requires header %q", got)
+	}
+}
+
+func TestNewStateRequestRejectsInvalidToken(t *testing.T) {
+	tokenFile := filepath.Join(t.TempDir(), "state.token")
+	if err := os.WriteFile(tokenFile, []byte("short"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := newStateRequest("http://state:18080", []byte("{}"), "key", tokenFile)
+	if err == nil || !strings.Contains(err.Error(), "invalid") {
+		t.Fatalf("expected invalid token error, got %v", err)
 	}
 }
