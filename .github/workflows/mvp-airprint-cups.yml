@@ -54,6 +54,7 @@ jobs:
 
           sudo rm -rf "$root"
           sudo install -d -o 10001 -g 10001 -m 0700             "$root" "$root/product" "$root/artifacts" "$root/cups-state" "$root/cups-spool"
+          sudo install -d -o 10001 -g 10001 -m 0700             "$root/cups-state/ssl" "$root/cups-spool/tmp"
           openssl rand -hex 24 | sudo tee "$root/product/token" >/dev/null
           sudo chown 10001:10001 "$root/product/token"
           sudo chmod 0400 "$root/product/token"
