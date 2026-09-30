@@ -49,3 +49,23 @@ func TestNewRejectsNonPublicIdentity(t *testing.T) {
 		}
 	}
 }
+
+func TestIdentityRejectsControlCharactersInHumanFields(t *testing.T) {
+	cases := []struct {
+		name        string
+		displayName string
+		location    string
+	}{
+		{name: "display newline", displayName: "FolioRelay\nServerName attacker"},
+		{name: "display tab", displayName: "FolioRelay\tInjected"},
+		{name: "location newline", displayName: "FolioRelay", location: "Office\nUUID urn:uuid:00000000-0000-4000-8000-000000000000"},
+		{name: "location delete", displayName: "FolioRelay", location: "Office\x7f"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := New(tc.displayName, tc.location, "ipp://foliorelay.local:8634/printers/FolioRelay"); err == nil {
+				t.Fatal("expected control-character rejection")
+			}
+		})
+	}
+}
