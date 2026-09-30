@@ -9,4 +9,16 @@ fi
 
 export FOLIORELAY_SUBSTRATE_INSTANCE="$(cat "$instance_file")"
 
-exec /usr/sbin/cupsd -f -c /etc/cups/cupsd.conf
+public_host="${FOLIORELAY_PUBLIC_HOST:-localhost}"
+case "$public_host" in
+  ""|*[!A-Za-z0-9.-]*|.*|*..*|*.)
+    echo "ERROR: invalid FOLIORELAY_PUBLIC_HOST: $public_host" >&2
+    exit 64
+    ;;
+esac
+
+runtime_conf=/var/lib/cups/foliorelay-cupsd.conf
+sed "s/__FOLIORELAY_PUBLIC_HOST__/$public_host/g" /etc/cups/cupsd.conf >"$runtime_conf"
+chmod 0600 "$runtime_conf"
+
+exec /usr/sbin/cupsd -f -c "$runtime_conf"
