@@ -1,0 +1,154 @@
+name: AirPrint CUPS URF Protocol Spike
+
+on:
+  pull_request:
+    paths:
+      - 'experiments/airprint/**'
+      - '.github/workflows/airprint-cups-urf-protocol.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cups-urf:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout FolioRelay
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Install IPP client tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cups-ipp-utils
+
+      - name: Prepare externally reachable CUPS identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/airprint-cups-urf"
+          mkdir -p "$evidence"
+
+          host_ipv4="$(ip -4 route get 1.1.1.1 | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')"
+          test -n "$host_ipv4"
+          echo "HOST_IPV4=$host_ipv4" >>"$GITHUB_ENV"
+          printf '%s\n' "$host_ipv4" >"$evidence/host-ipv4.txt"
+
+          sed "s/__PUBLIC_HOST__/$host_ipv4/g"             experiments/airprint/cupsd-airprint.conf.in             >"$RUNNER_TEMP/cupsd-airprint.conf"
+
+          cat >"$RUNNER_TEMP/airprint-cups-override.yml" <<YAML
+          services:
+            cups:
+              ports:
+                - "631:8634"
+              volumes:
+                - "${GITHUB_WORKSPACE}/experiments/airprint/cups-backend-urf.sh:/usr/lib/cups/backend/foliorelay:ro"
+                - "${GITHUB_WORKSPACE}/experiments/airprint/cups-foliorelay-urf.ppd:/etc/cups/ppd/FolioRelay.ppd:ro"
+                - "${RUNNER_TEMP}/cupsd-airprint.conf:/etc/cups/cupsd.conf:ro"
+          YAML
+
+      - name: Start exact packaged CUPS candidate with URF experiment overlay
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose             -f deploy/engineering-cups/compose.yaml             -f "$RUNNER_TEMP/airprint-cups-override.yml"             up -d --build
+
+          getattr="$(find /usr/share/cups -type f -name get-printer-attributes.test -print -quit)"
+          test -n "$getattr"
+          echo "GETATTR=$getattr" >>"$GITHUB_ENV"
+
+          for i in $(seq 1 60); do
+            if curl -fsS -o /dev/null http://127.0.0.1:18080/health &&
+               ipptool -q "ipp://$HOST_IPV4:631/printers/FolioRelay" "$getattr"; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker compose             -f deploy/engineering-cups/compose.yaml             -f "$RUNNER_TEMP/airprint-cups-override.yml"             logs --no-color >&2 || true
+          exit 1
+
+      - name: Prove canonical public URI and URF capability
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/airprint-cups-urf"
+          ipptool -tv             "ipp://$HOST_IPV4:631/printers/FolioRelay"             "$GETATTR" | tee "$evidence/get-printer-attributes.txt"
+
+          grep -F "ipp://$HOST_IPV4:631/printers/FolioRelay"             "$evidence/get-printer-attributes.txt"
+          grep -F "image/urf" "$evidence/get-printer-attributes.txt"
+
+      - name: Submit generated Apple Raster and prove durable acceptance
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/airprint-cups-urf"
+          curl -fsS http://127.0.0.1:18080/v1/stats             | tee "$evidence/stats-before.json"
+          before="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["accepted"])' <"$evidence/stats-before.json")"
+
+          ipptool -tv             "ipp://$HOST_IPV4:631/printers/FolioRelay"             experiments/airprint/print-generated-urf.test             | tee "$evidence/print-generated-urf.txt"
+
+          stats=""
+          for i in $(seq 1 30); do
+            stats="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+            accepted="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["accepted"])' <<<"$stats")"
+            if [ "$accepted" -gt "$before" ]; then
+              break
+            fi
+            sleep 1
+          done
+          printf '%s\n' "$stats" | tee "$evidence/stats-after.json"
+          python3 - "$before" "$evidence/stats-after.json" <<'PY'
+          import json, pathlib, sys
+          before = int(sys.argv[1])
+          after = json.loads(pathlib.Path(sys.argv[2]).read_text())
+          assert after["accepted"] == before + 1, (before, after)
+          assert after["conflicts"] == 0, after
+          PY
+
+          docker compose             -f deploy/engineering-cups/compose.yaml             -f "$RUNNER_TEMP/airprint-cups-override.yml"             logs --no-color cups >"$evidence/cups.log" 2>&1
+
+          digest="$(sed -n 's/.*accepted artifact sha256:\([0-9a-f]\{64\}\).*/\1/p' "$evidence/cups.log" | tail -1)"
+          test -n "$digest"
+          printf '%s\n' "$digest" >"$evidence/artifact-sha256.txt"
+
+          docker compose             -f deploy/engineering-cups/compose.yaml             -f "$RUNNER_TEMP/airprint-cups-override.yml"             exec -T cups sh -eu -c '
+              digest="$1"
+              object="/var/lib/foliorelay-artifacts/sha256/$(printf %.2s "$digest")/$digest"
+              test -s "$object"
+              set -- $(sha256sum "$object")
+              test "$1" = "$digest"
+              magic="$(od -An -tx1 -N8 "$object" | tr -d " \n")"
+              test "$magic" = "554e495241535400"
+              printf "%s\n" "$object"
+            ' sh "$digest" | tee "$evidence/artifact-object.txt"
+
+      - name: Capture evidence
+        if: always()
+        shell: bash
+        run: |
+          evidence="$RUNNER_TEMP/airprint-cups-urf"
+          mkdir -p "$evidence"
+          curl -fsS http://127.0.0.1:18080/v1/stats             >"$evidence/stats-final.json" 2>/dev/null || true
+          docker compose             -f deploy/engineering-cups/compose.yaml             -f "$RUNNER_TEMP/airprint-cups-override.yml"             logs --no-color >"$evidence/compose.log" 2>&1 || true
+
+      - name: Upload AirPrint CUPS URF evidence
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: airprint-cups-urf-protocol
+          path: ${{ runner.temp }}/airprint-cups-urf
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Stop experiment
+        if: always()
+        shell: bash
+        run: |
+          docker compose             -f deploy/engineering-cups/compose.yaml             -f "$RUNNER_TEMP/airprint-cups-override.yml"             down -v || true
