@@ -21,4 +21,4 @@ runtime_conf=/var/lib/cups/foliorelay-cupsd.conf
 sed "s/__FOLIORELAY_PUBLIC_HOST__/$public_host/g" /etc/cups/cupsd.conf >"$runtime_conf"
 chmod 0600 "$runtime_conf"
 
-exec /usr/sbin/cupsd -f -c "$runtime_conf"
+exec /usr/sbin/cupsd -f -c "$runtime_conf" -s /etc/cups/cups-files.conf
