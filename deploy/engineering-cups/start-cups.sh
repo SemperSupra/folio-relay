@@ -10,7 +10,16 @@ fi
 export FOLIORELAY_SUBSTRATE_INSTANCE="$(cat "$instance_file")"
 
 runtime_root=/var/lib/cups/foliorelay-runtime
-mkdir -p "$runtime_root/ppd"
+# Bind-mounted/persistent app storage starts empty on first install. Materialize
+# only the runtime directories CUPS itself requires instead of relying on image
+# contents being copied into a named volume.
+mkdir -p \
+  "$runtime_root/ppd" \
+  "$runtime_root/ssl" \
+  /var/lib/cups/ssl \
+  /var/spool/cups/tmp
+chmod 0700 "$runtime_root/ssl" /var/lib/cups/ssl
+chmod 0750 /var/spool/cups/tmp
 
 if [ -n "${FOLIORELAY_IDENTITY_FILE:-}" ]; then
   wait_seconds="${FOLIORELAY_IDENTITY_WAIT_SECONDS:-60}"
