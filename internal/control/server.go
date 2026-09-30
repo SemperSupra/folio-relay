@@ -1,6 +1,8 @@
 package control
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
@@ -20,6 +22,12 @@ import (
 	frprinter "github.com/SemperSupra/folio-relay/internal/printer"
 	frsecurity "github.com/SemperSupra/folio-relay/internal/security"
 	frstate "github.com/SemperSupra/folio-relay/internal/state"
+	frweb "github.com/SemperSupra/folio-relay/internal/webui"
+)
+
+const (
+	sessionCookieName = "foliorelay_session"
+	sessionLifetime   = 12 * time.Hour
 )
 
 type Profiles struct {
@@ -77,6 +85,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /readyz", s.handleReady)
 	mux.HandleFunc("GET /.well-known/foliorelay", s.handleCapabilities)
 	mux.HandleFunc("GET /openapi.yaml", s.handleOpenAPI)
+	mux.HandleFunc("GET /{$}", s.handleWebIndex)
+	mux.HandleFunc("GET /app.js", s.handleWebAppJS)
+	mux.HandleFunc("GET /style.css", s.handleWebStyle)
+	mux.HandleFunc("POST /auth/session", s.handleCreateSession)
+	mux.HandleFunc("POST /auth/logout", s.handleDeleteSession)
 	mux.Handle("GET /api/v1/status", s.requireAuth(http.HandlerFunc(s.handleStatus)))
 	mux.Handle("GET /api/v1/printer", s.requireAuth(http.HandlerFunc(s.handlePrinter)))
 	mux.Handle("POST /api/v1/self-test", s.requireAuth(http.HandlerFunc(s.handleSelfTest)))
@@ -92,15 +105,117 @@ func (s *Server) Handler() http.Handler {
 
 func (s *Server) requireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if len(got) != len(s.token) ||
-			subtle.ConstantTimeCompare([]byte(got), []byte(s.token)) != 1 {
+		if !s.authorized(r) {
 			w.Header().Set("WWW-Authenticate", "Bearer")
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			writeError(w, http.StatusUnauthorized, "unauthorized", "authentication required")
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func (s *Server) authorized(r *http.Request) bool {
+	const prefix = "Bearer "
+	if header := r.Header.Get("Authorization"); strings.HasPrefix(header, prefix) {
+		got := strings.TrimPrefix(header, prefix)
+		if len(got) == len(s.token) &&
+			subtle.ConstantTimeCompare([]byte(got), []byte(s.token)) == 1 {
+			return true
+		}
+	}
+	cookie, err := r.Cookie(sessionCookieName)
+	return err == nil && s.validSession(cookie.Value, time.Now())
+}
+
+func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10))
+	decoder.DisallowUnknownFields()
+	var body struct {
+		Token string `json:"token"`
+	}
+	if err := decoder.Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "invalid login request")
+		return
+	}
+	if len(body.Token) != len(s.token) ||
+		subtle.ConstantTimeCompare([]byte(body.Token), []byte(s.token)) != 1 {
+		writeError(w, http.StatusUnauthorized, "invalid_credential", "invalid management credential")
+		return
+	}
+	expires := time.Now().Add(sessionLifetime)
+	http.SetCookie(w, &http.Cookie{
+		Name: sessionCookieName, Value: s.sessionValue(expires),
+		Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode,
+		Secure: r.TLS != nil, Expires: expires, MaxAge: int(sessionLifetime.Seconds()),
+	})
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, &http.Cookie{
+		Name: sessionCookieName, Value: "", Path: "/", HttpOnly: true,
+		SameSite: http.SameSiteStrictMode, Secure: r.TLS != nil,
+		MaxAge: -1, Expires: time.Unix(1, 0),
+	})
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) sessionValue(expires time.Time) string {
+	payload := strconv.FormatInt(expires.Unix(), 10)
+	mac := hmac.New(sha256.New, []byte(s.token))
+	_, _ = mac.Write([]byte(payload))
+	return payload + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+func (s *Server) validSession(value string, now time.Time) bool {
+	payload, signature, ok := strings.Cut(value, ".")
+	if !ok || payload == "" || signature == "" {
+		return false
+	}
+	expiresUnix, err := strconv.ParseInt(payload, 10, 64)
+	if err != nil {
+		return false
+	}
+	expires := time.Unix(expiresUnix, 0)
+	if !expires.After(now) || expires.After(now.Add(sessionLifetime+time.Minute)) {
+		return false
+	}
+	got, err := base64.RawURLEncoding.DecodeString(signature)
+	if err != nil {
+		return false
+	}
+	mac := hmac.New(sha256.New, []byte(s.token))
+	_, _ = mac.Write([]byte(payload))
+	return hmac.Equal(got, mac.Sum(nil))
+}
+
+func webSecurityHeaders(w http.ResponseWriter) {
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("X-Frame-Options", "DENY")
+	w.Header().Set("Content-Security-Policy", "default-src 'self'; connect-src 'self'; img-src 'self'; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
+}
+
+func (s *Server) handleWebIndex(w http.ResponseWriter, _ *http.Request) {
+	webSecurityHeaders(w)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = w.Write(frweb.Index)
+}
+
+func (s *Server) handleWebAppJS(w http.ResponseWriter, _ *http.Request) {
+	webSecurityHeaders(w)
+	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	_, _ = w.Write(frweb.AppJS)
+}
+
+func (s *Server) handleWebStyle(w http.ResponseWriter, _ *http.Request) {
+	webSecurityHeaders(w)
+	w.Header().Set("Content-Type", "text/css; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	_, _ = w.Write(frweb.StyleCSS)
 }
 
 func (s *Server) handleReady(w http.ResponseWriter, _ *http.Request) {
