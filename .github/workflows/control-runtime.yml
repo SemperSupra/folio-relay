@@ -114,8 +114,13 @@ jobs:
 
           after="$(jq -r '.identity.printer_uuid' "$evidence/printer-after.json")"
           test "$after" = "$before"
-          test -s "$RUNNER_TEMP/foliorelay-data/config/printer.json"
-          test -s "$RUNNER_TEMP/foliorelay-data/state/journal.frj" || true
+
+          # Persistence is a black-box product property: the UUID must survive
+          # container restart through the mounted data volume. Do not make the
+          # hosted runner traverse FolioRelay's intentionally private UID-10001
+          # state/config directories as an additional oracle.
+          printf '%s\n' "$before" >"$evidence/printer-uuid-before.txt"
+          printf '%s\n' "$after" >"$evidence/printer-uuid-after.txt"
 
       - name: Record runtime surface
         if: always()
