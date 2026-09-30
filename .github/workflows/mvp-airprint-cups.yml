@@ -1,0 +1,219 @@
+name: MVP AirPrint CUPS URF
+
+on:
+  pull_request:
+    paths:
+      - 'experiments/mvp-airprint-cups/**'
+      - '.github/workflows/mvp-airprint-cups.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cups-urf-profile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Setup Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: '1.27.1'
+          cache: false
+
+      - name: Install profile probes
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cups-ipp-utils avahi-daemon avahi-utils dbus
+          sudo mkdir -p /run/dbus
+          pgrep -x dbus-daemon >/dev/null 2>&1 || sudo dbus-daemon --system --fork
+
+      - name: Prepare canonical identity and product authority
+        shell: bash
+        run: |
+          set -euo pipefail
+          host_ipv4="$(ip -4 route get 1.1.1.1 | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')"
+          test -n "$host_ipv4"
+          echo "HOST_IPV4=$host_ipv4" >>"$GITHUB_ENV"
+          echo "PUBLIC_URI=ipp://$host_ipv4:8634/printers/FolioRelay" >>"$GITHUB_ENV"
+
+          mkdir -p "$RUNNER_TEMP/bin" "$RUNNER_TEMP/evidence"
+          CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/bin/foliorelayd" ./cmd/foliorelayd
+
+          sudo install -d -o 10001 -g 10001 -m 0700             "$RUNNER_TEMP/product" "$RUNNER_TEMP/artifacts"             "$RUNNER_TEMP/cups-state" "$RUNNER_TEMP/cups-spool"
+          openssl rand -hex 24 | sudo tee "$RUNNER_TEMP/product/token" >/dev/null
+          sudo chown 10001:10001 "$RUNNER_TEMP/product/token"
+          sudo chmod 0400 "$RUNNER_TEMP/product/token"
+
+          sudo setpriv --reuid=10001 --regid=10001 --clear-groups --             "$RUNNER_TEMP/bin/foliorelayd"               -listen 127.0.0.1:18080               -journal "$RUNNER_TEMP/product/journal.frj"               -artifact-store "$RUNNER_TEMP/artifacts"               -token-file "$RUNNER_TEMP/product/token"               -identity-file "$RUNNER_TEMP/product/printer-identity.json"               -printer-uri "$PUBLIC_URI"               -printer-name FolioRelay               -airprint             >"$RUNNER_TEMP/evidence/foliorelayd.log" 2>&1 &
+          echo $! >"$RUNNER_TEMP/evidence/foliorelayd.pid"
+
+          for i in $(seq 1 30); do
+            curl -fsS -o /dev/null http://127.0.0.1:18080/readyz && exit 0
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/evidence/foliorelayd.log" >&2
+          exit 1
+
+      - name: Build exact packaged CUPS candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build             -f deploy/engineering-cups/Dockerfile             --target cups             -t foliorelay-airprint-cups:ci             .
+
+      - name: Start CUPS with isolated AirPrint profile overlay
+        shell: bash
+        run: |
+          set -euo pipefail
+          sed "s/__PUBLIC_HOST__/$HOST_IPV4/g"             experiments/mvp-airprint-cups/cupsd.conf.in             >"$RUNNER_TEMP/cupsd.conf"
+
+          docker run -d --name foliorelay-airprint-cups             --read-only             --cap-drop ALL             --security-opt no-new-privileges:true             --add-host host.docker.internal:host-gateway             -p 8634:8634             -v "$RUNNER_TEMP/cups-state:/var/lib/cups"             -v "$RUNNER_TEMP/cups-spool:/var/spool/cups"             -v "$RUNNER_TEMP/artifacts:/var/lib/foliorelay-artifacts"             -v "$RUNNER_TEMP/product/token:/run/secrets/foliorelay-token:ro"             -v "$RUNNER_TEMP/cupsd.conf:/etc/cups/cupsd.conf:ro"             -v "$GITHUB_WORKSPACE/experiments/mvp-airprint-cups/cups-files.conf:/etc/cups/cups-files.conf:ro"             -v "$GITHUB_WORKSPACE/experiments/mvp-airprint-cups/cups-foliorelay.ppd:/etc/cups/ppd/FolioRelay.ppd:ro"             -v "$GITHUB_WORKSPACE/experiments/mvp-airprint-cups/cups-backend.sh:/usr/lib/cups/backend/foliorelay:ro"             --tmpfs /var/cache/cups:rw,noexec,nosuid,nodev,size=16m,uid=10001,gid=10001,mode=0750             --tmpfs /var/log/cups:rw,noexec,nosuid,nodev,size=16m,uid=10001,gid=10001,mode=0750             -e FOLIORELAY_STATE_URL=http://host.docker.internal:18080             -e FOLIORELAY_STATE_TOKEN_FILE=/run/secrets/foliorelay-token             -e FOLIORELAY_INGRESS_STORE=/var/lib/foliorelay-artifacts             -e FOLIORELAY_MAX_INGRESS_BYTES=104857600             -e FOLIORELAY_SUBSTRATE_INSTANCE=gha-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}             foliorelay-airprint-cups:ci
+
+          getattr="$(find /usr/share/cups -type f -name get-printer-attributes.test -print -quit)"
+          test -n "$getattr"
+          for i in $(seq 1 60); do
+            ipptool -q "ipp://127.0.0.1:8634/printers/FolioRelay" "$getattr" && exit 0
+            sleep 1
+          done
+          docker logs foliorelay-airprint-cups >&2
+          exit 1
+
+      - name: Prove canonical URI and truthful URF admission
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/evidence"
+          getattr="$(find /usr/share/cups -type f -name get-printer-attributes.test -print -quit)"
+          ipptool -tv "$PUBLIC_URI" "$getattr" | tee "$evidence/get-printer-attributes.txt"
+
+          grep -F "printer-uri-supported" "$evidence/get-printer-attributes.txt" | grep -F "$PUBLIC_URI"
+          grep -F "document-format-supported" "$evidence/get-printer-attributes.txt" | grep -F "image/urf"
+          grep -F "document-format-supported" "$evidence/get-printer-attributes.txt" | grep -F "application/pdf"
+
+      - name: Submit generated Apple Raster and verify durable Inbox artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/evidence"
+          ipptool -tv "$PUBLIC_URI" experiments/mvp-airprint-cups/print-urf.test             | tee "$evidence/print-urf.txt"
+
+          token="$(sudo cat "$RUNNER_TEMP/product/token")"
+          jobs='{}'
+          for i in $(seq 1 30); do
+            jobs="$(curl -fsS -H "Authorization: Bearer $token"               http://127.0.0.1:18080/api/v1/jobs)"
+            count="$(python3 -c 'import json,sys; print(len(json.load(sys.stdin)["items"]))' <<<"$jobs")"
+            [ "$count" -ge 1 ] && break
+            sleep 1
+          done
+          printf '%s\n' "$jobs" >"$evidence/jobs.json"
+
+          python3 - "$evidence/jobs.json" <<'PY'
+          import json, pathlib, sys
+          page=json.loads(pathlib.Path(sys.argv[1]).read_text())
+          assert len(page["items"]) == 1, page
+          job=page["items"][0]
+          assert job["media_type"] == "image/urf", job
+          assert job["artifact_bytes"] > 8, job
+          assert job["state"] == "accepted", job
+          print(job["job_id"])
+          PY
+          job_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["items"][0]["job_id"])' "$evidence/jobs.json")"
+
+          curl -fsS -H "Authorization: Bearer $token"             "http://127.0.0.1:18080/api/v1/jobs/$job_id/artifact"             -o "$evidence/accepted.urf"
+
+          python3 - "$evidence/accepted.urf" <<'PY'
+          import hashlib, pathlib, sys
+          data=pathlib.Path(sys.argv[1]).read_bytes()
+          assert data.startswith(b"UNIRAST"), data[:16]
+          print("sha256="+hashlib.sha256(data).hexdigest())
+          print("bytes="+str(len(data)))
+          PY
+
+      - name: Publish and inspect AirPrint DNS-SD projection
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/evidence"
+          printer_uuid="$(awk '/printer-uuid .* = urn:uuid:/ {print $NF; exit}' "$evidence/get-printer-attributes.txt")"
+          test -n "$printer_uuid"
+          dns_uuid="${printer_uuid#urn:uuid:}"
+
+          sudo tee /etc/avahi/services/foliorelay-airprint.service >/dev/null <<EOF
+          <?xml version="1.0" standalone='no'?><!--*-nxml-*-->
+          <!DOCTYPE service-group SYSTEM "avahi-service.dtd">
+          <service-group>
+            <name replace-wildcards="no">FolioRelay AirPrint CI</name>
+            <service>
+              <type>_ipp._tcp</type>
+              <subtype>_universal._sub._ipp._tcp</subtype>
+              <port>8634</port>
+              <txt-record>rp=printers/FolioRelay</txt-record>
+              <txt-record>pdl=application/pdf,image/urf</txt-record>
+              <txt-record>URF=W8,RS300</txt-record>
+              <txt-record>ty=FolioRelay Virtual Printer</txt-record>
+              <txt-record>product=(FolioRelay Virtual Printer)</txt-record>
+              <txt-record>txtvers=1</txt-record>
+              <txt-record>qtotal=1</txt-record>
+              <txt-record>UUID=$dns_uuid</txt-record>
+            </service>
+          </service-group>
+          EOF
+          sudo systemctl restart avahi-daemon
+
+          found=0
+          for i in $(seq 1 20); do
+            timeout 4 avahi-browse -rt _ipp._tcp >"$evidence/avahi.txt" 2>&1 || true
+            if grep -q "FolioRelay AirPrint CI" "$evidence/avahi.txt" &&
+               grep -q "UUID=$dns_uuid" "$evidence/avahi.txt" &&
+               grep -q "rp=printers/FolioRelay" "$evidence/avahi.txt" &&
+               grep -q "pdl=application/pdf,image/urf" "$evidence/avahi.txt" &&
+               grep -q "URF=W8,RS300" "$evidence/avahi.txt"; then
+              found=1
+              break
+            fi
+            sleep 1
+          done
+          test "$found" -eq 1
+
+          timeout 4 avahi-browse -rt _universal._sub._ipp._tcp             >"$evidence/avahi-universal.txt" 2>&1 || true
+          grep -q "FolioRelay AirPrint CI" "$evidence/avahi-universal.txt"
+
+      - name: Capture candidate logs and self-test
+        if: always()
+        shell: bash
+        run: |
+          evidence="$RUNNER_TEMP/evidence"
+          mkdir -p "$evidence"
+          token="$(sudo cat "$RUNNER_TEMP/product/token" 2>/dev/null || true)"
+          if [ -n "$token" ]; then
+            curl -fsS -X POST -H "Authorization: Bearer $token"               http://127.0.0.1:18080/api/v1/self-test               >"$evidence/self-test.json" || true
+            curl -fsS http://127.0.0.1:18080/.well-known/foliorelay               >"$evidence/capabilities.json" || true
+          fi
+          docker logs foliorelay-airprint-cups >"$evidence/cups.log" 2>&1 || true
+
+      - name: Upload AirPrint CUPS evidence
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: mvp-airprint-cups
+          path: ${{ runner.temp }}/evidence
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Cleanup
+        if: always()
+        shell: bash
+        run: |
+          docker rm -f foliorelay-airprint-cups 2>/dev/null || true
+          if [ -f "$RUNNER_TEMP/evidence/foliorelayd.pid" ]; then
+            sudo kill "$(cat "$RUNNER_TEMP/evidence/foliorelayd.pid")" 2>/dev/null || true
+          fi

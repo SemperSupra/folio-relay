@@ -1,0 +1,38 @@
+StrictConformance Yes
+Browsing Off
+WebInterface No
+DefaultShared No
+DefaultAuthType None
+ServerName __PUBLIC_HOST__
+ServerAlias __PUBLIC_HOST__
+Listen 0.0.0.0:8634
+SSLListen 0.0.0.0:8635
+SSLOptions MinTLS1.2
+MaxLogSize 0
+LogLevel debug2
+ErrorPolicy retry-job
+JobRetryInterval 1
+JobRetryLimit 10
+PreserveJobFiles Off
+PreserveJobHistory 30
+
+<Location />
+  Order deny,allow
+  Deny all
+</Location>
+
+<Location /printers/FolioRelay>
+  Order allow,deny
+  Allow all
+</Location>
+
+<Policy default>
+  <Limit Print-Job Validate-Job Create-Job Send-Document Cancel-Job Get-Job-Attributes Get-Jobs Get-Printer-Attributes Close-Job>
+    Order allow,deny
+    Allow all
+  </Limit>
+  <Limit All>
+    Order deny,allow
+    Deny all
+  </Limit>
+</Policy>
