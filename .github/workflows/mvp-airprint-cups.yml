@@ -88,7 +88,12 @@ jobs:
             ipptool -q "ipp://127.0.0.1:8634/printers/FolioRelay" "$getattr" && exit 0
             sleep 1
           done
-          docker logs foliorelay-airprint-cups >&2
+          docker inspect foliorelay-airprint-cups >"$RUNNER_TEMP/evidence/cups-container-inspect.json" 2>&1 || true
+          docker logs foliorelay-airprint-cups >"$RUNNER_TEMP/evidence/cups-container-stdout-stderr.log" 2>&1 || true
+          docker cp foliorelay-airprint-cups:/var/log/cups/error_log "$RUNNER_TEMP/evidence/cups-error.log" 2>/dev/null || true
+          docker cp foliorelay-airprint-cups:/var/log/cups/access_log "$RUNNER_TEMP/evidence/cups-access.log" 2>/dev/null || true
+          cat "$RUNNER_TEMP/evidence/cups-container-stdout-stderr.log" >&2 || true
+          cat "$RUNNER_TEMP/evidence/cups-error.log" >&2 || true
           exit 1
 
       - name: Prove canonical URI and truthful URF admission
@@ -202,7 +207,10 @@ jobs:
             curl -fsS -X POST -H "Authorization: Bearer $token"               http://127.0.0.1:18080/api/v1/self-test               >"$evidence/self-test.json" || true
             curl -fsS http://127.0.0.1:18080/.well-known/foliorelay               >"$evidence/capabilities.json" || true
           fi
+          docker inspect foliorelay-airprint-cups >"$evidence/cups-container-inspect.json" 2>&1 || true
           docker logs foliorelay-airprint-cups >"$evidence/cups.log" 2>&1 || true
+          docker cp foliorelay-airprint-cups:/var/log/cups/error_log "$evidence/cups-error.log" 2>/dev/null || true
+          docker cp foliorelay-airprint-cups:/var/log/cups/access_log "$evidence/cups-access.log" 2>/dev/null || true
 
       - name: Upload AirPrint CUPS evidence
         if: always()
