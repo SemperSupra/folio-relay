@@ -25,7 +25,8 @@ concurrency:
 
 jobs:
   native-pappl:
-    name: macOS 15 native CUPS client -> PAPPL
+    name: macOS 15 native CUPS client -> PAPPL (archived reference)
+    if: github.event_name == 'workflow_dispatch'
     runs-on: macos-15
     timeout-minutes: 25
     steps:
