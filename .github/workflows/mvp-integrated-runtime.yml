@@ -87,6 +87,8 @@ jobs:
           docker inspect mvp-cups-1 >"$evidence/cups-container-inspect.json" 2>/dev/null || true
           sudo find "$FOLIORELAY_DATA_ROOT/cups-state" "$FOLIORELAY_DATA_ROOT/cups-spool"             -maxdepth 4 -printf '%M %u:%g %p\n' >"$evidence/cups-filesystem.txt" 2>&1 || true
           sudo cp -a "$FOLIORELAY_DATA_ROOT/cups-state/." "$evidence/cups-state/" 2>/dev/null || true
+          sudo chown -R "$(id -u):$(id -g)" "$evidence" 2>/dev/null || true
+          chmod -R u+rwX "$evidence" 2>/dev/null || true
           cat "$RUNNER_TEMP/ipp-attrs.txt" || true
           exit 1
 
