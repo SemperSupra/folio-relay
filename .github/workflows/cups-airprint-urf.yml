@@ -177,8 +177,11 @@ jobs:
           test "$magic" = "UNIRAST"
           printf '%s\n' "$magic" >"$evidence/artifact-magic.txt"
 
+          # Keep runtime logs as supporting evidence, but do not use backend
+          # stderr routing as an acceptance oracle. The authoritative gate is
+          # successful image/urf Print-Job + durable acceptance + exact
+          # generated/stored SHA equality + UNIRAST signature.
           docker compose             -f deploy/engineering-cups/compose.yaml             -f "$RUNNER_TEMP/airprint-override.yml"             logs --no-color >"$evidence/candidate.log" 2>&1
-          grep -q 'FolioRelay AirPrint qualification media_type=image/urf' "$evidence/candidate.log"
 
       - name: Upload AirPrint protocol evidence
         if: always()
