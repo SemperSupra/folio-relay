@@ -64,17 +64,11 @@ supported_mvp_topology:
   libcups_3_client_generation: post-mvp
   chromeos: post-mvp
 
-selection_boundary:
-  print_substrate_candidates:
-    - cups-minimal
-    - pappl
-  human_selection_required: true
-  selection_must_consider:
-    - windows_mvp_pass
-    - airprint_mvp_pass
-    - truenas_discovery_complexity
-    - folio_relay_owned_glue
-    - duplicate_authority
-    - runtime_surface
-    - restart_safety
-    - maintenance_path
+production_substrate:
+  selected: cups-minimal
+  selected_at: 2026-09-30
+  human_selection_complete: true
+  pappl_status: archived-reference
+  pappl_future_role:
+    - interoperability-oracle
+    - future-printer-application-product-reference
