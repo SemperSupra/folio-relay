@@ -80,10 +80,10 @@ func LoadOrCreate(path, displayName, location, publicURI string) (Identity, erro
 }
 
 func (i Identity) Validate() error {
-	if i.DisplayName == "" || len(i.DisplayName) > 127 {
+	if i.DisplayName == "" || len(i.DisplayName) > 127 || containsControl(i.DisplayName) {
 		return errors.New("invalid printer display name")
 	}
-	if len(i.Location) > 255 {
+	if len(i.Location) > 255 || containsControl(i.Location) {
 		return errors.New("invalid printer location")
 	}
 	if !uuidPattern.MatchString(i.PrinterUUID) {
@@ -200,4 +200,13 @@ func persist(path string, identity Identity) error {
 		_ = dir.Close()
 	}
 	return nil
+}
+
+func containsControl(value string) bool {
+	for _, r := range value {
+		if r < 0x20 || r == 0x7f {
+			return true
+		}
+	}
+	return false
 }
