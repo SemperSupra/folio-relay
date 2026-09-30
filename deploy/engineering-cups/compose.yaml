@@ -36,7 +36,6 @@ services:
       - cups-spool:/var/spool/cups
       - artifacts:/var/lib/foliorelay-artifacts
     tmpfs:
-      - /run/cups:rw,noexec,nosuid,nodev,size=4m,uid=10001,gid=10001,mode=0750
       - /var/cache/cups:rw,noexec,nosuid,nodev,size=16m,uid=10001,gid=10001,mode=0750
       - /var/log/cups:rw,noexec,nosuid,nodev,size=16m,uid=10001,gid=10001,mode=0750
 
