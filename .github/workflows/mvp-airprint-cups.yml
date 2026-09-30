@@ -44,18 +44,21 @@ jobs:
           host_ipv4="$(ip -4 route get 1.1.1.1 | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')"
           test -n "$host_ipv4"
           public_uri="ipp://$host_ipv4:8634/printers/FolioRelay"
+          root="/tmp/foliorelay-airprint-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           echo "HOST_IPV4=$host_ipv4" >>"$GITHUB_ENV"
           echo "PUBLIC_URI=$public_uri" >>"$GITHUB_ENV"
+          echo "AIRPRINT_ROOT=$root" >>"$GITHUB_ENV"
 
           mkdir -p "$RUNNER_TEMP/bin" "$RUNNER_TEMP/evidence"
           CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/bin/foliorelayd" ./cmd/foliorelayd
 
-          sudo install -d -o 10001 -g 10001 -m 0700             "$RUNNER_TEMP/product" "$RUNNER_TEMP/artifacts"             "$RUNNER_TEMP/cups-state" "$RUNNER_TEMP/cups-spool"
-          openssl rand -hex 24 | sudo tee "$RUNNER_TEMP/product/token" >/dev/null
-          sudo chown 10001:10001 "$RUNNER_TEMP/product/token"
-          sudo chmod 0400 "$RUNNER_TEMP/product/token"
+          sudo rm -rf "$root"
+          sudo install -d -o 10001 -g 10001 -m 0700             "$root" "$root/product" "$root/artifacts" "$root/cups-state" "$root/cups-spool"
+          openssl rand -hex 24 | sudo tee "$root/product/token" >/dev/null
+          sudo chown 10001:10001 "$root/product/token"
+          sudo chmod 0400 "$root/product/token"
 
-          sudo setpriv --reuid=10001 --regid=10001 --clear-groups --             "$RUNNER_TEMP/bin/foliorelayd"               -listen 127.0.0.1:18080               -journal "$RUNNER_TEMP/product/journal.frj"               -artifact-store "$RUNNER_TEMP/artifacts"               -token-file "$RUNNER_TEMP/product/token"               -identity-file "$RUNNER_TEMP/product/printer-identity.json"               -printer-uri "$public_uri"               -printer-name FolioRelay               -airprint             >"$RUNNER_TEMP/evidence/foliorelayd.log" 2>&1 &
+          sudo setpriv --reuid=10001 --regid=10001 --clear-groups --             "$RUNNER_TEMP/bin/foliorelayd"               -listen 127.0.0.1:18080               -journal "$root/product/journal.frj"               -artifact-store "$root/artifacts"               -token-file "$root/product/token"               -identity-file "$root/product/printer-identity.json"               -printer-uri "$public_uri"               -printer-name FolioRelay               -airprint             >"$RUNNER_TEMP/evidence/foliorelayd.log" 2>&1 &
           echo $! >"$RUNNER_TEMP/evidence/foliorelayd.pid"
 
           for i in $(seq 1 30); do
@@ -77,7 +80,7 @@ jobs:
           set -euo pipefail
           sed "s/__PUBLIC_HOST__/$HOST_IPV4/g"             experiments/mvp-airprint-cups/cupsd.conf.in             >"$RUNNER_TEMP/cupsd.conf"
 
-          docker run -d --name foliorelay-airprint-cups             --read-only             --cap-drop ALL             --security-opt no-new-privileges:true             --add-host host.docker.internal:host-gateway             -p 8634:8634             -v "$RUNNER_TEMP/cups-state:/var/lib/cups"             -v "$RUNNER_TEMP/cups-spool:/var/spool/cups"             -v "$RUNNER_TEMP/artifacts:/var/lib/foliorelay-artifacts"             -v "$RUNNER_TEMP/product/token:/run/secrets/foliorelay-token:ro"             -v "$RUNNER_TEMP/cupsd.conf:/etc/cups/cupsd.conf:ro"             -v "$GITHUB_WORKSPACE/experiments/mvp-airprint-cups/cups-files.conf:/etc/cups/cups-files.conf:ro"             -v "$GITHUB_WORKSPACE/experiments/mvp-airprint-cups/cups-foliorelay.ppd:/etc/cups/ppd/FolioRelay.ppd:ro"             -v "$GITHUB_WORKSPACE/experiments/mvp-airprint-cups/cups-backend.sh:/usr/lib/cups/backend/foliorelay:ro"             --tmpfs /var/cache/cups:rw,noexec,nosuid,nodev,size=16m,uid=10001,gid=10001,mode=0750             --tmpfs /var/log/cups:rw,noexec,nosuid,nodev,size=16m,uid=10001,gid=10001,mode=0750             -e FOLIORELAY_STATE_URL=http://host.docker.internal:18080             -e FOLIORELAY_STATE_TOKEN_FILE=/run/secrets/foliorelay-token             -e FOLIORELAY_INGRESS_STORE=/var/lib/foliorelay-artifacts             -e FOLIORELAY_MAX_INGRESS_BYTES=104857600             -e FOLIORELAY_SUBSTRATE_INSTANCE=gha-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}             foliorelay-airprint-cups:ci
+          docker run -d --name foliorelay-airprint-cups             --read-only             --cap-drop ALL             --security-opt no-new-privileges:true             --add-host host.docker.internal:host-gateway             -p 8634:8634             -v "$AIRPRINT_ROOT/cups-state:/var/lib/cups"             -v "$AIRPRINT_ROOT/cups-spool:/var/spool/cups"             -v "$AIRPRINT_ROOT/artifacts:/var/lib/foliorelay-artifacts"             -v "$AIRPRINT_ROOT/product/token:/run/secrets/foliorelay-token:ro"             -v "$RUNNER_TEMP/cupsd.conf:/etc/cups/cupsd.conf:ro"             -v "$GITHUB_WORKSPACE/experiments/mvp-airprint-cups/cups-files.conf:/etc/cups/cups-files.conf:ro"             -v "$GITHUB_WORKSPACE/experiments/mvp-airprint-cups/cups-foliorelay.ppd:/etc/cups/ppd/FolioRelay.ppd:ro"             -v "$GITHUB_WORKSPACE/experiments/mvp-airprint-cups/cups-backend.sh:/usr/lib/cups/backend/foliorelay:ro"             --tmpfs /var/cache/cups:rw,noexec,nosuid,nodev,size=16m,uid=10001,gid=10001,mode=0750             --tmpfs /var/log/cups:rw,noexec,nosuid,nodev,size=16m,uid=10001,gid=10001,mode=0750             -e FOLIORELAY_STATE_URL=http://host.docker.internal:18080             -e FOLIORELAY_STATE_TOKEN_FILE=/run/secrets/foliorelay-token             -e FOLIORELAY_INGRESS_STORE=/var/lib/foliorelay-artifacts             -e FOLIORELAY_MAX_INGRESS_BYTES=104857600             -e FOLIORELAY_SUBSTRATE_INSTANCE=gha-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}             foliorelay-airprint-cups:ci
 
           getattr="$(find /usr/share/cups -type f -name get-printer-attributes.test -print -quit)"
           test -n "$getattr"
@@ -107,7 +110,7 @@ jobs:
           evidence="$RUNNER_TEMP/evidence"
           ipptool -tv "$PUBLIC_URI" experiments/mvp-airprint-cups/print-urf.test             | tee "$evidence/print-urf.txt"
 
-          token="$(sudo cat "$RUNNER_TEMP/product/token")"
+          token="$(sudo cat "$AIRPRINT_ROOT/product/token")"
           jobs='{}'
           for i in $(seq 1 30); do
             jobs="$(curl -fsS -H "Authorization: Bearer $token"               http://127.0.0.1:18080/api/v1/jobs)"
@@ -194,7 +197,7 @@ jobs:
         run: |
           evidence="$RUNNER_TEMP/evidence"
           mkdir -p "$evidence"
-          token="$(sudo cat "$RUNNER_TEMP/product/token" 2>/dev/null || true)"
+          token="$(sudo cat "$AIRPRINT_ROOT/product/token" 2>/dev/null || true)"
           if [ -n "$token" ]; then
             curl -fsS -X POST -H "Authorization: Bearer $token"               http://127.0.0.1:18080/api/v1/self-test               >"$evidence/self-test.json" || true
             curl -fsS http://127.0.0.1:18080/.well-known/foliorelay               >"$evidence/capabilities.json" || true
@@ -215,6 +218,9 @@ jobs:
         shell: bash
         run: |
           docker rm -f foliorelay-airprint-cups 2>/dev/null || true
+          if [ -n "${AIRPRINT_ROOT:-}" ]; then
+            sudo rm -rf "$AIRPRINT_ROOT" 2>/dev/null || true
+          fi
           if [ -f "$RUNNER_TEMP/evidence/foliorelayd.pid" ]; then
             sudo kill "$(cat "$RUNNER_TEMP/evidence/foliorelayd.pid")" 2>/dev/null || true
           fi
