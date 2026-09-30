@@ -59,10 +59,10 @@ async function loadOverview() {
   setText("job-count", String(status.inbox_jobs ?? 0));
   setText("last-print", status.last_successful_print_at ? "Last accepted print: " + prettyTime(status.last_successful_print_at) : "No successful prints yet.");
   setText("printer-uri", printer.public_uri);
-  setText("windows-state", printer.profiles?.windows_ipp ? "Ready" : "Unavailable");
-  setText("airprint-state", printer.profiles?.airprint ? "Ready" : "Not enabled");
+  setText("windows-state", printer.profiles?.windows_ipp ? "Enabled" : "Not enabled");
+  setText("airprint-state", printer.profiles?.airprint ? "Enabled" : "Not enabled");
   setText("airprint-help", printer.profiles?.airprint
-    ? "On the supported local LAN, FolioRelay is configured for native AirPrint discovery."
+    ? "AirPrint is configured. Installed-system discovery is verified separately by deployment diagnostics and real-device acceptance."
     : "AirPrint is not enabled in this runtime profile.");
 
   renderPrinter(printer);
