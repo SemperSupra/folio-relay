@@ -9,10 +9,14 @@ WORKDIR /src
 COPY go.mod ./
 COPY cmd/foliorelay-ipp-ingest ./cmd/foliorelay-ipp-ingest
 COPY cmd/foliorelay-state-fixture ./cmd/foliorelay-state-fixture
+COPY cmd/foliorelay-cups-config ./cmd/foliorelay-cups-config
+COPY internal/printer ./internal/printer
 COPY internal/state ./internal/state
 COPY internal/security ./internal/security
-RUN CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/foliorelay-ipp-ingest ./cmd/foliorelay-ipp-ingest \
- && CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/foliorelay-state-fixture ./cmd/foliorelay-state-fixture
+RUN CGO_ENABLED=0 go test ./cmd/foliorelay-cups-config ./internal/printer \
+ && CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/foliorelay-ipp-ingest ./cmd/foliorelay-ipp-ingest \
+ && CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/foliorelay-state-fixture ./cmd/foliorelay-state-fixture \
+ && CGO_ENABLED=0 go build -trimpath -ldflags='-s -w -buildid=' -o /out/foliorelay-cups-config ./cmd/foliorelay-cups-config
 
 FROM ${UBUNTU_BASE} AS cups-build
 ARG UBUNTU_SNAPSHOT
@@ -113,16 +117,17 @@ LABEL org.opencontainers.image.source="https://github.com/OpenPrinting/cups" \
       io.sempersupra.base.go="${GO_BASE}"
 COPY --from=cups-build /runtime/usr/ /usr/
 COPY --from=go-build /out/foliorelay-ipp-ingest /usr/local/bin/foliorelay-ipp-ingest
+COPY --from=go-build /out/foliorelay-cups-config /usr/local/bin/foliorelay-cups-config
 COPY experiments/print-substrate/cups-backend.sh /usr/lib/cups/backend/foliorelay
-COPY experiments/print-substrate/cups-foliorelay.ppd /etc/cups/ppd/FolioRelay.ppd
+COPY experiments/print-substrate/cups-foliorelay.ppd /usr/share/foliorelay/cups/FolioRelay.ppd
+COPY deploy/engineering-cups/cupsd.conf /usr/share/foliorelay/cups/cupsd.conf.template
+COPY deploy/engineering-cups/printers.conf /usr/share/foliorelay/cups/printers.conf.template
 COPY deploy/engineering-cups/cups-files.conf /etc/cups/cups-files.conf
-COPY deploy/engineering-cups/cupsd.conf /etc/cups/cupsd.conf
-COPY deploy/engineering-cups/printers.conf /etc/cups/printers.conf
 COPY deploy/engineering-cups/start-cups.sh /usr/local/bin/start-foliorelay-cups
 RUN chmod 0555 /usr/sbin/cupsd /usr/lib/cups/daemon/cups-exec /usr/lib/cups/filter/gziptoany /usr/lib/cups/backend/foliorelay \
- && chmod 0555 /usr/local/bin/start-foliorelay-cups \
+ && chmod 0555 /usr/local/bin/start-foliorelay-cups /usr/local/bin/foliorelay-cups-config \
  && mkdir -p /var/lib/cups/ssl /var/cache/cups /var/spool/cups/tmp /var/log/cups /var/lib/foliorelay-artifacts \
- && chown -R 10001:10001 /etc/cups /var/lib/cups /var/cache/cups /var/spool/cups /var/log/cups /var/lib/foliorelay-artifacts
+ && chown -R 10001:10001 /var/lib/cups /var/cache/cups /var/spool/cups /var/log/cups /var/lib/foliorelay-artifacts
 ENV LD_LIBRARY_PATH=/usr/lib/foliorelay-cups:/usr/lib \
     FOLIORELAY_INGEST_BIN=/usr/local/bin/foliorelay-ipp-ingest \
     FOLIORELAY_STATE_URL=http://state:18080 \
