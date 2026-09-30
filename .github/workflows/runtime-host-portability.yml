@@ -9,7 +9,6 @@ on:
       - 'internal/security/**'
       - 'experiments/print-substrate/**'
       - 'deploy/engineering-cups/**'
-      - 'deploy/engineering-pappl/**'
       - 'scripts/make-probe-pdf.py'
       - 'scripts/runtime-host-portability.sh'
       - '.github/workflows/runtime-host-portability.yml'
@@ -35,21 +34,11 @@ jobs:
             candidate: cups
             service: cups
             compose: deploy/engineering-cups/compose.yaml
-          - runner: ubuntu-24.04
-            arch: amd64
-            candidate: pappl
-            service: pappl
-            compose: deploy/engineering-pappl/compose.yaml
           - runner: ubuntu-24.04-arm
             arch: arm64
             candidate: cups
             service: cups
             compose: deploy/engineering-cups/compose.yaml
-          - runner: ubuntu-24.04-arm
-            arch: arm64
-            candidate: pappl
-            service: pappl
-            compose: deploy/engineering-pappl/compose.yaml
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 40
     steps:
@@ -104,17 +93,11 @@ jobs:
       matrix:
         include:
           - { runner: ubuntu-22.04,     arch: amd64, candidate: cups }
-          - { runner: ubuntu-22.04,     arch: amd64, candidate: pappl }
           - { runner: ubuntu-24.04,     arch: amd64, candidate: cups }
-          - { runner: ubuntu-24.04,     arch: amd64, candidate: pappl }
           - { runner: ubuntu-26.04,     arch: amd64, candidate: cups }
-          - { runner: ubuntu-26.04,     arch: amd64, candidate: pappl }
           - { runner: ubuntu-22.04-arm, arch: arm64, candidate: cups }
-          - { runner: ubuntu-22.04-arm, arch: arm64, candidate: pappl }
           - { runner: ubuntu-24.04-arm, arch: arm64, candidate: cups }
-          - { runner: ubuntu-24.04-arm, arch: arm64, candidate: pappl }
           - { runner: ubuntu-26.04-arm, arch: arm64, candidate: cups }
-          - { runner: ubuntu-26.04-arm, arch: arm64, candidate: pappl }
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     steps:

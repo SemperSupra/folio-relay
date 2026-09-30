@@ -418,8 +418,9 @@ jobs:
           retention-days: 14
 
   android-pappl-native-print:
-    name: Android 15 PrintManager/BIPS -> PAPPL
+    name: Android 15 PrintManager/BIPS -> PAPPL (archived reference)
     needs: android-emulator
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     steps:

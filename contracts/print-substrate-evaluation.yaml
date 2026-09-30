@@ -73,7 +73,7 @@ candidates:
       cap_drop_all: pass
       no_new_privileges: pass
       explicit_writable_paths: pass
-    production_status: active-candidate
+    production_status: selected-production
     authority_outage_policy:
       upstream_error_policy: retry-job
       qualification_retry_interval_seconds: 1
@@ -117,7 +117,9 @@ candidates:
       explicit_writable_paths: pass
       source_identity_restart_continuity: pass
       projection_state_load_failure: fail-closed
-    production_status: active-candidate
+    production_status: archived-reference
+    retained_role: future-printer-application-and-interoperability-reference
+    automatic_qualification: disabled
     concurrency_observations:
       - clients: 25
         requests_per_client: 100
@@ -515,6 +517,10 @@ selection_characterization:
     only_installed_backend: /usr/lib/cups/backend/foliorelay
 
 selection:
-  rule: smallest-upstream-maintained-substrate-that-passes-all-required-gates
+  status: complete
+  selected_candidate: cups-minimal
+  selected_at: 2026-09-30
+  rule: complete-foliorelay-product-with-least-foliorelay-owned-work
   size_alone_can_select: false
   permanent_source_fork_is_veto: true
+  pappl_disposition: archived-reference

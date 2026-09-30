@@ -1,19 +1,6 @@
-name: Print Substrate Bakeoff
+name: Print Substrate Bakeoff (archived reference)
 
 on:
-  pull_request:
-    paths:
-      - 'docs/ADR-PRINT-SUBSTRATE.md'
-      - 'docs/RED_BLUE_PRINT_SUBSTRATE.md'
-      - 'contracts/print-substrate-evaluation.yaml'
-      - '.github/workflows/print-substrate-bakeoff.yml'
-  push:
-    branches: [main]
-    paths:
-      - 'docs/ADR-PRINT-SUBSTRATE.md'
-      - 'docs/RED_BLUE_PRINT_SUBSTRATE.md'
-      - 'contracts/print-substrate-evaluation.yaml'
-      - '.github/workflows/print-substrate-bakeoff.yml'
   workflow_dispatch:
 
 permissions:
