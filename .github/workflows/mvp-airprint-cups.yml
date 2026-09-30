@@ -43,8 +43,9 @@ jobs:
           set -euo pipefail
           host_ipv4="$(ip -4 route get 1.1.1.1 | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')"
           test -n "$host_ipv4"
+          public_uri="ipp://$host_ipv4:8634/printers/FolioRelay"
           echo "HOST_IPV4=$host_ipv4" >>"$GITHUB_ENV"
-          echo "PUBLIC_URI=ipp://$host_ipv4:8634/printers/FolioRelay" >>"$GITHUB_ENV"
+          echo "PUBLIC_URI=$public_uri" >>"$GITHUB_ENV"
 
           mkdir -p "$RUNNER_TEMP/bin" "$RUNNER_TEMP/evidence"
           CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/bin/foliorelayd" ./cmd/foliorelayd
