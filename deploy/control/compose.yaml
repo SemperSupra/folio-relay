@@ -1,0 +1,35 @@
+services:
+  control:
+    build:
+      context: ../..
+      dockerfile: deploy/control/Dockerfile
+    image: foliorelay-control
+    user: "10001:10001"
+    ports:
+      - "18080:18080"
+    volumes:
+      - control-data:/var/lib/foliorelay
+      - ./dev-token:/run/secrets/foliorelay.token:ro
+    command:
+      - --listen
+      - 0.0.0.0:18080
+      - --journal
+      - /var/lib/foliorelay/state/journal.frj
+      - --artifact-store
+      - /var/lib/foliorelay/artifacts
+      - --token-file
+      - /run/secrets/foliorelay.token
+      - --identity-file
+      - /var/lib/foliorelay/config/printer.json
+      - --printer-uri
+      - ipp://foliorelay.local:8634/printers/FolioRelay
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  control-data:
