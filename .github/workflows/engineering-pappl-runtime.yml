@@ -1,19 +1,6 @@
-name: Engineering PAPPL Runtime
+name: Engineering PAPPL Runtime (archived reference)
 
 on:
-  pull_request:
-    paths:
-      - 'cmd/foliorelay-ipp-ingest/**'
-      - 'cmd/foliorelay-state-fixture/**'
-      - 'internal/state/**'
-      - 'experiments/print-substrate/pappl-ingress.c'
-      - 'deploy/engineering-pappl/**'
-      - 'scripts/measure-runtime-surface.sh'
-      - 'scripts/measure-runtime-startup.sh'
-      - 'scripts/measure-selection-maintenance.py'
-      - 'scripts/make-probe-pdf.py'
-      - 'experiments/print-substrate/native-libcups-client.c'
-      - '.github/workflows/engineering-pappl-runtime.yml'
   workflow_dispatch:
 
 permissions:
