@@ -5,13 +5,14 @@
 *LanguageEncoding: ISOLatin1
 *PCFileName: "FOLIORLY.PPD"
 *Manufacturer: "FolioRelay"
-*Product: "(FolioRelay PDF Ingress)"
-*ModelName: "FolioRelay PDF Ingress"
-*ShortNickName: "FolioRelay PDF Ingress"
-*NickName: "FolioRelay PDF Ingress"
+*Product: "(FolioRelay Virtual Printer)"
+*ModelName: "FolioRelay Virtual Printer"
+*ShortNickName: "FolioRelay Virtual Printer"
+*NickName: "FolioRelay Virtual Printer"
 *cupsVersion: 2.4
 *cupsManualCopies: True
 *cupsFilter2: "application/pdf application/pdf 0 -"
+*cupsFilter2: "image/urf image/urf 0 -"
 
 *OpenUI *PageSize/Media Size: PickOne
 *OrderDependency: 10 AnySetup *PageSize
