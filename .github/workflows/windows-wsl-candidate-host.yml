@@ -483,7 +483,7 @@ jobs:
             & wsl.exe --import $distro $install $rootfs --version 2
             if ($LASTEXITCODE -ne 0) { throw "wsl --import failed rc=$LASTEXITCODE" }
 
-            & wsl.exe -d $distro -- sh -c 'mkdir -p /run/cups /var/lib/cups/ssl /var/cache/cups /var/spool/cups/tmp /var/log/cups /var/lib/foliorelay-artifacts /tmp/foliorelay-state; chown -R 10001:10001 /run/cups /var/lib/cups /var/cache/cups /var/spool/cups /var/log/cups /var/lib/foliorelay-artifacts /tmp/foliorelay-state'
+            & wsl.exe -d $distro -- sh -c 'mkdir -p /var/lib/cups/ssl /var/cache/cups /var/spool/cups/tmp /var/log/cups /var/lib/foliorelay-artifacts /tmp/foliorelay-state; chown -R 10001:10001 /var/lib/cups /var/cache/cups /var/spool/cups /var/log/cups /var/lib/foliorelay-artifacts /tmp/foliorelay-state'
             if ($LASTEXITCODE -ne 0) { throw "unable to prepare CUPS writable paths" }
 
             & wsl.exe -d $distro -- uname -a |
