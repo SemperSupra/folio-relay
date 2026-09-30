@@ -74,7 +74,7 @@ func render(identityPath, cupsdTemplate, printersTemplate, ppdSource, outputRoot
 		return fmt.Errorf("read PPD source: %w", err)
 	}
 
-	cupsd, err := replaceExactlyOnce(string(cupsdRaw), "__FOLIORELAY_PUBLIC_HOST__", identity.Host)
+	cupsd, err := replaceRequired(string(cupsdRaw), "__FOLIORELAY_PUBLIC_HOST__", identity.Host)
 	if err != nil {
 		return fmt.Errorf("render cupsd template: %w", err)
 	}
@@ -117,6 +117,13 @@ func loadIdentity(path string) (frprinter.Identity, error) {
 		return frprinter.Identity{}, fmt.Errorf("validate printer identity: %w", err)
 	}
 	return identity, nil
+}
+
+func replaceRequired(input, marker, value string) (string, error) {
+	if strings.Count(input, marker) < 1 {
+		return "", fmt.Errorf("expected at least one %s marker", marker)
+	}
+	return strings.ReplaceAll(input, marker, value), nil
 }
 
 func replaceExactlyOnce(input, marker, value string) (string, error) {
