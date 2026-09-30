@@ -27,7 +27,7 @@ func TestRenderProjectsCanonicalIdentity(t *testing.T) {
 	cupsdTemplate := filepath.Join(root, "cupsd.conf")
 	printersTemplate := filepath.Join(root, "printers.conf")
 	ppd := filepath.Join(root, "FolioRelay.ppd")
-	if err := os.WriteFile(cupsdTemplate, []byte("ServerName __FOLIORELAY_PUBLIC_HOST__\n"), 0o600); err != nil { t.Fatal(err) }
+	if err := os.WriteFile(cupsdTemplate, []byte("ServerName __FOLIORELAY_PUBLIC_HOST__\nServerAlias __FOLIORELAY_PUBLIC_HOST__\n"), 0o600); err != nil { t.Fatal(err) }
 	if err := os.WriteFile(printersTemplate, []byte("<Printer FolioRelay>\nUUID __FOLIORELAY_PRINTER_UUID__\n</Printer>\n"), 0o600); err != nil { t.Fatal(err) }
 	if err := os.WriteFile(ppd, []byte("*PPD-Adobe: \"4.3\"\n"), 0o600); err != nil { t.Fatal(err) }
 
@@ -36,7 +36,7 @@ func TestRenderProjectsCanonicalIdentity(t *testing.T) {
 
 	cupsd, err := os.ReadFile(filepath.Join(out, "cupsd.conf"))
 	if err != nil { t.Fatal(err) }
-	if string(cupsd) != "ServerName foliorelay.local\n" { t.Fatalf("unexpected cupsd: %q", cupsd) }
+	if string(cupsd) != "ServerName foliorelay.local\nServerAlias foliorelay.local\n" { t.Fatalf("unexpected cupsd: %q", cupsd) }
 	printers, err := os.ReadFile(filepath.Join(out, "printers.conf"))
 	if err != nil { t.Fatal(err) }
 	if !strings.Contains(string(printers), identity.PrinterUUID) { t.Fatalf("UUID not projected: %s", printers) }
@@ -61,6 +61,15 @@ func TestRenderRejectsSplitPublicEndpoint(t *testing.T) {
 	}
 	err := render(identityFile, filepath.Join(root, "cupsd"), filepath.Join(root, "printers"), filepath.Join(root, "ppd"), filepath.Join(root, "out"))
 	if err == nil || !strings.Contains(err.Error(), "public port 8634") { t.Fatalf("expected port rejection, got %v", err) }
+}
+
+func TestReplaceRequiredReplacesAllAndFailsClosed(t *testing.T) {
+	got, err := replaceRequired("a __M__ b __M__", "__M__", "v")
+	if err != nil { t.Fatal(err) }
+	if got != "a v b v" { t.Fatalf("unexpected replacement: %q", got) }
+	if _, err := replaceRequired("no marker", "__M__", "v"); err == nil {
+		t.Fatal("expected missing-marker failure")
+	}
 }
 
 func TestReplaceExactlyOnceFailsClosed(t *testing.T) {
