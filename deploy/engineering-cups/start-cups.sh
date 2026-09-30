@@ -9,16 +9,32 @@ fi
 
 export FOLIORELAY_SUBSTRATE_INSTANCE="$(cat "$instance_file")"
 
-public_host="${FOLIORELAY_PUBLIC_HOST:-localhost}"
-case "$public_host" in
-  ""|*[!A-Za-z0-9.-]*|.*|*..*|*.)
-    echo "ERROR: invalid FOLIORELAY_PUBLIC_HOST: $public_host" >&2
-    exit 64
-    ;;
-esac
+runtime_root=/var/lib/cups/foliorelay-runtime
+mkdir -p "$runtime_root/ppd"
 
-runtime_conf=/var/lib/cups/foliorelay-cupsd.conf
-sed "s/__FOLIORELAY_PUBLIC_HOST__/$public_host/g" /etc/cups/cupsd.conf >"$runtime_conf"
-chmod 0600 "$runtime_conf"
+if [ -n "${FOLIORELAY_IDENTITY_FILE:-}" ]; then
+  /usr/local/bin/foliorelay-cups-config \
+    -identity-file "$FOLIORELAY_IDENTITY_FILE" \
+    -cupsd-template /usr/share/foliorelay/cups/cupsd.conf.template \
+    -printers-template /usr/share/foliorelay/cups/printers.conf.template \
+    -ppd-source /usr/share/foliorelay/cups/FolioRelay.ppd \
+    -output-root "$runtime_root"
+else
+  # Compatibility path for isolated substrate qualification. Production
+  # FolioRelay supplies the durable identity file and uses the branch above.
+  public_host="${FOLIORELAY_PUBLIC_HOST:-localhost}"
+  case "$public_host" in
+    ""|*[!A-Za-z0-9.-]*|.*|*..*|*.)
+      echo "ERROR: invalid FOLIORELAY_PUBLIC_HOST: $public_host" >&2
+      exit 64
+      ;;
+  esac
+  sed "s/__FOLIORELAY_PUBLIC_HOST__/$public_host/g" \
+    /usr/share/foliorelay/cups/cupsd.conf.template >"$runtime_root/cupsd.conf"
+  sed '/__FOLIORELAY_PRINTER_UUID__/d' \
+    /usr/share/foliorelay/cups/printers.conf.template >"$runtime_root/printers.conf"
+  cp /usr/share/foliorelay/cups/FolioRelay.ppd "$runtime_root/ppd/FolioRelay.ppd"
+  chmod 0600 "$runtime_root/cupsd.conf" "$runtime_root/printers.conf" "$runtime_root/ppd/FolioRelay.ppd"
+fi
 
-exec /usr/sbin/cupsd -f -c "$runtime_conf" -s /etc/cups/cups-files.conf
+exec /usr/sbin/cupsd -f -c "$runtime_root/cupsd.conf" -s /etc/cups/cups-files.conf
