@@ -13,6 +13,23 @@ runtime_root=/var/lib/cups/foliorelay-runtime
 mkdir -p "$runtime_root/ppd"
 
 if [ -n "${FOLIORELAY_IDENTITY_FILE:-}" ]; then
+  wait_seconds="${FOLIORELAY_IDENTITY_WAIT_SECONDS:-60}"
+  case "$wait_seconds" in
+    ""|*[!0-9]*)
+      echo "ERROR: invalid FOLIORELAY_IDENTITY_WAIT_SECONDS: $wait_seconds" >&2
+      exit 64
+      ;;
+  esac
+  waited=0
+  while [ ! -s "$FOLIORELAY_IDENTITY_FILE" ]; do
+    if [ "$waited" -ge "$wait_seconds" ]; then
+      echo "ERROR: FolioRelay identity did not become available: $FOLIORELAY_IDENTITY_FILE" >&2
+      exit 69
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+
   /usr/local/bin/foliorelay-cups-config \
     -identity-file "$FOLIORELAY_IDENTITY_FILE" \
     -cupsd-template /usr/share/foliorelay/cups/cupsd.conf.template \
