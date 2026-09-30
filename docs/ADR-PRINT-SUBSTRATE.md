@@ -1,6 +1,19 @@
 # ADR: Printing substrate — custom upstream build, no CUPS fork
 
-Status: proposed for qualification.
+Status: accepted — minimal upstream CUPS selected for FolioRelay production on 2026-09-30.
+
+## Production decision
+
+FolioRelay selects the **minimal upstream CUPS scheduler** as its production
+print substrate. Both CUPS and PAPPL passed substantial qualification, but CUPS
+fits FolioRelay's document-preserving routing model with less product-owned
+glue and has a qualified AirPrint/URF path that preserves the exact submitted
+artifact.
+
+PAPPL is retained as archived reference material for interoperability and for a
+possible future product whose center of gravity is the physical-printer /
+Printer Application side. It is no longer a FolioRelay production candidate
+and should not consume normal FolioRelay qualification capacity.
 
 ## Decision direction
 
