@@ -54,4 +54,5 @@ else
   chmod 0600 "$runtime_root/cupsd.conf" "$runtime_root/printers.conf" "$runtime_root/ppd/FolioRelay.ppd"
 fi
 
+/usr/sbin/cupsd -t -c "$runtime_root/cupsd.conf" -s /etc/cups/cups-files.conf
 exec /usr/sbin/cupsd -f -c "$runtime_root/cupsd.conf" -s /etc/cups/cups-files.conf
