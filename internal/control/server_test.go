@@ -235,3 +235,82 @@ func TestOpenAPIAndSelfTestUseSharedProductSurface(t *testing.T) {
 		t.Fatalf("missing structured self-test evidence: %+v", receipt)
 	}
 }
+
+func TestWebSessionAuthenticatesSameAPIWithoutExposingBearerToken(t *testing.T) {
+	state, err := frstate.OpenDurableEngine(filepath.Join(t.TempDir(), "journal.frj"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer state.Close()
+	server, err := New(state, t.TempDir(), testToken, testPrinter(t), Profiles{WindowsIPP: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := server.Handler()
+
+	login := httptest.NewRequest(http.MethodPost, "/auth/session",
+		bytes.NewBufferString(`{"token":"`+testToken+`"}`))
+	login.Header.Set("Content-Type", "application/json")
+	loginResp := httptest.NewRecorder()
+	h.ServeHTTP(loginResp, login)
+	if loginResp.Code != http.StatusNoContent {
+		t.Fatalf("login failed: %d %s", loginResp.Code, loginResp.Body.String())
+	}
+	cookies := loginResp.Result().Cookies()
+	if len(cookies) != 1 || cookies[0].Name != sessionCookieName || !cookies[0].HttpOnly {
+		t.Fatalf("unexpected session cookie: %+v", cookies)
+	}
+	if cookies[0].Value == testToken {
+		t.Fatal("session cookie exposed management bearer token")
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/jobs", nil)
+	req.AddCookie(cookies[0])
+	resp := httptest.NewRecorder()
+	h.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("session did not authenticate API: %d %s", resp.Code, resp.Body.String())
+	}
+}
+
+func TestWebSessionRejectsWrongCredential(t *testing.T) {
+	state, err := frstate.OpenDurableEngine(filepath.Join(t.TempDir(), "journal.frj"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer state.Close()
+	server, err := New(state, t.TempDir(), testToken, testPrinter(t), Profiles{WindowsIPP: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/auth/session",
+		bytes.NewBufferString(`{"token":"not-the-management-token"}`))
+	resp := httptest.NewRecorder()
+	server.Handler().ServeHTTP(resp, req)
+	if resp.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", resp.Code)
+	}
+}
+
+func TestWebPortalIsPublicButContainsNoCredential(t *testing.T) {
+	state, err := frstate.OpenDurableEngine(filepath.Join(t.TempDir(), "journal.frj"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer state.Close()
+	server, err := New(state, t.TempDir(), testToken, testPrinter(t), Profiles{WindowsIPP: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp := httptest.NewRecorder()
+	server.Handler().ServeHTTP(resp, httptest.NewRequest(http.MethodGet, "/", nil))
+	if resp.Code != http.StatusOK || !bytes.Contains(resp.Body.Bytes(), []byte("FolioRelay")) {
+		t.Fatalf("web portal unavailable: %d %s", resp.Code, resp.Body.String())
+	}
+	if bytes.Contains(resp.Body.Bytes(), []byte(testToken)) {
+		t.Fatal("web portal leaked management credential")
+	}
+	if got := resp.Header().Get("Content-Security-Policy"); got == "" {
+		t.Fatal("web portal missing content security policy")
+	}
+}
