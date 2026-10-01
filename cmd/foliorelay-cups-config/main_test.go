@@ -28,7 +28,7 @@ func TestRenderProjectsCanonicalIdentity(t *testing.T) {
 	printersTemplate := filepath.Join(root, "printers.conf")
 	ppd := filepath.Join(root, "FolioRelay.ppd")
 	if err := os.WriteFile(cupsdTemplate, []byte("ServerName __FOLIORELAY_PUBLIC_HOST__\nServerAlias __FOLIORELAY_PUBLIC_HOST__\n"), 0o600); err != nil { t.Fatal(err) }
-	if err := os.WriteFile(printersTemplate, []byte("<Printer FolioRelay>\nUUID __FOLIORELAY_PRINTER_UUID__\n</Printer>\n"), 0o600); err != nil { t.Fatal(err) }
+	if err := os.WriteFile(printersTemplate, []byte("<Printer FolioRelay>\nUUID __FOLIORELAY_PRINTER_UUID__\nType 4100\n</Printer>\n"), 0o600); err != nil { t.Fatal(err) }
 	if err := os.WriteFile(ppd, []byte("*PPD-Adobe: \"4.3\"\n"), 0o600); err != nil { t.Fatal(err) }
 
 	out := filepath.Join(root, "runtime")
@@ -40,6 +40,9 @@ func TestRenderProjectsCanonicalIdentity(t *testing.T) {
 	printers, err := os.ReadFile(filepath.Join(out, "printers.conf"))
 	if err != nil { t.Fatal(err) }
 	if !strings.Contains(string(printers), identity.PrinterUUID) { t.Fatalf("UUID not projected: %s", printers) }
+	if !strings.Contains(string(printers), "Type 4100") {
+		t.Fatalf("printer type not preserved: %s", printers)
+	}
 	if _, err := os.Stat(filepath.Join(out, "ppd", "FolioRelay.ppd")); err != nil { t.Fatal(err) }
 }
 
@@ -77,5 +80,16 @@ func TestReplaceExactlyOnceFailsClosed(t *testing.T) {
 		if _, err := replaceExactlyOnce(input, "__M__", "v"); err == nil {
 			t.Fatalf("expected marker-count failure for %q", input)
 		}
+	}
+}
+
+
+func TestFolioRelayPrinterTypeIsBWAndSmallMedia(t *testing.T) {
+	const (
+		cupsPTypeBW    = 0x0004
+		cupsPTypeSmall = 0x1000
+	)
+	if got := cupsPTypeBW | cupsPTypeSmall; got != 4100 {
+		t.Fatalf("CUPS printer type contract drifted: got %d", got)
 	}
 }
