@@ -122,11 +122,11 @@ COPY experiments/print-substrate/cups-backend.sh /usr/lib/cups/backend/foliorela
 COPY experiments/print-substrate/cups-foliorelay.ppd /usr/share/foliorelay/cups/FolioRelay.ppd
 COPY deploy/engineering-cups/cupsd.conf /usr/share/foliorelay/cups/cupsd.conf.template
 COPY deploy/engineering-cups/printers.conf /usr/share/foliorelay/cups/printers.conf.template
-COPY deploy/engineering-cups/cups-files.conf /etc/cups/cups-files.conf
+COPY deploy/engineering-cups/cups-files.conf /usr/share/foliorelay/cups/cups-files.conf.template
 COPY deploy/engineering-cups/start-cups.sh /usr/local/bin/start-foliorelay-cups
 RUN chmod 0555 /usr/sbin/cupsd /usr/lib/cups/daemon/cups-exec /usr/lib/cups/filter/gziptoany /usr/lib/cups/backend/foliorelay \
  && chmod 0555 /usr/local/bin/start-foliorelay-cups /usr/local/bin/foliorelay-cups-config \
- && mkdir -p /var/lib/cups/ssl /var/cache/cups /var/spool/cups/tmp /var/log/cups /var/lib/foliorelay-artifacts \
+ && mkdir -p /etc/cups /var/lib/cups/ssl /var/cache/cups /var/spool/cups/tmp /var/log/cups /var/lib/foliorelay-artifacts \
  && chown -R 10001:10001 /var/lib/cups /var/cache/cups /var/spool/cups /var/log/cups /var/lib/foliorelay-artifacts
 ENV LD_LIBRARY_PATH=/usr/lib/foliorelay-cups:/usr/lib \
     FOLIORELAY_INGEST_BIN=/usr/local/bin/foliorelay-ipp-ingest \
