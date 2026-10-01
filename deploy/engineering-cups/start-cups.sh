@@ -9,16 +9,14 @@ fi
 
 export FOLIORELAY_SUBSTRATE_INSTANCE="$(cat "$instance_file")"
 
-runtime_root=/var/lib/cups/foliorelay-runtime
-# Bind-mounted/persistent app storage starts empty on first install. Materialize
-# only the runtime directories CUPS itself requires instead of relying on image
-# contents being copied into a named volume.
+runtime_root=/etc/cups
+# The active CUPS ServerRoot is a bounded ephemeral projection. Durable CUPS
+# state remains under /var/lib/cups and spool state under /var/spool/cups.
 mkdir -p \
   "$runtime_root/ppd" \
-  "$runtime_root/ssl" \
   /var/lib/cups/ssl \
   /var/spool/cups/tmp
-chmod 0700 "$runtime_root/ssl" /var/lib/cups/ssl
+chmod 0700 /var/lib/cups/ssl
 chmod 0750 /var/spool/cups/tmp
 
 if [ -n "${FOLIORELAY_IDENTITY_FILE:-}" ]; then
@@ -66,5 +64,5 @@ else
   chmod 0600 "$runtime_root/cupsd.conf" "$runtime_root/printers.conf" "$runtime_root/ppd/FolioRelay.ppd" "$runtime_root/cups-files.conf"
 fi
 
-/usr/sbin/cupsd -t -c "$runtime_root/cupsd.conf" -s /etc/cups/cups-files.conf
+/usr/sbin/cupsd -t -c "$runtime_root/cupsd.conf" -s "$runtime_root/cups-files.conf"
 exec /usr/sbin/cupsd -f -c "$runtime_root/cupsd.conf" -s "$runtime_root/cups-files.conf"
