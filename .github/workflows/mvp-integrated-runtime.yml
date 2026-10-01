@@ -98,7 +98,7 @@ jobs:
           set -euo pipefail
           evidence="$RUNNER_TEMP/foliorelay-mvp-evidence"
           mkdir -p "$evidence"
-          token="$(cat "$FOLIORELAY_TOKEN_FILE")"
+          token="$(sudo cat "$FOLIORELAY_TOKEN_FILE")"
           curl -fsS -H "Authorization: Bearer $token" \
             http://127.0.0.1:18080/api/v1/printer >"$evidence/control-printer.json"
           cp "$RUNNER_TEMP/ipp-attrs.txt" "$evidence/cups-printer.txt"
@@ -157,7 +157,7 @@ jobs:
         run: |
           set -euo pipefail
           evidence="$RUNNER_TEMP/foliorelay-mvp-evidence"
-          token="$(cat "$FOLIORELAY_TOKEN_FILE")"
+          token="$(sudo cat "$FOLIORELAY_TOKEN_FILE")"
           for _ in $(seq 1 60); do
             curl -fsS -H "Authorization: Bearer $token" \
               http://127.0.0.1:18080/api/v1/jobs >"$evidence/jobs.json"
@@ -193,7 +193,7 @@ jobs:
         run: |
           set -euo pipefail
           evidence="$RUNNER_TEMP/foliorelay-mvp-evidence"
-          token="$(cat "$FOLIORELAY_TOKEN_FILE")"
+          token="$(sudo cat "$FOLIORELAY_TOKEN_FILE")"
           before_uuid="$(jq -r '.identity.printer_uuid' "$evidence/control-printer.json")"
 
           docker compose -f deploy/mvp/compose.yaml down
