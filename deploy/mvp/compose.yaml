@@ -73,5 +73,6 @@ services:
       - "${FOLIORELAY_DATA_ROOT:?}/cups-spool:/var/spool/cups"
       - "${FOLIORELAY_TOKEN_FILE:?}:/run/secrets/foliorelay.token:ro"
     tmpfs:
+      - /etc/cups:rw,noexec,nosuid,nodev,size=4m,uid=10001,gid=10001,mode=0750
       - /var/cache/cups:rw,noexec,nosuid,nodev,size=16m,uid=10001,gid=10001,mode=0750
       - /var/log/cups:rw,noexec,nosuid,nodev,size=16m,uid=10001,gid=10001,mode=0750
