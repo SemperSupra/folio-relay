@@ -45,6 +45,8 @@ if [ -n "${FOLIORELAY_IDENTITY_FILE:-}" ]; then
     -printers-template /usr/share/foliorelay/cups/printers.conf.template \
     -ppd-source /usr/share/foliorelay/cups/FolioRelay.ppd \
     -output-root "$runtime_root"
+  cp /usr/share/foliorelay/cups/cups-files.conf.template "$runtime_root/cups-files.conf"
+  chmod 0600 "$runtime_root/cups-files.conf"
 else
   # Compatibility path for isolated substrate qualification. Production
   # FolioRelay supplies the durable identity file and uses the branch above.
@@ -60,8 +62,9 @@ else
   sed '/__FOLIORELAY_PRINTER_UUID__/d' \
     /usr/share/foliorelay/cups/printers.conf.template >"$runtime_root/printers.conf"
   cp /usr/share/foliorelay/cups/FolioRelay.ppd "$runtime_root/ppd/FolioRelay.ppd"
-  chmod 0600 "$runtime_root/cupsd.conf" "$runtime_root/printers.conf" "$runtime_root/ppd/FolioRelay.ppd"
+  cp /usr/share/foliorelay/cups/cups-files.conf.template "$runtime_root/cups-files.conf"
+  chmod 0600 "$runtime_root/cupsd.conf" "$runtime_root/printers.conf" "$runtime_root/ppd/FolioRelay.ppd" "$runtime_root/cups-files.conf"
 fi
 
 /usr/sbin/cupsd -t -c "$runtime_root/cupsd.conf" -s /etc/cups/cups-files.conf
-exec /usr/sbin/cupsd -f -c "$runtime_root/cupsd.conf" -s /etc/cups/cups-files.conf
+exec /usr/sbin/cupsd -f -c "$runtime_root/cupsd.conf" -s "$runtime_root/cups-files.conf"
