@@ -76,7 +76,7 @@ jobs:
             cups_ok=false
             curl -fsS http://127.0.0.1:18080/readyz >/dev/null 2>&1 && control_ok=true
             testfile="$(find /usr/share/cups -type f -name get-printer-attributes.test -print -quit)"
-            if [ -n "$testfile" ] && ipptool -tv ipp://foliorelay-rdte.local:8634/printers/FolioRelay "$testfile" >"$RUNNER_TEMP/ipp-attrs.txt" 2>&1; then
+            if [ -n "$testfile" ] && ipptool -tv "$FOLIORELAY_PUBLIC_PRINTER_URI" "$testfile" >"$RUNNER_TEMP/ipp-attrs.txt" 2>&1; then
               cups_ok=true
             fi
             if [ "$control_ok" = true ] && [ "$cups_ok" = true ]; then
