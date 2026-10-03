@@ -53,11 +53,15 @@ jobs:
           sudo chmod 0700 "$root/control" "$root/artifacts"
           sudo chmod 0755 "$root/cups-state" "$root/cups-spool"
           sudo chmod 0400 "$token"
-          echo '127.0.0.1 foliorelay-rdte.local' | sudo tee -a /etc/hosts >/dev/null
+          host_ipv4="$(ip -4 route get 1.1.1.1 | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')"
+          test -n "$host_ipv4"
+          public_host="$(hostname).local"
+          printf '%s %s\n' "$host_ipv4" "$public_host" | sudo tee -a /etc/hosts >/dev/null
           {
             echo "FOLIORELAY_DATA_ROOT=$root"
             echo "FOLIORELAY_TOKEN_FILE=$token"
-            echo "FOLIORELAY_PUBLIC_PRINTER_URI=ipp://foliorelay-rdte.local:8634/printers/FolioRelay"
+            echo "FOLIORELAY_PUBLIC_HOST=$public_host"
+            echo "FOLIORELAY_PUBLIC_PRINTER_URI=ipp://$public_host:8634/printers/FolioRelay"
             echo "FOLIORELAY_PRINTER_NAME=FolioRelay"
             echo "FOLIORELAY_PRINTER_LOCATION=RDTE"
           } >>"$GITHUB_ENV"
