@@ -76,3 +76,27 @@ services:
       - /etc/cups:rw,noexec,nosuid,nodev,size=4m,uid=10001,gid=10001,mode=0750
       - /var/cache/cups:rw,noexec,nosuid,nodev,size=16m,uid=10001,gid=10001,mode=0750
       - /var/log/cups:rw,noexec,nosuid,nodev,size=16m,uid=10001,gid=10001,mode=0750
+
+  discovery:
+    build:
+      context: ../..
+      dockerfile: deploy/control/Dockerfile
+    image: foliorelay-control:mvp-local
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      control:
+        condition: service_healthy
+    network_mode: host
+    volumes:
+      - "${FOLIORELAY_DATA_ROOT:?}/control:/var/lib/foliorelay-control:ro"
+    entrypoint:
+      - /usr/local/bin/foliorelay-dnssd
+    command:
+      - -identity-file
+      - /var/lib/foliorelay-control/config/printer.json
+
