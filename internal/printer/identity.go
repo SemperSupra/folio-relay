@@ -48,28 +48,36 @@ func New(displayName, location, publicURI string) (Identity, error) {
 	return identity, identity.Validate()
 }
 
-func LoadOrCreate(path, displayName, location, publicURI string) (Identity, error) {
+func Load(path string) (Identity, error) {
 	if path == "" {
 		return Identity{}, errors.New("printer identity path is required")
 	}
 	data, err := os.ReadFile(path)
+	if err != nil {
+		return Identity{}, fmt.Errorf("read printer identity: %w", err)
+	}
+	var identity Identity
+	decoder := json.NewDecoder(strings.NewReader(string(data)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&identity); err != nil {
+		return Identity{}, fmt.Errorf("decode printer identity: %w", err)
+	}
+	if err := identity.Validate(); err != nil {
+		return Identity{}, fmt.Errorf("validate printer identity: %w", err)
+	}
+	return identity, nil
+}
+
+func LoadOrCreate(path, displayName, location, publicURI string) (Identity, error) {
+	identity, err := Load(path)
 	if err == nil {
-		var identity Identity
-		decoder := json.NewDecoder(strings.NewReader(string(data)))
-		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&identity); err != nil {
-			return Identity{}, fmt.Errorf("decode printer identity: %w", err)
-		}
-		if err := identity.Validate(); err != nil {
-			return Identity{}, fmt.Errorf("validate printer identity: %w", err)
-		}
 		return identity, nil
 	}
 	if !errors.Is(err, os.ErrNotExist) {
-		return Identity{}, fmt.Errorf("read printer identity: %w", err)
+		return Identity{}, err
 	}
 
-	identity, err := New(displayName, location, publicURI)
+	identity, err = New(displayName, location, publicURI)
 	if err != nil {
 		return Identity{}, err
 	}
