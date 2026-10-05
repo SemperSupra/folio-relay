@@ -1,5 +1,9 @@
 services:
   discovery:
+    # The host system bus authenticates the peer uid. Use the standard
+    # unprivileged host identity while retaining the control-plane gid for
+    # read-only access to public printer identity metadata.
+    user: "65534:10001"
     volumes:
       - /run/dbus/system_bus_socket:/run/dbus/system_bus_socket:ro
     command:
