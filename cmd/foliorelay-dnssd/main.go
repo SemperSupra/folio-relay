@@ -38,7 +38,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	log.Printf("publishing AirPrint DNS-SD for %s at %s", identity.DisplayName, identity.URI())
+	log.Printf("publishing AirPrint DNS-SD for %s at %s using %s backend", identity.DisplayName, identity.URI(), *backend)
 	if err := dnssd.Run(ctx, dnssd.Config{
 		Identity:    identity,
 		Instance:    *instance,
