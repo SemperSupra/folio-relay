@@ -4,7 +4,7 @@ ARG GO_BASE=golang:1.27.1-bookworm@sha256:69a7b9788769bec032d238959b61854e9ae87f
 
 FROM ${GO_BASE} AS build
 WORKDIR /src
-COPY go.mod ./
+COPY go.mod go.sum ./
 COPY api ./api
 COPY cmd/foliorelayd ./cmd/foliorelayd
 COPY cmd/foliorelay-probe ./cmd/foliorelay-probe
