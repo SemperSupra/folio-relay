@@ -10,9 +10,11 @@ import (
 )
 
 type Config struct {
-	Identity  frprinter.Identity
-	Instance  string
-	Interface string
+	Identity    frprinter.Identity
+	Instance    string
+	Interface   string
+	Backend     string
+	DBusAddress string
 }
 
 func Run(context.Context, Config) error {
