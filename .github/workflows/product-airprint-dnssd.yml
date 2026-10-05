@@ -128,6 +128,7 @@ jobs:
           test "$(jq -r '.public_uri' "$evidence/control-printer.json")" = "$FOLIORELAY_PUBLIC_PRINTER_URI"
 
           docker compose -f deploy/mvp/compose.yaml -f deploy/mvp/compose.avahi.yaml logs discovery >"$evidence/discovery.log" 2>&1
+          grep -Fq 'using avahi backend' "$evidence/discovery.log"
           ! grep -Eiq 'fatal|panic|permission denied|address already in use' "$evidence/discovery.log"
 
       - name: Upload DNS-SD evidence
