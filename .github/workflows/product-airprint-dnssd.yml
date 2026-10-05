@@ -48,7 +48,8 @@ jobs:
           sudo mkdir -p "$root/control" "$root/artifacts" "$root/cups-state" "$root/cups-spool"
           printf '%s\n' 'foliorelay-dnssd-fixture-token-0001' | sudo tee "$token" >/dev/null
           sudo chown -R 10001:10001 "$root/control" "$root/artifacts" "$root/cups-state" "$root/cups-spool" "$token"
-          sudo chmod 0700 "$root/control" "$root/artifacts"
+          sudo chmod 0750 "$root/control"
+          sudo chmod 0700 "$root/artifacts"
           sudo chmod 0755 "$root/cups-state" "$root/cups-spool"
           sudo chmod 0400 "$token"
           host_ipv4="$(ip -4 route get 1.1.1.1 | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')"
