@@ -27,7 +27,7 @@ func TestMDNSSocketOptionsPermitSharedAvahiPort(t *testing.T) {
 	options := mdnsSocketOptions()
 	want := map[[2]int]int{
 		{syscall.SOL_SOCKET, syscall.SO_REUSEADDR}: 1,
-		{syscall.SOL_SOCKET, syscall.SO_REUSEPORT}: 1,
+		{syscall.SOL_SOCKET, soReusePort}: 1,
 	}
 	for _, opt := range options {
 		key := [2]int{opt.level, opt.name}
