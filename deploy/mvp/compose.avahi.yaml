@@ -1,0 +1,11 @@
+services:
+  discovery:
+    volumes:
+      - /run/dbus/system_bus_socket:/run/dbus/system_bus_socket:ro
+    command:
+      - -identity-file
+      - /var/lib/foliorelay-control/config/printer.json
+      - -backend
+      - avahi
+      - -dbus-address
+      - unix:path=/run/dbus/system_bus_socket
