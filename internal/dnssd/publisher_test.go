@@ -24,20 +24,19 @@ func fixtureIdentity() frprinter.Identity {
 }
 
 func TestMDNSSocketOptionsPermitSharedAvahiPort(t *testing.T) {
-	options := mdnsSocketOptions()
-	want := map[[2]int]int{
-		{syscall.SOL_SOCKET, syscall.SO_REUSEADDR}: 1,
-		{syscall.SOL_SOCKET, soReusePort}: 1,
+	want := map[[2]int]bool{
+		{syscall.SOL_SOCKET, syscall.SO_REUSEADDR}: false,
+		{syscall.SOL_SOCKET, soReusePort}:             false,
 	}
-	for _, opt := range options {
+	for _, opt := range mdnsSocketOptions() {
 		key := [2]int{opt.level, opt.name}
-		if _, ok := want[key]; ok {
-			want[key] = opt.value
+		if _, ok := want[key]; ok && opt.value == 1 {
+			want[key] = true
 		}
 	}
-	for key, value := range want {
-		if value != 1 {
-			t.Fatalf("socket option level=%d name=%d value=%d want 1", key[0], key[1], value)
+	for key, found := range want {
+		if !found {
+			t.Fatalf("required shared-port socket option missing: level=%d name=%d", key[0], key[1])
 		}
 	}
 }
