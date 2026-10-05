@@ -58,8 +58,13 @@ func TestAvahiRegistrationPreservesStablePrinterIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reg.Interface != 7 || reg.Protocol != avahiProtoIPv4 || reg.Flags != 0 {
-		t.Fatalf("unexpected Avahi interface/protocol/flags: %#v", reg)
+	if reg.Interface != 7 || reg.Protocol != avahiProtoIPv4 {
+		t.Fatalf("unexpected Avahi interface/protocol: %#v", reg)
+	}
+	if reg.AddressFlags != avahiPublishNoReverse ||
+		reg.ServiceFlags != avahiPublishNoCookie ||
+		reg.SubtypeFlags != avahiPublishFlags {
+		t.Fatalf("unexpected Avahi publication flags: %#v", reg)
 	}
 	if reg.Name != "FolioRelay" || reg.ServiceType != "_ipp._tcp" || reg.Domain != "local" {
 		t.Fatalf("unexpected Avahi service identity: %#v", reg)
