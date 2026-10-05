@@ -27,6 +27,8 @@ const (
 	avahiEntryCollision        = int32(3)
 	avahiEntryFailure          = int32(4)
 	avahiPublishFlags          = uint32(0)
+	avahiPublishNoReverse      = uint32(16)
+	avahiPublishNoCookie       = uint32(32)
 	avahiRegistrationWait      = 10 * time.Second
 	avahiRegistrationPoll      = 100 * time.Millisecond
 	avahiRegistrationHealthPoll = 10 * time.Second
@@ -35,8 +37,10 @@ const (
 type avahiRegistration struct {
 	Interface   int32
 	Protocol    int32
-	Flags       uint32
-	Name        string
+	AddressFlags uint32
+	ServiceFlags uint32
+	SubtypeFlags uint32
+	Name         string
 	ServiceType string
 	Domain      string
 	Host        string
@@ -62,8 +66,10 @@ func makeAvahiRegistration(identity frprinter.Identity, instance string, ifi *ne
 	return avahiRegistration{
 		Interface:   int32(ifi.Index),
 		Protocol:    avahiProtoIPv4,
-		Flags:       avahiPublishFlags,
-		Name:        instance,
+		AddressFlags: avahiPublishNoReverse,
+		ServiceFlags: avahiPublishNoCookie,
+		SubtypeFlags: avahiPublishFlags,
+		Name:         instance,
 		ServiceType: "_ipp._tcp",
 		Domain:      "local",
 		Host:        identity.Host,
@@ -116,7 +122,7 @@ func runAvahi(ctx context.Context, cfg Config, instance string, ifi *net.Interfa
 		0,
 		registration.Interface,
 		registration.Protocol,
-		registration.Flags,
+		registration.AddressFlags,
 		registration.Host,
 		registration.Address,
 	); call.Err != nil {
@@ -129,7 +135,7 @@ func runAvahi(ctx context.Context, cfg Config, instance string, ifi *net.Interfa
 		0,
 		registration.Interface,
 		registration.Protocol,
-		registration.Flags,
+		registration.ServiceFlags,
 		registration.Name,
 		registration.ServiceType,
 		registration.Domain,
@@ -146,7 +152,7 @@ func runAvahi(ctx context.Context, cfg Config, instance string, ifi *net.Interfa
 		0,
 		registration.Interface,
 		registration.Protocol,
-		registration.Flags,
+		registration.SubtypeFlags,
 		registration.Name,
 		registration.ServiceType,
 		registration.Domain,
