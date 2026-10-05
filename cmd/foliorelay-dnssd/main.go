@@ -20,6 +20,8 @@ func main() {
 	instance := flag.String("instance", "", "optional DNS-SD instance name; defaults to printer display name")
 	interfaceName := flag.String("interface", "", "optional LAN interface override; default is route-derived")
 	waitSeconds := flag.Int("identity-wait-seconds", 60, "seconds to wait for canonical identity")
+	backend := flag.String("backend", "direct", "DNS-SD backend: direct or avahi")
+	dbusAddress := flag.String("dbus-address", "unix:path=/run/dbus/system_bus_socket", "D-Bus address used by the avahi backend")
 	flag.Parse()
 
 	if *identityFile == "" {
@@ -38,9 +40,11 @@ func main() {
 
 	log.Printf("publishing AirPrint DNS-SD for %s at %s", identity.DisplayName, identity.URI())
 	if err := dnssd.Run(ctx, dnssd.Config{
-		Identity:  identity,
-		Instance:  *instance,
-		Interface: *interfaceName,
+		Identity:    identity,
+		Instance:    *instance,
+		Interface:   *interfaceName,
+		Backend:     *backend,
+		DBusAddress: *dbusAddress,
 	}); err != nil {
 		log.Fatal(err)
 	}
