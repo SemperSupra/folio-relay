@@ -226,6 +226,21 @@ func interfaceIPv4(ifi *net.Interface) (net.IP, error) {
 	return nil, fmt.Errorf("interface %s has no usable IPv4 address", ifi.Name)
 }
 
+type socketOption struct {
+	level int
+	name  int
+	value int
+}
+
+func mdnsSocketOptions() []socketOption {
+	return []socketOption{
+		{syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1},
+		{syscall.SOL_SOCKET, syscall.SO_REUSEPORT, 1},
+		{syscall.IPPROTO_IP, syscall.IP_MULTICAST_TTL, 255},
+		{syscall.IPPROTO_IP, syscall.IP_MULTICAST_LOOP, 1},
+	}
+}
+
 func openMDNSSocket(ifi *net.Interface, ip net.IP) (*net.UDPConn, error) {
 	fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_DGRAM, syscall.IPPROTO_UDP)
 	if err != nil {
@@ -237,11 +252,7 @@ func openMDNSSocket(ifi *net.Interface, ip net.IP) (*net.UDPConn, error) {
 			_ = syscall.Close(fd)
 		}
 	}()
-	for _, opt := range []struct{ level, name, value int }{
-		{syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1},
-		{syscall.IPPROTO_IP, syscall.IP_MULTICAST_TTL, 255},
-		{syscall.IPPROTO_IP, syscall.IP_MULTICAST_LOOP, 1},
-	} {
+	for _, opt := range mdnsSocketOptions() {
 		if err := syscall.SetsockoptInt(fd, opt.level, opt.name, opt.value); err != nil {
 			return nil, fmt.Errorf("configure mDNS socket: %w", err)
 		}
