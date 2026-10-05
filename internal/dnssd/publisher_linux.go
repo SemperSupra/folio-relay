@@ -26,6 +26,8 @@ const (
 	aType      = 1
 	inClass    = 1
 	cacheFlush = 0x8000
+	// SO_REUSEPORT is Linux SOL_SOCKET option 15. syscall intentionally does not expose it.
+	soReusePort = 15
 )
 
 var mdnsIPv4 = net.IPv4(224, 0, 0, 251)
@@ -235,7 +237,7 @@ type socketOption struct {
 func mdnsSocketOptions() []socketOption {
 	return []socketOption{
 		{syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1},
-		{syscall.SOL_SOCKET, syscall.SO_REUSEPORT, 1},
+		{syscall.SOL_SOCKET, soReusePort, 1},
 		{syscall.IPPROTO_IP, syscall.IP_MULTICAST_TTL, 255},
 		{syscall.IPPROTO_IP, syscall.IP_MULTICAST_LOOP, 1},
 	}
