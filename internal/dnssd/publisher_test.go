@@ -22,6 +22,65 @@ func fixtureIdentity() frprinter.Identity {
 	}
 }
 
+func TestAirPrintTXTIsSharedAcrossDiscoveryBackends(t *testing.T) {
+	identity := fixtureIdentity()
+	identity.Location = "RDTE"
+	got := airPrintTXT(identity)
+	for _, want := range []string{
+		"rp=printers/FolioRelay",
+		"pdl=application/pdf,image/urf",
+		"URF=V1.4,CP1,W8,PQ4,RS300,FN3",
+		"UUID=01234567-89ab-4def-8123-456789abcdef",
+		"note=RDTE",
+	} {
+		found := false
+		for _, value := range got {
+			if value == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("shared TXT projection missing %q: %#v", want, got)
+		}
+	}
+}
+
+func TestAvahiRegistrationPreservesStablePrinterIdentity(t *testing.T) {
+	identity := fixtureIdentity()
+	identity.Location = "RDTE"
+	reg, err := makeAvahiRegistration(
+		identity,
+		"FolioRelay",
+		&net.Interface{Index: 7, Name: "eth0"},
+		net.IPv4(192, 0, 2, 10),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reg.Interface != 7 || reg.Protocol != avahiProtoIPv4 || reg.Flags != 0 {
+		t.Fatalf("unexpected Avahi interface/protocol/flags: %#v", reg)
+	}
+	if reg.Name != "FolioRelay" || reg.ServiceType != "_ipp._tcp" || reg.Domain != "local" {
+		t.Fatalf("unexpected Avahi service identity: %#v", reg)
+	}
+	if reg.Host != "foliorelay.local" || reg.Address != "192.0.2.10" || reg.Port != 8634 {
+		t.Fatalf("unexpected Avahi host projection: %#v", reg)
+	}
+	if reg.Subtype != "_universal._sub._ipp._tcp" {
+		t.Fatalf("unexpected Avahi subtype: %q", reg.Subtype)
+	}
+	txt := make(map[string]bool, len(reg.TXT))
+	for _, item := range reg.TXT {
+		txt[string(item)] = true
+	}
+	for _, want := range airPrintTXT(identity) {
+		if !txt[want] {
+			t.Fatalf("Avahi TXT missing shared projection %q", want)
+		}
+	}
+}
+
 func TestBuildResponseContainsAirPrintProjection(t *testing.T) {
 	msg, err := buildResponse(fixtureIdentity(), "FolioRelay", net.IPv4(192, 0, 2, 10), 120, 4500)
 	if err != nil {
