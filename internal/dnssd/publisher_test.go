@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"net"
 	"strings"
+	"syscall"
 	"testing"
 
 	frprinter "github.com/SemperSupra/folio-relay/internal/printer"
@@ -19,6 +20,25 @@ func fixtureIdentity() frprinter.Identity {
 		Host:         "foliorelay.local",
 		Port:         8634,
 		ResourcePath: "/printers/FolioRelay",
+	}
+}
+
+func TestMDNSSocketOptionsPermitSharedAvahiPort(t *testing.T) {
+	options := mdnsSocketOptions()
+	want := map[[2]int]int{
+		{syscall.SOL_SOCKET, syscall.SO_REUSEADDR}: 1,
+		{syscall.SOL_SOCKET, syscall.SO_REUSEPORT}: 1,
+	}
+	for _, opt := range options {
+		key := [2]int{opt.level, opt.name}
+		if _, ok := want[key]; ok {
+			want[key] = opt.value
+		}
+	}
+	for key, value := range want {
+		if value != 1 {
+			t.Fatalf("socket option level=%d name=%d value=%d want 1", key[0], key[1], value)
+		}
 	}
 }
 
