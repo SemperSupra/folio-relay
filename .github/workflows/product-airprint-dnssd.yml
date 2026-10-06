@@ -43,7 +43,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          root="$RUNNER_TEMP/foliorelay-dnssd"
+          root="/tmp/foliorelay-dnssd-${GITHUB_RUN_ID}"
           token="$root/control.token"
           sudo mkdir -p "$root/control" "$root/artifacts" "$root/cups-state" "$root/cups-spool"
           printf '%s\n' 'foliorelay-dnssd-fixture-token-0001' | sudo tee "$token" >/dev/null
@@ -185,6 +185,7 @@ jobs:
             sudo kill "$(cat "$RUNNER_TEMP/foliorelay-dnssd.pid")" 2>/dev/null || true
           fi
           sudo rm -f "/tmp/foliorelay-dnssd-publisher-${GITHUB_RUN_ID}" || true
+          sudo rm -rf "/tmp/foliorelay-dnssd-${GITHUB_RUN_ID}" || true
           docker compose -f deploy/mvp/compose.yaml ps >"$RUNNER_TEMP/foliorelay-dnssd-evidence/compose-ps.txt" 2>&1 || true
           docker compose -f deploy/mvp/compose.yaml logs >"$RUNNER_TEMP/foliorelay-dnssd-evidence/compose.log" 2>&1 || true
           docker compose -f deploy/mvp/compose.yaml down || true
