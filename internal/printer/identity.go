@@ -71,6 +71,9 @@ func Load(path string) (Identity, error) {
 func LoadOrCreate(path, displayName, location, publicURI string) (Identity, error) {
 	identity, err := Load(path)
 	if err == nil {
+		if err := ensureIdentityGroupReadable(path); err != nil {
+			return Identity{}, err
+		}
 		return identity, nil
 	}
 	if !errors.Is(err, os.ErrNotExist) {
@@ -166,8 +169,11 @@ func newUUID() (string, error) {
 }
 
 func persist(path string, identity Identity) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return fmt.Errorf("create printer identity directory: %w", err)
+	}
+	if err := os.Chmod(filepath.Dir(path), 0o750); err != nil {
+		return fmt.Errorf("chmod printer identity directory: %w", err)
 	}
 	data, err := json.MarshalIndent(identity, "", "  ")
 	if err != nil {
@@ -187,7 +193,7 @@ func persist(path string, identity Identity) error {
 			_ = os.Remove(tmpName)
 		}
 	}()
-	if err := tmp.Chmod(0o600); err != nil {
+	if err := tmp.Chmod(0o640); err != nil {
 		return fmt.Errorf("chmod printer identity: %w", err)
 	}
 	if _, err := tmp.Write(data); err != nil {
@@ -206,6 +212,20 @@ func persist(path string, identity Identity) error {
 	if dir, err := os.Open(filepath.Dir(path)); err == nil {
 		_ = dir.Sync()
 		_ = dir.Close()
+	}
+	return ensureIdentityGroupReadable(path)
+}
+
+// The canonical printer identity contains only public discovery metadata. Keep
+// ownership with the control-plane uid/gid, but allow the same numeric group to
+// read it so the Avahi publisher can use a host-recognized unprivileged UID
+// without gaining control-plane write access.
+func ensureIdentityGroupReadable(path string) error {
+	if err := os.Chmod(filepath.Dir(path), 0o750); err != nil {
+		return fmt.Errorf("chmod printer identity directory: %w", err)
+	}
+	if err := os.Chmod(path, 0o640); err != nil {
+		return fmt.Errorf("chmod printer identity: %w", err)
 	}
 	return nil
 }

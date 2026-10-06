@@ -31,9 +31,11 @@ const (
 var mdnsIPv4 = net.IPv4(224, 0, 0, 251)
 
 type Config struct {
-	Identity  frprinter.Identity
-	Instance  string
-	Interface string
+	Identity    frprinter.Identity
+	Instance    string
+	Interface   string
+	Backend     string
+	DBusAddress string
 }
 
 func Run(ctx context.Context, cfg Config) error {
@@ -56,6 +58,20 @@ func Run(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return err
 	}
+	backend := strings.ToLower(strings.TrimSpace(cfg.Backend))
+	if backend == "" {
+		backend = "direct"
+	}
+	switch backend {
+	case "avahi":
+		return runAvahi(ctx, cfg, instance, ifi, ip)
+	case "direct":
+		// Preserve the existing direct mDNS responder for targets where it is
+		// already qualified and the host does not prohibit another stack.
+	default:
+		return fmt.Errorf("unsupported DNS-SD backend %q", cfg.Backend)
+	}
+
 	conn, err := openMDNSSocket(ifi, ip)
 	if err != nil {
 		return err
@@ -360,16 +376,7 @@ func readName(msg []byte, off int) (string, int, error) {
 	return strings.Join(labels, ".") + ".", next, nil
 }
 
-func buildResponse(identity frprinter.Identity, instance string, ip net.IP, uniqueTTL, sharedTTL uint32) ([]byte, error) {
-	service := []string{"_ipp", "_tcp", "local"}
-	subtype := []string{"_universal", "_sub", "_ipp", "_tcp", "local"}
-	meta := []string{"_services", "_dns-sd", "_udp", "local"}
-	instanceName := append([]string{instance}, service...)
-	host := strings.Split(strings.TrimSuffix(identity.Host, "."), ".")
-	if err := validateLabels(host); err != nil {
-		return nil, fmt.Errorf("invalid identity host for DNS-SD: %w", err)
-	}
-
+func airPrintTXT(identity frprinter.Identity) []string {
 	rp := strings.TrimPrefix(identity.ResourcePath, "/")
 	uuid := strings.TrimPrefix(identity.PrinterUUID, "urn:uuid:")
 	txt := []string{
@@ -385,6 +392,20 @@ func buildResponse(identity frprinter.Identity, instance string, ip net.IP, uniq
 	if identity.Location != "" {
 		txt = append(txt, "note="+identity.Location)
 	}
+	return txt
+}
+
+func buildResponse(identity frprinter.Identity, instance string, ip net.IP, uniqueTTL, sharedTTL uint32) ([]byte, error) {
+	service := []string{"_ipp", "_tcp", "local"}
+	subtype := []string{"_universal", "_sub", "_ipp", "_tcp", "local"}
+	meta := []string{"_services", "_dns-sd", "_udp", "local"}
+	instanceName := append([]string{instance}, service...)
+	host := strings.Split(strings.TrimSuffix(identity.Host, "."), ".")
+	if err := validateLabels(host); err != nil {
+		return nil, fmt.Errorf("invalid identity host for DNS-SD: %w", err)
+	}
+
+	txt := airPrintTXT(identity)
 	txtData, err := encodeTXT(txt)
 	if err != nil {
 		return nil, err

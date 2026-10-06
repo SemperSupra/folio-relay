@@ -43,17 +43,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          root="$RUNNER_TEMP/foliorelay-dnssd"
+          root="/tmp/foliorelay-dnssd-${GITHUB_RUN_ID}"
           token="$root/control.token"
           sudo mkdir -p "$root/control" "$root/artifacts" "$root/cups-state" "$root/cups-spool"
           printf '%s\n' 'foliorelay-dnssd-fixture-token-0001' | sudo tee "$token" >/dev/null
           sudo chown -R 10001:10001 "$root/control" "$root/artifacts" "$root/cups-state" "$root/cups-spool" "$token"
-          sudo chmod 0700 "$root/control" "$root/artifacts"
+          sudo chmod 0750 "$root/control"
+          sudo chmod 0700 "$root/artifacts"
           sudo chmod 0755 "$root/cups-state" "$root/cups-spool"
           sudo chmod 0400 "$token"
           host_ipv4="$(ip -4 route get 1.1.1.1 | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')"
           test -n "$host_ipv4"
-          public_host="$(hostname).local"
+          public_host="foliorelay-ci-${GITHUB_RUN_ID}.local"
           printf '%s %s\n' "$host_ipv4" "$public_host" | sudo tee -a /etc/hosts >/dev/null
           {
             echo "FOLIORELAY_DATA_ROOT=$root"
@@ -64,11 +65,41 @@ jobs:
             echo "FOLIORELAY_PRINTER_LOCATION=RDTE"
           } >>"$GITHUB_ENV"
 
-      - name: Start exact three-service MVP runtime
+      - name: Start control/CUPS and host-side Avahi publisher
         shell: bash
         run: |
           set -euo pipefail
-          docker compose -f deploy/mvp/compose.yaml up -d --build
+          evidence="$RUNNER_TEMP/foliorelay-dnssd-evidence"
+          mkdir -p "$evidence"
+          docker compose -f deploy/mvp/compose.yaml up -d --build control cups
+
+          go build -trimpath -o "$RUNNER_TEMP/foliorelay-dnssd-publisher.build" ./cmd/foliorelay-dnssd
+          publisher="/tmp/foliorelay-dnssd-publisher-${GITHUB_RUN_ID}"
+          sudo install -o 65534 -g 10001 -m 0555 "$RUNNER_TEMP/foliorelay-dnssd-publisher.build" "$publisher"
+          : >"$evidence/discovery.log"
+          sudo setpriv --reuid=65534 --regid=10001 --clear-groups \
+            test -x "$publisher"
+          identity="$FOLIORELAY_DATA_ROOT/control/config/printer.json"
+          for _ in $(seq 1 60); do
+            if sudo setpriv --reuid=65534 --regid=10001 --clear-groups \
+              test -r "$identity"; then
+              break
+            fi
+            sleep 1
+          done
+          sudo setpriv --reuid=65534 --regid=10001 --clear-groups \
+            test -r "$identity"
+
+          sudo setpriv \
+            --reuid=65534 --regid=10001 --clear-groups \
+            --inh-caps=-all --ambient-caps=-all --bounding-set=-all \
+            "$publisher" \
+            -identity-file "$identity" \
+            -backend avahi \
+            -dbus-address unix:path=/run/dbus/system_bus_socket \
+            >"$evidence/discovery.log" 2>&1 &
+          echo $! >"$RUNNER_TEMP/foliorelay-dnssd.pid"
+
           testfile="$(find /usr/share/cups -type f -name get-printer-attributes.test -print -quit)"
           test -n "$testfile"
           for _ in $(seq 1 90); do
@@ -77,14 +108,14 @@ jobs:
             discovery_ok=false
             curl -fsS http://127.0.0.1:18080/readyz >/dev/null 2>&1 && control_ok=true
             ipptool -tv "$FOLIORELAY_PUBLIC_PRINTER_URI" "$testfile" >"$RUNNER_TEMP/dnssd-ipp.txt" 2>&1 && cups_ok=true
-            [ "$(docker compose -f deploy/mvp/compose.yaml ps --status running --services | grep -c '^discovery$')" -eq 1 ] && discovery_ok=true
+            kill -0 "$(cat "$RUNNER_TEMP/foliorelay-dnssd.pid")" 2>/dev/null && discovery_ok=true
             if [ "$control_ok" = true ] && [ "$cups_ok" = true ] && [ "$discovery_ok" = true ]; then
               exit 0
             fi
             sleep 1
           done
           docker compose -f deploy/mvp/compose.yaml ps
-          docker compose -f deploy/mvp/compose.yaml logs discovery
+          cat "$evidence/discovery.log" || true
           cat "$RUNNER_TEMP/dnssd-ipp.txt" || true
           exit 1
 
@@ -116,7 +147,12 @@ jobs:
             fi
             sleep 1
           done
-          [ "$found" = true ]
+          if [ "$found" != true ]; then
+            docker compose -f deploy/mvp/compose.yaml ps || true
+            cat "$evidence/discovery.log" || true
+            cat "$evidence/avahi-universal.txt" || true
+            exit 1
+          fi
 
           timeout 4 avahi-browse -rt _ipp._tcp >"$evidence/avahi-ipp.txt" 2>&1 || true
           grep -Fq 'FolioRelay' "$evidence/avahi-ipp.txt"
@@ -127,7 +163,7 @@ jobs:
           test "$(jq -r '.identity.printer_uuid' "$evidence/control-printer.json")" = "$printer_uuid"
           test "$(jq -r '.public_uri' "$evidence/control-printer.json")" = "$FOLIORELAY_PUBLIC_PRINTER_URI"
 
-          docker compose -f deploy/mvp/compose.yaml logs discovery >"$evidence/discovery.log" 2>&1
+          grep -Fq 'using avahi backend' "$evidence/discovery.log"
           ! grep -Eiq 'fatal|panic|permission denied|address already in use' "$evidence/discovery.log"
 
       - name: Upload DNS-SD evidence
@@ -145,6 +181,11 @@ jobs:
         shell: bash
         run: |
           mkdir -p "$RUNNER_TEMP/foliorelay-dnssd-evidence"
+          if [ -s "$RUNNER_TEMP/foliorelay-dnssd.pid" ]; then
+            sudo kill "$(cat "$RUNNER_TEMP/foliorelay-dnssd.pid")" 2>/dev/null || true
+          fi
+          sudo rm -f "/tmp/foliorelay-dnssd-publisher-${GITHUB_RUN_ID}" || true
+          sudo rm -rf "/tmp/foliorelay-dnssd-${GITHUB_RUN_ID}" || true
           docker compose -f deploy/mvp/compose.yaml ps >"$RUNNER_TEMP/foliorelay-dnssd-evidence/compose-ps.txt" 2>&1 || true
           docker compose -f deploy/mvp/compose.yaml logs >"$RUNNER_TEMP/foliorelay-dnssd-evidence/compose.log" 2>&1 || true
           docker compose -f deploy/mvp/compose.yaml down || true

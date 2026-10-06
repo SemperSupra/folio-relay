@@ -6,7 +6,7 @@ ARG UBUNTU_SNAPSHOT=20260928T000000Z
 
 FROM ${GO_BASE} AS go-build
 WORKDIR /src
-COPY go.mod ./
+COPY go.mod go.sum ./
 COPY cmd/foliorelay-ipp-ingest ./cmd/foliorelay-ipp-ingest
 COPY cmd/foliorelay-state-fixture ./cmd/foliorelay-state-fixture
 COPY cmd/foliorelay-cups-config ./cmd/foliorelay-cups-config
