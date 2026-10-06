@@ -1,0 +1,283 @@
+name: FolioRelay RDTE OCI publication
+
+on:
+  pull_request:
+    branches:
+      - fix/truenas-avahi-dbus-discovery
+    paths:
+      - ".github/workflows/publish-rdte-images.yml"
+      - "deploy/control/**"
+      - "deploy/engineering-cups/**"
+      - "experiments/print-substrate/cups-backend.sh"
+      - "experiments/print-substrate/cups-foliorelay.ppd"
+      - "cmd/foliorelayd/**"
+      - "cmd/foliorelay-probe/**"
+      - "cmd/foliorelay-ipp-ingest/**"
+      - "internal/**"
+      - "go.mod"
+      - "go.sum"
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  publish-qualify:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CONTROL_IMAGE: ghcr.io/sempersupra/foliorelay-control
+      CUPS_IMAGE: ghcr.io/sempersupra/foliorelay-cups
+    steps:
+      - name: Checkout exact FolioRelay source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd
+
+      - name: Derive immutable RDTE tags
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="rdte-${GITHUB_SHA::12}"
+          {
+            echo "tag=$tag"
+            echo "control_reference=$CONTROL_IMAGE:$tag"
+            echo "cups_reference=$CUPS_IMAGE:$tag"
+          } >>"$GITHUB_OUTPUT"
+
+      - name: Build local control smoke image
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f
+        with:
+          context: .
+          file: deploy/control/Dockerfile
+          load: true
+          push: false
+          provenance: false
+          sbom: false
+          tags: foliorelay-control:publish-smoke
+          cache-to: type=gha,mode=max,scope=foliorelay-control-rdte
+
+      - name: Smoke control image
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          cid=""
+          cleanup() {
+            [[ -z "$cid" ]] || docker rm -f "$cid" >/dev/null 2>&1 || true
+            sudo rm -rf "$tmp"
+          }
+          trap cleanup EXIT
+          mkdir -p "$tmp/data"
+          printf '%s\n' 'rdte-publication-token-0000000001' >"$tmp/token"
+          sudo chown -R 10001:10001 "$tmp/data" "$tmp/token"
+          sudo chmod 0700 "$tmp/data"
+          sudo chmod 0400 "$tmp/token"
+
+          cid="$(docker run -d --read-only \
+            -p 127.0.0.1:18080:18080 \
+            -v "$tmp/data:/var/lib/foliorelay" \
+            -v "$tmp/token:/run/foliorelay-token:ro" \
+            foliorelay-control:publish-smoke \
+            -listen 0.0.0.0:18080 \
+            -journal /var/lib/foliorelay/journal.frj \
+            -artifact-store /var/lib/foliorelay/artifacts \
+            -token-file /run/foliorelay-token \
+            -identity-file /var/lib/foliorelay/printer-identity.json \
+            -printer-uri ipp://foliorelay-rdte.local:8634/printers/FolioRelay \
+            -airprint)"
+
+          for _ in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:18080/healthz >/dev/null 2>&1 &&
+               curl -fsS http://127.0.0.1:18080/readyz >/dev/null 2>&1; then
+              exit 0
+            fi
+            docker inspect "$cid" --format '{{.State.Running}}' | grep -qx true || {
+              docker logs "$cid"
+              exit 1
+            }
+            sleep 1
+          done
+          docker logs "$cid"
+          exit 1
+
+      - name: Build local selected CUPS smoke image
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f
+        with:
+          context: .
+          file: deploy/engineering-cups/Dockerfile
+          target: cups
+          load: true
+          push: false
+          provenance: false
+          sbom: false
+          tags: foliorelay-cups:publish-smoke
+          cache-to: type=gha,mode=max,scope=foliorelay-cups-rdte
+
+      - name: Smoke selected CUPS image
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cups-ipp-utils
+          cid=""
+          cleanup() {
+            [[ -z "$cid" ]] || docker rm -f "$cid" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          cid="$(docker run -d --read-only \
+            -e FOLIORELAY_PUBLIC_HOST=foliorelay-rdte.local \
+            -p 127.0.0.1:18634:8634 \
+            --tmpfs /etc/cups:rw,noexec,nosuid,nodev,size=4m,uid=10001,gid=10001,mode=0750 \
+            --tmpfs /var/cache/cups:rw,noexec,nosuid,nodev,size=16m,uid=10001,gid=10001,mode=0750 \
+            --tmpfs /var/log/cups:rw,noexec,nosuid,nodev,size=16m,uid=10001,gid=10001,mode=0750 \
+            foliorelay-cups:publish-smoke)"
+
+          testfile="$(find /usr/share/cups -type f -name get-printer-attributes.test -print -quit)"
+          test -n "$testfile"
+          for _ in $(seq 1 60); do
+            if ipptool -tv ipp://127.0.0.1:18634/printers/FolioRelay "$testfile" >/tmp/cups-smoke.txt 2>&1; then
+              grep -q 'successful-ok' /tmp/cups-smoke.txt
+              grep -q 'image/urf' /tmp/cups-smoke.txt
+              exit 0
+            fi
+            docker inspect "$cid" --format '{{.State.Running}}' | grep -qx true || {
+              docker logs "$cid"
+              exit 1
+            }
+            sleep 1
+          done
+          cat /tmp/cups-smoke.txt || true
+          docker logs "$cid"
+          exit 1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push exact control RDTE artifact
+        id: control_publish
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f
+        with:
+          context: .
+          file: deploy/control/Dockerfile
+          push: true
+          provenance: mode=max
+          sbom: true
+          tags: ${{ steps.meta.outputs.control_reference }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/SemperSupra/folio-relay
+            org.opencontainers.image.revision=${{ github.event.pull_request.head.sha }}
+            org.opencontainers.image.version=${{ steps.meta.outputs.tag }}
+            io.sempersupra.foliorelay.component=control
+          cache-from: type=gha,scope=foliorelay-control-rdte
+
+      - name: Build and push exact CUPS RDTE artifact
+        id: cups_publish
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f
+        with:
+          context: .
+          file: deploy/engineering-cups/Dockerfile
+          target: cups
+          push: true
+          provenance: mode=max
+          sbom: true
+          tags: ${{ steps.meta.outputs.cups_reference }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/SemperSupra/folio-relay
+            org.opencontainers.image.revision=${{ github.event.pull_request.head.sha }}
+            org.opencontainers.image.version=${{ steps.meta.outputs.tag }}
+            io.sempersupra.foliorelay.component=cups
+          cache-from: type=gha,scope=foliorelay-cups-rdte
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@cad07c2e89fa2edd6e2d7bab4c1aa38e53f76003
+
+      - name: Sign exact digests with GitHub OIDC
+        env:
+          CONTROL_DIGEST: ${{ steps.control_publish.outputs.digest }}
+          CUPS_DIGEST: ${{ steps.cups_publish.outputs.digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$CONTROL_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$CUPS_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          cosign sign --yes "$CONTROL_IMAGE@$CONTROL_DIGEST"
+          cosign sign --yes "$CUPS_IMAGE@$CUPS_DIGEST"
+
+      - name: Prove anonymous digest pulls
+        env:
+          CONTROL_DIGEST: ${{ steps.control_publish.outputs.digest }}
+          CUPS_DIGEST: ${{ steps.cups_publish.outputs.digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker logout ghcr.io >/dev/null 2>&1 || true
+          docker image rm -f "$CONTROL_IMAGE@$CONTROL_DIGEST" "$CUPS_IMAGE@$CUPS_DIGEST" >/dev/null 2>&1 || true
+          docker pull "$CONTROL_IMAGE@$CONTROL_DIGEST"
+          docker pull "$CUPS_IMAGE@$CUPS_DIGEST"
+          [[ "$(docker image inspect "$CONTROL_IMAGE@$CONTROL_DIGEST" --format '{{index .RepoDigests 0}}')" == "$CONTROL_IMAGE@$CONTROL_DIGEST" ]]
+          [[ "$(docker image inspect "$CUPS_IMAGE@$CUPS_DIGEST" --format '{{index .RepoDigests 0}}')" == "$CUPS_IMAGE@$CUPS_DIGEST" ]]
+
+      - name: Emit sanitized publication receipt
+        env:
+          CONTROL_DIGEST: ${{ steps.control_publish.outputs.digest }}
+          CUPS_DIGEST: ${{ steps.cups_publish.outputs.digest }}
+          TAG: ${{ steps.meta.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/foliorelay-publication
+          python3 - <<'PY' | tee /tmp/foliorelay-publication/receipt.json
+          import json, os
+          print(json.dumps({
+            "schema": "semper-supra.foliorelay-rdte-publication/1",
+            "status": "PASS",
+            "source_revision": os.environ["GITHUB_SHA"],
+            "tag": os.environ["TAG"],
+            "control": {
+              "image": "ghcr.io/sempersupra/foliorelay-control",
+              "digest": os.environ["CONTROL_DIGEST"],
+              "anonymous_pull": True,
+              "signed_keyless": True
+            },
+            "cups": {
+              "image": "ghcr.io/sempersupra/foliorelay-cups",
+              "digest": os.environ["CUPS_DIGEST"],
+              "anonymous_pull": True,
+              "signed_keyless": True
+            },
+            "sbom_attestation_requested": True,
+            "provenance_attestation_requested": True,
+            "release_published": False,
+            "moving_tag_published": False,
+            "secrets_captured": False,
+            "money_spent_usd": 0
+          }, indent=2, sort_keys=True))
+          PY
+          {
+            echo '### FolioRelay RDTE OCI publication receipt'
+            echo
+            cat /tmp/foliorelay-publication/receipt.json
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Upload exact publication receipt
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: foliorelay-rdte-publication
+          path: /tmp/foliorelay-publication/receipt.json
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
