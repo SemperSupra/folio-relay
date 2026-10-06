@@ -76,10 +76,14 @@ jobs:
           go build -trimpath -o "$RUNNER_TEMP/foliorelay-dnssd-publisher" ./cmd/foliorelay-dnssd
           identity="$FOLIORELAY_DATA_ROOT/control/config/printer.json"
           for _ in $(seq 1 60); do
-            [ -r "$identity" ] && break
+            if sudo setpriv --reuid=65534 --regid=10001 --clear-groups \
+              test -r "$identity"; then
+              break
+            fi
             sleep 1
           done
-          test -r "$identity"
+          sudo setpriv --reuid=65534 --regid=10001 --clear-groups \
+            test -r "$identity"
 
           sudo setpriv \
             --reuid=65534 --regid=10001 --clear-groups \
