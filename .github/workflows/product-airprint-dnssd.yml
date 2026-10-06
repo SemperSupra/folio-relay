@@ -43,7 +43,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          root="$RUNNER_TEMP/foliorelay-dnssd"
+          root="$RUNNER_TEMP/foliorelay-dnssd-bin"
           token="$root/control.token"
           sudo mkdir -p "$root/control" "$root/artifacts" "$root/cups-state" "$root/cups-spool"
           printf '%s\n' 'foliorelay-dnssd-fixture-token-0001' | sudo tee "$token" >/dev/null
@@ -73,7 +73,7 @@ jobs:
           mkdir -p "$evidence"
           docker compose -f deploy/mvp/compose.yaml up -d --build control cups
 
-          go build -trimpath -o "$RUNNER_TEMP/foliorelay-dnssd" ./cmd/foliorelay-dnssd
+          go build -trimpath -o "$RUNNER_TEMP/foliorelay-dnssd-bin" ./cmd/foliorelay-dnssd
           identity="$FOLIORELAY_DATA_ROOT/control/config/printer.json"
           for _ in $(seq 1 60); do
             [ -r "$identity" ] && break
@@ -84,7 +84,7 @@ jobs:
           sudo setpriv \
             --reuid=65534 --regid=10001 --clear-groups \
             --inh-caps=-all --ambient-caps=-all --bounding-set=-all \
-            "$RUNNER_TEMP/foliorelay-dnssd" \
+            "$RUNNER_TEMP/foliorelay-dnssd-bin" \
             -identity-file "$identity" \
             -backend avahi \
             -dbus-address unix:path=/run/dbus/system_bus_socket \
