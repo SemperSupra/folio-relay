@@ -375,3 +375,23 @@ func TestWebPortalIsPublicButContainsNoCredential(t *testing.T) {
 		t.Fatal("web portal missing content security policy")
 	}
 }
+
+func TestWebFaviconProbeIsNoiseFree(t *testing.T) {
+	state, err := frstate.OpenDurableEngine(filepath.Join(t.TempDir(), "journal.frj"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer state.Close()
+	server, err := New(state, t.TempDir(), testToken, testPrinter(t), Profiles{WindowsIPP: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp := httptest.NewRecorder()
+	server.Handler().ServeHTTP(resp, httptest.NewRequest(http.MethodGet, "/favicon.ico", nil))
+	if resp.Code != http.StatusNoContent {
+		t.Fatalf("favicon probe should be noise-free: %d %s", resp.Code, resp.Body.String())
+	}
+	if got := resp.Header().Get("Content-Security-Policy"); got == "" {
+		t.Fatal("favicon response missing web security headers")
+	}
+}
