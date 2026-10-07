@@ -29,14 +29,14 @@
     </section>
 
     <section id="app" hidden>
-      <nav class="tabs" aria-label="FolioRelay views" role="tablist">
-        <button id="tab-overview" data-view="overview" class="active" role="tab" aria-controls="overview" aria-selected="true">Overview</button>
-        <button id="tab-inbox" data-view="inbox" role="tab" aria-controls="inbox" aria-selected="false">Inbox</button>
-        <button id="tab-printer" data-view="printer" role="tab" aria-controls="printer" aria-selected="false">Printer</button>
-        <button id="tab-diagnostics" data-view="diagnostics" role="tab" aria-controls="diagnostics" aria-selected="false">Diagnostics</button>
+      <nav class="tabs" aria-label="FolioRelay views">
+        <button data-view="overview" class="active" aria-current="page">Overview</button>
+        <button data-view="inbox">Inbox</button>
+        <button data-view="printer">Printer</button>
+        <button data-view="diagnostics">Diagnostics</button>
       </nav>
 
-      <section id="overview" class="view" role="tabpanel" aria-labelledby="tab-overview">
+      <section id="overview" class="view">
         <div class="hero panel">
           <div>
             <p class="eyebrow">System status</p>
@@ -57,12 +57,12 @@
         </article>
       </section>
 
-      <section id="inbox" class="view" role="tabpanel" aria-labelledby="tab-inbox" hidden>
+      <section id="inbox" class="view" hidden>
         <div class="section-heading"><div><p class="eyebrow">Accepted artifacts</p><h1>Inbox</h1></div><button id="refresh-jobs" class="quiet">Refresh</button></div>
         <div id="jobs" class="panel"></div>
       </section>
 
-      <section id="printer" class="view" role="tabpanel" aria-labelledby="tab-printer" hidden>
+      <section id="printer" class="view" hidden>
         <p class="eyebrow">Native printing</p><h1>Printer</h1>
         <div id="printer-details" class="panel definition-grid"></div>
         <div class="cards two">
@@ -71,7 +71,7 @@
         </div>
       </section>
 
-      <section id="diagnostics" class="view" role="tabpanel" aria-labelledby="tab-diagnostics" hidden>
+      <section id="diagnostics" class="view" hidden>
         <div class="section-heading"><div><p class="eyebrow">Shared human / automation / agent oracle</p><h1>Diagnostics</h1></div><button id="run-diagnostics">Run self-test</button></div>
         <div id="checks" class="checks"></div>
       </section>
