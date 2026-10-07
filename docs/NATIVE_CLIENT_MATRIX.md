@@ -41,6 +41,12 @@ If a hosted runner cannot meet those conditions, the platform remains
 unqualified rather than being represented by a weaker substitute. HIL/device
 qualification can be added later when it earns its keep.
 
+The final physical-client acceptance procedure for the production CUPS
+candidate is now defined in [PHYSICAL_CLIENT_HIL.md](PHYSICAL_CLIENT_HIL.md).
+It is client/LAN confirmation only; failures are retained for a separate
+bounded diagnostic campaign rather than repaired on the production TrueNAS
+system.
+
 ## Linux result
 
 The Ubuntu local scheduler/filter route was deliberately separated from the
