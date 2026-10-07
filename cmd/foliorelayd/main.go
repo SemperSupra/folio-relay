@@ -25,10 +25,16 @@ func main() {
 	printerName := flag.String("printer-name", "FolioRelay", "first-start printer display name")
 	printerLocation := flag.String("printer-location", "", "first-start printer location")
 	airPrint := flag.Bool("airprint", false, "advertise AirPrint capability in the product API")
+	tlsCertFile := flag.String("tls-cert-file", "", "TLS certificate PEM file for management/WebUI HTTPS")
+	tlsKeyFile := flag.String("tls-key-file", "", "TLS private key PEM file for management/WebUI HTTPS")
 	flag.Parse()
 
 	if *journal == "" || *artifactStore == "" || *tokenFile == "" || *identityFile == "" {
 		log.Fatal("journal, artifact-store, token-file, and identity-file are required")
+	}
+	useTLS, err := tlsConfigured(*tlsCertFile, *tlsKeyFile)
+	if err != nil {
+		log.Fatal(err)
 	}
 	rawToken, err := os.ReadFile(*tokenFile)
 	if err != nil {
@@ -64,8 +70,25 @@ func main() {
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
-	log.Printf("foliorelayd listening on %s", *listen)
-	if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Fatal(fmt.Errorf("serve: %w", err))
+	scheme := "http"
+	if useTLS {
+		scheme = "https"
 	}
+	log.Printf("foliorelayd listening on %s://%s", scheme, *listen)
+	var serveErr error
+	if useTLS {
+		serveErr = httpServer.ListenAndServeTLS(*tlsCertFile, *tlsKeyFile)
+	} else {
+		serveErr = httpServer.ListenAndServe()
+	}
+	if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+		log.Fatal(fmt.Errorf("serve: %w", serveErr))
+	}
+}
+
+func tlsConfigured(certFile, keyFile string) (bool, error) {
+	if (certFile == "") != (keyFile == "") {
+		return false, errors.New("tls-cert-file and tls-key-file must be provided together")
+	}
+	return certFile != "", nil
 }
