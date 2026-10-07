@@ -1,0 +1,130 @@
+name: FolioRelay Management TLS Runtime
+
+on:
+  pull_request:
+    paths:
+      - 'cmd/foliorelayd/**'
+      - 'internal/control/**'
+      - 'internal/transporttls/**'
+      - 'internal/webui/**'
+      - 'deploy/control/**'
+      - 'deploy/mvp/**'
+      - '.github/workflows/management-tls-runtime.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  management-tls:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout FolioRelay
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Build exact candidate control image
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build -f deploy/control/Dockerfile -t foliorelay-control:tls-test .
+
+      - name: Start private-HTTP plus external-HTTPS candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          data="$RUNNER_TEMP/foliorelay-tls-data"
+          token="$RUNNER_TEMP/foliorelay-tls.token"
+          evidence="$RUNNER_TEMP/foliorelay-tls-evidence"
+          mkdir -p "$data" "$evidence"
+          sudo chown 10001:10001 "$data"
+          openssl rand -hex 24 >"$token"
+          chmod 0444 "$token"
+
+          docker run -d             --name foliorelay-tls             --read-only             --tmpfs /tmp:size=16m,mode=1777             --cap-drop ALL             --security-opt no-new-privileges:true             -p 127.0.0.1:18443:18443             -v "$data:/var/lib/foliorelay"             -v "$token:/run/secrets/foliorelay.token:ro"             foliorelay-control:tls-test               -listen 0.0.0.0:18080               -https-listen 0.0.0.0:18443               -tls-state-dir /var/lib/foliorelay/tls               -journal /var/lib/foliorelay/state/journal.frj               -artifact-store /var/lib/foliorelay/artifacts               -token-file /run/secrets/foliorelay.token               -identity-file /var/lib/foliorelay/config/printer.json               -printer-uri ipp://foliorelay.test:8634/printers/FolioRelay               -airprint
+
+          for _ in $(seq 1 60); do
+            if curl -kfsS https://127.0.0.1:18443/readyz >/dev/null; then
+              exit 0
+            fi
+            docker inspect foliorelay-tls --format '{{.State.Running}}' | grep -qx true || {
+              docker logs foliorelay-tls >&2
+              exit 1
+            }
+            sleep 1
+          done
+          docker logs foliorelay-tls >&2
+          exit 1
+
+      - name: Prove host exposure and TLS identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/foliorelay-tls-evidence"
+
+          ports="$(docker port foliorelay-tls)"
+          printf '%s\n' "$ports" | tee "$evidence/docker-ports.txt"
+          grep -Eq '^18443/tcp -> 127\.0\.0\.1:18443$' "$evidence/docker-ports.txt"
+          ! grep -q '^18080/tcp ->' "$evidence/docker-ports.txt"
+
+          openssl s_client -connect 127.0.0.1:18443 -servername foliorelay.test </dev/null 2>/dev/null             | openssl x509 -outform PEM >"$evidence/management-cert.pem"
+          openssl x509 -in "$evidence/management-cert.pem" -noout -checkhost foliorelay.test
+          openssl x509 -in "$evidence/management-cert.pem" -noout -fingerprint -sha256             | tee "$evidence/fingerprint-before.txt"
+
+          curl -kfsS https://127.0.0.1:18443/             | tee "$evidence/index.html"             | grep -q 'FolioRelay'
+
+      - name: Prove browser session is Secure over TLS
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/foliorelay-tls-evidence"
+          payload="$RUNNER_TEMP/login.json"
+          jq -n --arg token "$(cat "$RUNNER_TEMP/foliorelay-tls.token")" '{token:$token}' >"$payload"
+
+          curl -kfsS             -D "$evidence/login-headers.txt"             -c "$RUNNER_TEMP/tls-cookies"             -H 'Content-Type: application/json'             --data-binary @"$payload"             https://127.0.0.1:18443/auth/session             -o /dev/null
+
+          grep -Ei '^set-cookie: foliorelay_session=.*;.*secure' "$evidence/login-headers.txt"
+          curl -kfsS -b "$RUNNER_TEMP/tls-cookies"             https://127.0.0.1:18443/api/v1/status             | tee "$evidence/status.json"             | jq -e '.status == "ready"'
+
+      - name: Prove TLS identity persists across restart
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/foliorelay-tls-evidence"
+          docker restart foliorelay-tls >/dev/null
+          for _ in $(seq 1 60); do
+            curl -kfsS https://127.0.0.1:18443/readyz >/dev/null 2>&1 && break
+            sleep 1
+          done
+          curl -kfsS https://127.0.0.1:18443/readyz >/dev/null
+
+          openssl s_client -connect 127.0.0.1:18443 -servername foliorelay.test </dev/null 2>/dev/null             | openssl x509 -noout -fingerprint -sha256             | tee "$evidence/fingerprint-after.txt"
+          cmp "$evidence/fingerprint-before.txt" "$evidence/fingerprint-after.txt"
+
+      - name: Preserve bounded evidence
+        if: always()
+        shell: bash
+        run: |
+          evidence="$RUNNER_TEMP/foliorelay-tls-evidence"
+          mkdir -p "$evidence"
+          docker inspect foliorelay-tls >"$evidence/container-inspect.json" 2>/dev/null || true
+          docker logs foliorelay-tls >"$evidence/control.log" 2>&1 || true
+
+      - name: Upload management TLS evidence
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: foliorelay-management-tls
+          path: ${{ runner.temp }}/foliorelay-tls-evidence
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+      - name: Cleanup
+        if: always()
+        run: docker rm -f foliorelay-tls >/dev/null 2>&1 || true
