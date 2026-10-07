@@ -11,6 +11,7 @@ param(
     [string]$ObservedCupsImage,
     [string]$QueueName,
     [string]$AppleOSVersion,
+    [switch]$AirPrintConfirmed,
     [ValidateSet('iPhone','iPad')]
     [string]$AppleClientType = 'iPhone'
 )
@@ -248,6 +249,20 @@ try {
                 if ($null -eq $after -or [int]$after.status.inbox_jobs -ne $targetCount) {
                     throw 'Windows native IPP submission did not create exactly one durable Inbox job'
                 }
+
+                $queueDrained = $false
+                for ($i = 0; $i -lt 30; $i++) {
+                    $activeJobs = @(Get-PrintJob -PrinterName $QueueName -ErrorAction SilentlyContinue)
+                    if ($activeJobs.Count -eq 0) {
+                        $queueDrained = $true
+                        break
+                    }
+                    Start-Sleep -Seconds 1
+                }
+                if (-not $queueDrained) {
+                    throw 'Windows print job did not leave the active queue normally'
+                }
+
                 Assert-IdentityEqual $preflight.identity $after.printer.identity
 
                 $baseline = @{}
@@ -279,6 +294,7 @@ try {
                     }
                     inbox_before = [int]$before.status.inbox_jobs
                     inbox_after = [int]$after.status.inbox_jobs
+                    queue_drained = $queueDrained
                     new_jobs = $newJobs
                     identity = $after.printer.identity
                 }
@@ -296,6 +312,9 @@ try {
         'Final' {
             if ([string]::IsNullOrWhiteSpace($AppleOSVersion)) {
                 throw 'Final requires -AppleOSVersion after the physical AirPrint submission'
+            }
+            if (-not $AirPrintConfirmed) {
+                throw 'Final requires -AirPrintConfirmed after selecting FolioRelay from the native AirPrint picker and submitting one print'
             }
             $preflightPath = Join-Path $SessionDir 'preflight.json'
             $windowsPath = Join-Path $SessionDir 'windows.json'
@@ -332,6 +351,7 @@ try {
                     type = $AppleClientType
                     os_version = $AppleOSVersion
                     operator_assertion = 'FolioRelay was selected from the native AirPrint picker and one print was submitted successfully.'
+                    explicitly_confirmed = $true
                 }
                 identity = $finalLive.printer.identity
                 public_uri = $finalLive.printer.public_uri
