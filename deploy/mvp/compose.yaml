@@ -11,7 +11,7 @@ services:
     security_opt:
       - no-new-privileges:true
     ports:
-      - "18080:18080"
+      - "18443:18443"
     volumes:
       - "${FOLIORELAY_DATA_ROOT:?}/control:/var/lib/foliorelay"
       - "${FOLIORELAY_DATA_ROOT:?}/artifacts:/var/lib/foliorelay/artifacts"
@@ -21,6 +21,10 @@ services:
     command:
       - -listen
       - 0.0.0.0:18080
+      - -https-listen
+      - 0.0.0.0:18443
+      - -tls-state-dir
+      - /var/lib/foliorelay/tls
       - -journal
       - /var/lib/foliorelay/state/journal.frj
       - -artifact-store

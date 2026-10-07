@@ -106,7 +106,7 @@ jobs:
             control_ok=false
             cups_ok=false
             discovery_ok=false
-            curl -fsS http://127.0.0.1:18080/readyz >/dev/null 2>&1 && control_ok=true
+            curl -kfsS https://127.0.0.1:18443/readyz >/dev/null 2>&1 && control_ok=true
             ipptool -tv "$FOLIORELAY_PUBLIC_PRINTER_URI" "$testfile" >"$RUNNER_TEMP/dnssd-ipp.txt" 2>&1 && cups_ok=true
             kill -0 "$(cat "$RUNNER_TEMP/foliorelay-dnssd.pid")" 2>/dev/null && discovery_ok=true
             if [ "$control_ok" = true ] && [ "$cups_ok" = true ] && [ "$discovery_ok" = true ]; then
@@ -159,7 +159,7 @@ jobs:
           grep -Fq "UUID=${printer_uuid#urn:uuid:}" "$evidence/avahi-ipp.txt"
 
           token="$(sudo cat "$FOLIORELAY_TOKEN_FILE")"
-          curl -fsS -H "Authorization: Bearer $token"             http://127.0.0.1:18080/api/v1/printer >"$evidence/control-printer.json"
+          curl -kfsS -H "Authorization: Bearer $token"             https://127.0.0.1:18443/api/v1/printer >"$evidence/control-printer.json"
           test "$(jq -r '.identity.printer_uuid' "$evidence/control-printer.json")" = "$printer_uuid"
           test "$(jq -r '.public_uri' "$evidence/control-printer.json")" = "$FOLIORELAY_PUBLIC_PRINTER_URI"
 

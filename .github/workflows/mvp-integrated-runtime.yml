@@ -74,7 +74,7 @@ jobs:
           for _ in $(seq 1 90); do
             control_ok=false
             cups_ok=false
-            curl -fsS http://127.0.0.1:18080/readyz >/dev/null 2>&1 && control_ok=true
+            curl -kfsS https://127.0.0.1:18443/readyz >/dev/null 2>&1 && control_ok=true
             testfile="$(find /usr/share/cups -type f -name get-printer-attributes.test -print -quit)"
             if [ -n "$testfile" ] && ipptool -tv "$FOLIORELAY_PUBLIC_PRINTER_URI" "$testfile" >"$RUNNER_TEMP/ipp-attrs.txt" 2>&1; then
               cups_ok=true
@@ -103,8 +103,8 @@ jobs:
           evidence="$RUNNER_TEMP/foliorelay-mvp-evidence"
           mkdir -p "$evidence"
           token="$(sudo cat "$FOLIORELAY_TOKEN_FILE")"
-          curl -fsS -H "Authorization: Bearer $token" \
-            http://127.0.0.1:18080/api/v1/printer >"$evidence/control-printer.json"
+          curl -kfsS -H "Authorization: Bearer $token" \
+            https://127.0.0.1:18443/api/v1/printer >"$evidence/control-printer.json"
           cp "$RUNNER_TEMP/ipp-attrs.txt" "$evidence/cups-printer.txt"
 
           control_uuid="$(jq -r '.identity.printer_uuid' "$evidence/control-printer.json")"
@@ -163,8 +163,8 @@ jobs:
           evidence="$RUNNER_TEMP/foliorelay-mvp-evidence"
           token="$(sudo cat "$FOLIORELAY_TOKEN_FILE")"
           for _ in $(seq 1 60); do
-            curl -fsS -H "Authorization: Bearer $token" \
-              http://127.0.0.1:18080/api/v1/jobs >"$evidence/jobs.json"
+            curl -kfsS -H "Authorization: Bearer $token" \
+              https://127.0.0.1:18443/api/v1/jobs >"$evidence/jobs.json"
             [ "$(jq '.items | length' "$evidence/jobs.json")" -eq 2 ] && break
             sleep 1
           done
@@ -181,15 +181,15 @@ jobs:
             recorded="$(jq -r --arg media "$media" '.items[] | select(.media_type == $media) | .artifact_sha256' "$evidence/jobs.json")"
             test -n "$job"
             test "$recorded" = "$expected"
-            curl -fsS -H "Authorization: Bearer $token" \
-              "http://127.0.0.1:18080/api/v1/jobs/$job/artifact" >"$evidence/download-$label"
+            curl -kfsS -H "Authorization: Bearer $token" \
+              "https://127.0.0.1:18443/api/v1/jobs/$job/artifact" >"$evidence/download-$label"
             test "$(sha256sum "$evidence/download-$label" | awk '{print $1}')" = "$expected"
           }
           verify_artifact application/pdf "$RUNNER_TEMP/mvp.pdf" pdf
           verify_artifact image/urf "$RUNNER_TEMP/mvp.urf" urf
 
-          curl -fsS -X POST -H "Authorization: Bearer $token" \
-            http://127.0.0.1:18080/api/v1/self-test >"$evidence/self-test.json"
+          curl -kfsS -X POST -H "Authorization: Bearer $token" \
+            https://127.0.0.1:18443/api/v1/self-test >"$evidence/self-test.json"
           jq -e '.status == "pass"' "$evidence/self-test.json" >/dev/null
 
       - name: Prove app recreation preserves identity, Inbox, and artifacts
@@ -204,7 +204,7 @@ jobs:
           docker compose -f deploy/mvp/compose.yaml up -d
 
           for _ in $(seq 1 90); do
-            if curl -fsS http://127.0.0.1:18080/readyz >/dev/null 2>&1; then
+            if curl -kfsS https://127.0.0.1:18443/readyz >/dev/null 2>&1; then
               testfile="$(find /usr/share/cups -type f -name get-printer-attributes.test -print -quit)"
               if ipptool -tv "$FOLIORELAY_PUBLIC_PRINTER_URI" "$testfile" >"$evidence/cups-after-recreate.txt" 2>&1; then
                 break
@@ -213,21 +213,21 @@ jobs:
             sleep 1
           done
 
-          curl -fsS -H "Authorization: Bearer $token" \
-            http://127.0.0.1:18080/api/v1/printer >"$evidence/control-printer-after-recreate.json"
+          curl -kfsS -H "Authorization: Bearer $token" \
+            https://127.0.0.1:18443/api/v1/printer >"$evidence/control-printer-after-recreate.json"
           after_uuid="$(jq -r '.identity.printer_uuid' "$evidence/control-printer-after-recreate.json")"
           cups_uuid="$(awk '/printer-uuid .* = urn:uuid:/ {print $NF; exit}' "$evidence/cups-after-recreate.txt")"
           test "$after_uuid" = "$before_uuid"
           test "$cups_uuid" = "$before_uuid"
 
-          curl -fsS -H "Authorization: Bearer $token" \
-            http://127.0.0.1:18080/api/v1/jobs >"$evidence/jobs-after-recreate.json"
+          curl -kfsS -H "Authorization: Bearer $token" \
+            https://127.0.0.1:18443/api/v1/jobs >"$evidence/jobs-after-recreate.json"
           test "$(jq '.items | length' "$evidence/jobs-after-recreate.json")" -eq 2
 
           while read -r job sha; do
             test -n "$job"
-            curl -fsS -H "Authorization: Bearer $token" \
-              "http://127.0.0.1:18080/api/v1/jobs/$job/artifact" >"$RUNNER_TEMP/recreated-artifact"
+            curl -kfsS -H "Authorization: Bearer $token" \
+              "https://127.0.0.1:18443/api/v1/jobs/$job/artifact" >"$RUNNER_TEMP/recreated-artifact"
             test "$(sha256sum "$RUNNER_TEMP/recreated-artifact" | awk '{print $1}')" = "$sha"
           done < <(jq -r '.items[] | [.job_id,.artifact_sha256] | @tsv' "$evidence/jobs-after-recreate.json")
 
