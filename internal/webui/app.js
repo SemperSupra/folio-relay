@@ -138,7 +138,7 @@ async function runSelfTest() {
   for (const check of receipt.checks || []) {
     const article = document.createElement("article");
     article.className = "panel check " + check.status;
-    const heading = document.createElement("h3");
+    const heading = document.createElement("h2");
     heading.textContent = check.code + " — " + check.status.toUpperCase();
     const message = document.createElement("p");
     message.textContent = check.message;
@@ -162,7 +162,7 @@ async function runSelfTest() {
 async function selectView(name) {
   document.querySelectorAll(".view").forEach((node) => { node.hidden = node.id !== name; });
   document.querySelectorAll(".tabs button").forEach((node) => {
-    node.classList.toggle("active", node.dataset.view === name);
+    const selected = node.dataset.view === name;\n    node.classList.toggle("active", selected);\n    node.setAttribute("aria-selected", selected ? "true" : "false");
   });
   if (name === "inbox") await loadJobs();
   if (name === "diagnostics") await runSelfTest();
