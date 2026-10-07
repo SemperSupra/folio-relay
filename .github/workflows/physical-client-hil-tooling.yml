@@ -1,0 +1,57 @@
+name: Physical Client HIL Tooling
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/physical-client-hil-tooling.yml'
+      - 'tools/physical-hil-observer/**'
+      - 'scripts/hil/**'
+      - 'docs/PHYSICAL_CLIENT_HIL.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  observer-linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: '1.27.1'
+          cache: false
+      - name: Test physical HIL observer
+        run: |
+          set -euo pipefail
+          go test ./tools/physical-hil-observer
+          go build -trimpath -o "$RUNNER_TEMP/physical-hil-observer" ./tools/physical-hil-observer
+          "$RUNNER_TEMP/physical-hil-observer" -h >/dev/null
+
+  observer-windows:
+    runs-on: windows-2025
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: '1.27.1'
+          cache: false
+      - name: Test observer and PowerShell collector syntax
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          go test ./tools/physical-hil-observer
+          go build -trimpath -o "$env:RUNNER_TEMP\physical-hil-observer.exe" ./tools/physical-hil-observer
+          & "$env:RUNNER_TEMP\physical-hil-observer.exe" -h | Out-Null
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path 'scripts/hil/Invoke-FolioRelayPhysicalHil.ps1'),
+            [ref]$tokens,
+            [ref]$errors
+          ) | Out-Null
+          if ($errors.Count -ne 0) {
+            $errors | Format-List * | Out-String | Write-Error
+          }

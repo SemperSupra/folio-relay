@@ -127,6 +127,80 @@ After H2 and H3:
 4. Confirm no duplicate durable effect was created by client retries.
 5. Confirm the production services remain healthy.
 
+## Client-side evidence kit
+
+Use the repository's HIL collector from the real Windows client to minimize
+manual evidence handling. The collector never changes TrueNAS or FolioRelay
+server configuration. It prompts for the FolioRelay management token using a
+secure prompt and keeps the plaintext value in memory only.
+
+The automated H1 observer sends an RFC 6762 legacy-unicast query from an
+ephemeral client UDP port. It requires the same service instance to appear in both the base
+`_ipp._tcp` PTR set and the `_universal._sub._ipp._tcp` subtype PTR set,
+with matching TXT/SRV records for the H0 UUID, host, port, resource path, and
+PDF/URF projection. It does not bind UDP/5353 and is
+not a synthetic publisher or proxy.
+
+Create one evidence directory and reuse it for all phases:
+
+```powershell
+$session = Join-Path $PWD ("foliorelay-physical-hil-" + (Get-Date -Format yyyyMMdd-HHmmss))
+```
+
+For H0/H1, first read the TrueNAS version and running control/CUPS image
+identities from the existing deployment without modifying it. Then run:
+
+```powershell
+.\scripts\hil\Invoke-FolioRelayPhysicalHil.ps1 \
+  -Phase Preflight \
+  -BaseUrl http://<foliorelay-host>:18080 \
+  -SessionDir $session \
+  -ObservedTrueNASVersion 25.04.1 \
+  -ObservedControlImage 'ghcr.io/sempersupra/foliorelay-control@sha256:c8d5787162db919f84e9607d13f368995138861355f3fa269cbb10561f24d80d' \
+  -ObservedCupsImage 'ghcr.io/sempersupra/foliorelay-cups@sha256:0997ad2054ca5e57f34291372aed55f549eee9ff201f171b430436b0655c0814'
+```
+
+The preflight fails closed if version/images differ, FolioRelay is not
+healthy/ready, printer identity is not the qualified IPP shape, or coherent
+AirPrint discovery is absent.
+
+For H2, the collector uses the already-qualified Windows primitive
+`Add-Printer -IppURL`, requires an IPP class driver, creates a uniquely named
+temporary local queue, submits exactly one bounded Windows spooler job, proves
+the durable Inbox advanced by exactly one, and removes only the queue it
+created:
+
+```powershell
+.\scripts\hil\Invoke-FolioRelayPhysicalHil.ps1 \
+  -Phase Windows \
+  -BaseUrl http://<foliorelay-host>:18080 \
+  -SessionDir $session
+```
+
+Then perform H3 manually from the physical iPhone/iPad as specified above.
+Do not run any other print jobs against FolioRelay between H0 and H4.
+
+Finally run H4, recording the physical Apple device type and OS version:
+
+```powershell
+.\scripts\hil\Invoke-FolioRelayPhysicalHil.ps1 \
+  -Phase Final \
+  -BaseUrl http://<foliorelay-host>:18080 \
+  -SessionDir $session \
+  -AppleClientType iPhone \
+  -AppleOSVersion '<observed iOS version>' \
+  -AirPrintConfirmed
+```
+
+`-AirPrintConfirmed` is an explicit operator assertion that the physical device
+selected FolioRelay from the native AirPrint picker and submitted exactly one
+job. A successful final phase also requires the original UUID/URI to remain unchanged,
+the durable Inbox to be exactly H0+2, the known Windows durable job to be one
+of those two jobs, and health/readiness to remain good. It emits
+`receipt.json` plus phase evidence in the session directory. The script scans
+its text evidence for accidental management-token disclosure before reporting
+PASS.
+
 ## Completion rule
 
 Physical HIL is PASS only when H0-H4 all pass without server mutation.
