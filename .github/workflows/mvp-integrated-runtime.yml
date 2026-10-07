@@ -47,10 +47,10 @@ jobs:
           set -euo pipefail
           root="$RUNNER_TEMP/foliorelay-mvp"
           token="$root/control.token"
-          sudo mkdir -p "$root/control" "$root/artifacts" "$root/cups-state" "$root/cups-spool"
+          sudo mkdir -p "$root/control" "$root/tls" "$root/artifacts" "$root/cups-state" "$root/cups-spool"
           printf '%s\n' 'foliorelay-mvp-fixture-token-0001' | sudo tee "$token" >/dev/null
-          sudo chown -R 10001:10001 "$root/control" "$root/artifacts" "$root/cups-state" "$root/cups-spool" "$token"
-          sudo chmod 0700 "$root/control" "$root/artifacts"
+          sudo chown -R 10001:10001 "$root/control" "$root/tls" "$root/artifacts" "$root/cups-state" "$root/cups-spool" "$token"
+          sudo chmod 0700 "$root/control" "$root/tls" "$root/artifacts"
           sudo chmod 0755 "$root/cups-state" "$root/cups-spool"
           sudo chmod 0400 "$token"
           host_ipv4="$(ip -4 route get 1.1.1.1 | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')"
@@ -102,6 +102,15 @@ jobs:
           set -euo pipefail
           evidence="$RUNNER_TEMP/foliorelay-mvp-evidence"
           mkdir -p "$evidence"
+
+          control_id="$(docker compose -f deploy/mvp/compose.yaml ps -q control)"
+          cups_id="$(docker compose -f deploy/mvp/compose.yaml ps -q cups)"
+          discovery_id="$(docker compose -f deploy/mvp/compose.yaml ps -q discovery)"
+          test -n "$control_id" && test -n "$cups_id" && test -n "$discovery_id"
+          docker inspect "$control_id" | jq -e '.[0].Mounts | any(.Destination == "/var/lib/foliorelay-tls")'
+          docker inspect "$cups_id" | jq -e '.[0].Mounts | all(.Destination != "/var/lib/foliorelay-tls")'
+          docker inspect "$discovery_id" | jq -e '.[0].Mounts | all(.Destination != "/var/lib/foliorelay-tls")'
+
           token="$(sudo cat "$FOLIORELAY_TOKEN_FILE")"
           curl -kfsS -H "Authorization: Bearer $token" \
             https://127.0.0.1:18443/api/v1/printer >"$evidence/control-printer.json"
