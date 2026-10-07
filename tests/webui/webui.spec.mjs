@@ -156,6 +156,26 @@ test('standalone controls meet the 44 CSS-pixel project target', async ({ page }
   }
 });
 
+test('mobile touch journey reaches authenticated primary views', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name.startsWith('desktop-'));
+
+  await page.goto('/');
+  await page.getByLabel('Management credential').fill(TOKEN);
+  await page.getByRole('button', { name: 'Sign in' }).tap();
+  await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible();
+  await expect(page.locator('#overall-status')).toHaveText('Ready');
+
+  await page.getByRole('button', { name: 'Printer' }).tap();
+  await expect(page.getByRole('heading', { name: 'Printer' })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Diagnostics' }).tap();
+  await expect(page.getByRole('heading', { name: 'Diagnostics' })).toBeVisible();
+  await expect(page.locator('#checks .check').first()).toBeVisible();
+
+  await page.getByRole('button', { name: 'Sign out' }).tap();
+  await expect(page.getByRole('heading', { name: 'Connect to FolioRelay' })).toBeVisible();
+});
+
 test('desktop keyboard traversal reaches every critical control without obscuration', async ({ page }, testInfo) => {
   test.skip(!testInfo.project.name.startsWith('desktop-'));
 
