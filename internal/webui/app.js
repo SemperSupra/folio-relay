@@ -162,7 +162,13 @@ async function runSelfTest() {
 async function selectView(name) {
   document.querySelectorAll(".view").forEach((node) => { node.hidden = node.id !== name; });
   document.querySelectorAll(".tabs button").forEach((node) => {
-    const selected = node.dataset.view === name;\n    node.classList.toggle("active", selected);\n    node.setAttribute("aria-selected", selected ? "true" : "false");
+    const selected = node.dataset.view === name;
+    node.classList.toggle("active", selected);
+    if (selected) {
+      node.setAttribute("aria-current", "page");
+    } else {
+      node.removeAttribute("aria-current");
+    }
   });
   if (name === "inbox") await loadJobs();
   if (name === "diagnostics") await runSelfTest();
