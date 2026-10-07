@@ -1,5 +1,7 @@
 // Vendored from SupraShellScripts/github-ops-lab@4273479cbda3736a09fe9cde33279d47ac37ea89
 // Source: scripts/public-web/static-hci-playwright.mjs
+// FolioRelay adaptation: seed a deterministic sequential-focus origin after
+// Firefox 153 proved that blur() alone can retain the prior navigation origin.
 // Keep product-specific journeys and selectors in FolioRelay.
 
 const defaultGenericStandaloneName = /^(?:click here|here|more|read more|learn more|link|button|open)$/i;
@@ -79,10 +81,24 @@ export async function assertKeyboardFocusPath({
   const expected = await page.locator(keyboardPrimarySelector).count();
   expect(expected, `${label} should expose keyboard-primary controls`).toBeGreaterThan(0);
 
-  await page.evaluate(() => {
-    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+  const focusAnchorId = 'static-hci-focus-origin';
+  await page.evaluate(({ selectorValue, focusAnchorIdValue }) => {
+    document.getElementById(focusAnchorIdValue)?.remove();
+    const first = document.querySelector(selectorValue);
+    if (!(first instanceof HTMLElement)) throw new Error('keyboard-primary selector has no first control');
+
+    const anchor = document.createElement('span');
+    anchor.id = focusAnchorIdValue;
+    anchor.tabIndex = 0;
+    anchor.style.position = 'fixed';
+    anchor.style.inlineSize = '1px';
+    anchor.style.blockSize = '1px';
+    anchor.style.opacity = '0';
+    anchor.style.pointerEvents = 'none';
+    first.before(anchor);
+    anchor.focus();
     window.scrollTo(0, 0);
-  });
+  }, { selectorValue: keyboardPrimarySelector, focusAnchorIdValue: focusAnchorId });
 
   const seen = new Set();
   const maxTabs = Math.max(minimumTabBudget, expected * tabBudgetMultiplier);
@@ -142,6 +158,7 @@ export async function assertKeyboardFocusPath({
     seen.add(focused.ordinal);
   }
 
+  await page.evaluate(focusAnchorIdValue => document.getElementById(focusAnchorIdValue)?.remove(), focusAnchorId);
   expect(seen.size, `${label} keyboard traversal should reach every declared primary tab stop`).toBe(expected);
 }
 
