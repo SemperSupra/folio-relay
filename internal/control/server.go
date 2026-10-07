@@ -88,6 +88,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /{$}", s.handleWebIndex)
 	mux.HandleFunc("GET /app.js", s.handleWebAppJS)
 	mux.HandleFunc("GET /style.css", s.handleWebStyle)
+	mux.HandleFunc("GET /favicon.ico", s.handleWebFavicon)
 	mux.HandleFunc("GET /auth/session", s.handleSessionStatus)
 	mux.HandleFunc("POST /auth/session", s.handleCreateSession)
 	mux.HandleFunc("POST /auth/logout", s.handleDeleteSession)
@@ -222,6 +223,12 @@ func (s *Server) handleWebStyle(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/css; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	_, _ = w.Write(frweb.StyleCSS)
+}
+
+func (s *Server) handleWebFavicon(w http.ResponseWriter, _ *http.Request) {
+	webSecurityHeaders(w)
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) handleReady(w http.ResponseWriter, _ *http.Request) {
