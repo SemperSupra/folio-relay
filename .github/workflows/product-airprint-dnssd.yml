@@ -45,10 +45,11 @@ jobs:
           set -euo pipefail
           root="/tmp/foliorelay-dnssd-${GITHUB_RUN_ID}"
           token="$root/control.token"
-          sudo mkdir -p "$root/control" "$root/artifacts" "$root/cups-state" "$root/cups-spool"
+          sudo mkdir -p "$root/control" "$root/tls" "$root/artifacts" "$root/cups-state" "$root/cups-spool"
           printf '%s\n' 'foliorelay-dnssd-fixture-token-0001' | sudo tee "$token" >/dev/null
-          sudo chown -R 10001:10001 "$root/control" "$root/artifacts" "$root/cups-state" "$root/cups-spool" "$token"
+          sudo chown -R 10001:10001 "$root/control" "$root/tls" "$root/artifacts" "$root/cups-state" "$root/cups-spool" "$token"
           sudo chmod 0750 "$root/control"
+          sudo chmod 0700 "$root/tls"
           sudo chmod 0700 "$root/artifacts"
           sudo chmod 0755 "$root/cups-state" "$root/cups-spool"
           sudo chmod 0400 "$token"
