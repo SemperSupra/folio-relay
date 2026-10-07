@@ -88,6 +88,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /{$}", s.handleWebIndex)
 	mux.HandleFunc("GET /app.js", s.handleWebAppJS)
 	mux.HandleFunc("GET /style.css", s.handleWebStyle)
+	mux.HandleFunc("GET /auth/session", s.handleSessionStatus)
 	mux.HandleFunc("POST /auth/session", s.handleCreateSession)
 	mux.HandleFunc("POST /auth/logout", s.handleDeleteSession)
 	mux.Handle("GET /api/v1/status", s.requireAuth(http.HandlerFunc(s.handleStatus)))
@@ -125,6 +126,11 @@ func (s *Server) authorized(r *http.Request) bool {
 	}
 	cookie, err := r.Cookie(sessionCookieName)
 	return err == nil && s.validSession(cookie.Value, time.Now())
+}
+
+func (s *Server) handleSessionStatus(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]bool{"authenticated": s.authorized(r)})
 }
 
 func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
