@@ -135,9 +135,10 @@ server configuration. It prompts for the FolioRelay management token using a
 secure prompt and keeps the plaintext value in memory only.
 
 The automated H1 observer sends an RFC 6762 legacy-unicast query from an
-ephemeral client UDP port. It requires one same-instance
-`_universal._sub._ipp._tcp` PTR/TXT/SRV result matching the H0 UUID, host,
-port, resource path, and PDF/URF projection. It does not bind UDP/5353 and is
+ephemeral client UDP port. It requires the same service instance to appear in both the base
+`_ipp._tcp` PTR set and the `_universal._sub._ipp._tcp` subtype PTR set,
+with matching TXT/SRV records for the H0 UUID, host, port, resource path, and
+PDF/URF projection. It does not bind UDP/5353 and is
 not a synthetic publisher or proxy.
 
 Create one evidence directory and reuse it for all phases:
@@ -187,10 +188,13 @@ Finally run H4, recording the physical Apple device type and OS version:
   -BaseUrl http://<foliorelay-host>:18080 \
   -SessionDir $session \
   -AppleClientType iPhone \
-  -AppleOSVersion '<observed iOS version>'
+  -AppleOSVersion '<observed iOS version>' \
+  -AirPrintConfirmed
 ```
 
-A successful final phase requires the original UUID/URI to remain unchanged,
+`-AirPrintConfirmed` is an explicit operator assertion that the physical device
+selected FolioRelay from the native AirPrint picker and submitted exactly one
+job. A successful final phase also requires the original UUID/URI to remain unchanged,
 the durable Inbox to be exactly H0+2, the known Windows durable job to be one
 of those two jobs, and health/readiness to remain good. It emits
 `receipt.json` plus phase evidence in the session directory. The script scans
