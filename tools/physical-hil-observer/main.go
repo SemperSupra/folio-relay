@@ -13,8 +13,9 @@ import (
 )
 
 const (
-	queryName     = "_universal._sub._ipp._tcp.local"
-	legacyQueryID = uint16(0x4652)
+	baseQueryName      = "_ipp._tcp.local"
+	universalQueryName = "_universal._sub._ipp._tcp.local"
+	legacyQueryID      = uint16(0x4652)
 )
 
 type srvRecord struct {
@@ -23,6 +24,7 @@ type srvRecord struct {
 }
 
 type observation struct {
+	baseTargets      []string
 	universalTargets []string
 	txtByOwner       map[string][]string
 	srvByOwner       map[string]srvRecord
@@ -43,6 +45,7 @@ func newObservation() observation {
 }
 
 func (o *observation) merge(other observation) {
+	o.baseTargets = append(o.baseTargets, other.baseTargets...)
 	o.universalTargets = append(o.universalTargets, other.universalTargets...)
 	for owner, items := range other.txtByOwner {
 		o.txtByOwner[owner] = append(o.txtByOwner[owner], items...)
@@ -153,12 +156,16 @@ func parsePacket(pkt []byte) (observation, error) {
 		off += rdlen
 		owner := normalizeDNSName(name)
 
-		if owner == normalizeDNSName(queryName) && typ == 12 {
+		if typ == 12 && (owner == normalizeDNSName(baseQueryName) || owner == normalizeDNSName(universalQueryName)) {
 			target, _, err := nameAt(pkt, rstart, nil)
 			if err != nil {
 				return o, err
 			}
-			o.universalTargets = append(o.universalTargets, target)
+			if owner == normalizeDNSName(baseQueryName) {
+				o.baseTargets = append(o.baseTargets, target)
+			} else {
+				o.universalTargets = append(o.universalTargets, target)
+			}
 		}
 		if typ == 16 {
 			items := []string{}
@@ -188,8 +195,15 @@ func parsePacket(pkt []byte) (observation, error) {
 }
 
 func matchObservation(o observation, expectedTxtUUID, expectedHost, expectedRP string, expectedPort int) (serviceMatch, bool) {
+	base := map[string]bool{}
+	for _, instance := range o.baseTargets {
+		base[normalizeDNSName(instance)] = true
+	}
 	for _, instance := range o.universalTargets {
 		owner := normalizeDNSName(instance)
+		if !base[owner] {
+			continue
+		}
 		txt, ok := o.txtByOwner[owner]
 		if !ok {
 			continue
@@ -226,11 +240,11 @@ func matchObservation(o observation, expectedTxtUUID, expectedHost, expectedRP s
 	return serviceMatch{}, false
 }
 
-func buildQuery() []byte {
+func buildQuery(name string) []byte {
 	q := make([]byte, 12)
 	binary.BigEndian.PutUint16(q[0:2], legacyQueryID)
 	binary.BigEndian.PutUint16(q[4:6], 1)
-	q = append(q, encodeName(queryName)...)
+	q = append(q, encodeName(name)...)
 	q = append(q, 0, 12, 0, 1)
 	return q
 }
@@ -252,14 +266,16 @@ func observe(expectedUUID, expectedHost, expectedResourcePath string, expectedPo
 	defer conn.Close()
 
 	dst := &net.UDPAddr{IP: net.IPv4(224, 0, 0, 251), Port: 5353}
-	query := buildQuery()
+	queries := [][]byte{buildQuery(baseQueryName), buildQuery(universalQueryName)}
 	deadline := time.Now().Add(time.Duration(seconds * float64(time.Second)))
 	aggregate := newObservation()
 	buf := make([]byte, 65535)
 
 	for time.Now().Before(deadline) {
-		if _, err := conn.WriteToUDP(query, dst); err != nil {
-			return nil, err
+		for _, query := range queries {
+			if _, err := conn.WriteToUDP(query, dst); err != nil {
+				return nil, err
+			}
 		}
 		window := time.Now().Add(time.Second)
 		if window.After(deadline) {
@@ -288,6 +304,7 @@ func observe(expectedUUID, expectedHost, expectedResourcePath string, expectedPo
 				return map[string]any{
 					"status":           "success",
 					"query_transport":  "legacy-unicast",
+					"ipp_ptr":          true,
 					"universal_ptr":    true,
 					"service_instance": matched.instance,
 					"uuid":             expectedUUID,
