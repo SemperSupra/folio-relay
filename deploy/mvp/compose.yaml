@@ -14,6 +14,7 @@ services:
       - "18443:18443"
     volumes:
       - "${FOLIORELAY_DATA_ROOT:?}/control:/var/lib/foliorelay"
+      - "${FOLIORELAY_DATA_ROOT:?}/tls:/var/lib/foliorelay-tls"
       - "${FOLIORELAY_DATA_ROOT:?}/artifacts:/var/lib/foliorelay/artifacts"
       - "${FOLIORELAY_TOKEN_FILE:?}:/run/secrets/foliorelay.token:ro"
     tmpfs:
@@ -24,7 +25,7 @@ services:
       - -https-listen
       - 0.0.0.0:18443
       - -tls-state-dir
-      - /var/lib/foliorelay/tls
+      - /var/lib/foliorelay-tls
       - -journal
       - /var/lib/foliorelay/state/journal.frj
       - -artifact-store
