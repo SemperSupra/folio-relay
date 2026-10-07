@@ -3,6 +3,7 @@ package control
 import (
 	"bytes"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"io"
@@ -270,6 +271,33 @@ func TestWebSessionAuthenticatesSameAPIWithoutExposingBearerToken(t *testing.T) 
 	h.ServeHTTP(resp, req)
 	if resp.Code != http.StatusOK {
 		t.Fatalf("session did not authenticate API: %d %s", resp.Code, resp.Body.String())
+	}
+}
+
+
+func TestWebSessionCookieIsSecureOverTLS(t *testing.T) {
+	state, err := frstate.OpenDurableEngine(filepath.Join(t.TempDir(), "journal.frj"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer state.Close()
+	server, err := New(state, t.TempDir(), testToken, testPrinter(t), Profiles{WindowsIPP: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	login := httptest.NewRequest(http.MethodPost, "/auth/session",
+		bytes.NewBufferString(`{"token":"`+testToken+`"}`))
+	login.Header.Set("Content-Type", "application/json")
+	login.TLS = &tls.ConnectionState{}
+	resp := httptest.NewRecorder()
+	server.Handler().ServeHTTP(resp, login)
+	if resp.Code != http.StatusNoContent {
+		t.Fatalf("login failed: %d %s", resp.Code, resp.Body.String())
+	}
+	cookies := resp.Result().Cookies()
+	if len(cookies) != 1 || !cookies[0].Secure || !cookies[0].HttpOnly || cookies[0].SameSite != http.SameSiteStrictMode {
+		t.Fatalf("TLS browser session cookie is not hardened: %+v", cookies)
 	}
 }
 
