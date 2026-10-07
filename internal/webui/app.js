@@ -213,4 +213,22 @@ $("copy-uri").addEventListener("click", async () => {
   setTimeout(() => { $("copy-uri").textContent = "Copy"; }, 1200);
 });
 
-loadOverview().catch(() => showLogin());
+async function bootstrap() {
+  try {
+    const response = await fetch("/auth/session", {
+      credentials: "same-origin",
+      cache: "no-store"
+    });
+    if (!response.ok) throw new Error("session status unavailable");
+    const session = await response.json();
+    if (session.authenticated) {
+      await loadOverview();
+    } else {
+      showLogin();
+    }
+  } catch (_) {
+    showLogin();
+  }
+}
+
+bootstrap();
