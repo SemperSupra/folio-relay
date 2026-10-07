@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"os"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -26,8 +27,10 @@ func TestEnsureSelfSignedPersistsExactMaterial(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := info.Mode().Perm(); got != 0o600 {
-		t.Fatalf("TLS material mode = %o, want 600", got)
+	if runtime.GOOS != "windows" {
+		if got := info.Mode().Perm(); got != 0o600 {
+			t.Fatalf("TLS material mode = %o, want 600", got)
+		}
 	}
 	if first.FingerprintSHA256 == "" {
 		t.Fatal("missing TLS fingerprint")
