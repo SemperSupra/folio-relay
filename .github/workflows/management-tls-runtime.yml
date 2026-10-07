@@ -39,10 +39,12 @@ jobs:
         run: |
           set -euo pipefail
           data="$RUNNER_TEMP/foliorelay-tls-data"
+          tls_state="$RUNNER_TEMP/foliorelay-tls-state"
           token="$RUNNER_TEMP/foliorelay-tls.token"
           evidence="$RUNNER_TEMP/foliorelay-tls-evidence"
-          mkdir -p "$data" "$evidence"
-          sudo chown 10001:10001 "$data"
+          mkdir -p "$data" "$tls_state" "$evidence"
+          sudo chown 10001:10001 "$data" "$tls_state"
+          sudo chmod 0700 "$tls_state"
           openssl rand -hex 24 >"$token"
           chmod 0444 "$token"
 
