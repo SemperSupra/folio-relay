@@ -1,0 +1,260 @@
+name: MVP Integrated Runtime
+
+on:
+  pull_request:
+    paths:
+      - 'cmd/foliorelayd/**'
+      - 'cmd/foliorelay-probe/**'
+      - 'cmd/foliorelay-ipp-ingest/**'
+      - 'cmd/foliorelay-cups-config/**'
+      - 'internal/**'
+      - 'api/**'
+      - 'deploy/control/**'
+      - 'deploy/engineering-cups/**'
+      - 'deploy/mvp/**'
+      - 'experiments/print-substrate/cups-backend.sh'
+      - 'experiments/print-substrate/cups-foliorelay.ppd'
+      - 'experiments/airprint/generate-urf.c'
+      - 'scripts/make-probe-pdf.py'
+      - '.github/workflows/mvp-integrated-runtime.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  integrated:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Checkout FolioRelay
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Install independent client/oracle tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cups-ipp-utils libcups2-dev build-essential jq
+
+      - name: Prepare run-owned durable root
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/foliorelay-mvp"
+          token="$root/control.token"
+          sudo mkdir -p "$root/control" "$root/tls" "$root/artifacts" "$root/cups-state" "$root/cups-spool"
+          printf '%s\n' 'foliorelay-mvp-fixture-token-0001' | sudo tee "$token" >/dev/null
+          sudo chown -R 10001:10001 "$root/control" "$root/tls" "$root/artifacts" "$root/cups-state" "$root/cups-spool" "$token"
+          sudo chmod 0700 "$root/control" "$root/tls" "$root/artifacts"
+          sudo chmod 0755 "$root/cups-state" "$root/cups-spool"
+          sudo chmod 0400 "$token"
+          host_ipv4="$(ip -4 route get 1.1.1.1 | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')"
+          test -n "$host_ipv4"
+          public_host="$(hostname).local"
+          printf '%s %s\n' "$host_ipv4" "$public_host" | sudo tee -a /etc/hosts >/dev/null
+          {
+            echo "FOLIORELAY_DATA_ROOT=$root"
+            echo "FOLIORELAY_TOKEN_FILE=$token"
+            echo "FOLIORELAY_PUBLIC_HOST=$public_host"
+            echo "FOLIORELAY_PUBLIC_PRINTER_URI=ipp://$public_host:8634/printers/FolioRelay"
+            echo "FOLIORELAY_PRINTER_NAME=FolioRelay"
+            echo "FOLIORELAY_PRINTER_LOCATION=RDTE"
+          } >>"$GITHUB_ENV"
+
+      - name: Start exact integrated MVP runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose -f deploy/mvp/compose.yaml up -d --build
+          for _ in $(seq 1 90); do
+            control_ok=false
+            cups_ok=false
+            curl -kfsS https://127.0.0.1:18443/readyz >/dev/null 2>&1 && control_ok=true
+            testfile="$(find /usr/share/cups -type f -name get-printer-attributes.test -print -quit)"
+            if [ -n "$testfile" ] && ipptool -tv "$FOLIORELAY_PUBLIC_PRINTER_URI" "$testfile" >"$RUNNER_TEMP/ipp-attrs.txt" 2>&1; then
+              cups_ok=true
+            fi
+            if [ "$control_ok" = true ] && [ "$cups_ok" = true ]; then
+              exit 0
+            fi
+            sleep 1
+          done
+          evidence="$RUNNER_TEMP/foliorelay-mvp-evidence"
+          mkdir -p "$evidence"
+          docker compose -f deploy/mvp/compose.yaml ps | tee "$evidence/compose-ps-start-failure.txt"
+          docker compose -f deploy/mvp/compose.yaml logs | tee "$evidence/compose-start-failure.log"
+          docker inspect mvp-cups-1 >"$evidence/cups-container-inspect.json" 2>/dev/null || true
+          sudo find "$FOLIORELAY_DATA_ROOT/cups-state" "$FOLIORELAY_DATA_ROOT/cups-spool"             -maxdepth 4 -printf '%M %u:%g %p\n' >"$evidence/cups-filesystem.txt" 2>&1 || true
+          sudo cp -a "$FOLIORELAY_DATA_ROOT/cups-state/." "$evidence/cups-state/" 2>/dev/null || true
+          sudo chown -R "$(id -u):$(id -g)" "$evidence" 2>/dev/null || true
+          chmod -R u+rwX "$evidence" 2>/dev/null || true
+          cat "$RUNNER_TEMP/ipp-attrs.txt" || true
+          exit 1
+
+      - name: Prove one canonical identity across control and CUPS
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/foliorelay-mvp-evidence"
+          mkdir -p "$evidence"
+
+          control_id="$(docker compose -f deploy/mvp/compose.yaml ps -q control)"
+          cups_id="$(docker compose -f deploy/mvp/compose.yaml ps -q cups)"
+          discovery_id="$(docker compose -f deploy/mvp/compose.yaml ps -q discovery)"
+          test -n "$control_id" && test -n "$cups_id" && test -n "$discovery_id"
+          docker inspect "$control_id" | jq -e '.[0].Mounts | any(.Destination == "/var/lib/foliorelay-tls")'
+          docker inspect "$cups_id" | jq -e '.[0].Mounts | all(.Destination != "/var/lib/foliorelay-tls")'
+          docker inspect "$discovery_id" | jq -e '.[0].Mounts | all(.Destination != "/var/lib/foliorelay-tls")'
+
+          token="$(sudo cat "$FOLIORELAY_TOKEN_FILE")"
+          curl -kfsS -H "Authorization: Bearer $token" \
+            https://127.0.0.1:18443/api/v1/printer >"$evidence/control-printer.json"
+          cp "$RUNNER_TEMP/ipp-attrs.txt" "$evidence/cups-printer.txt"
+
+          control_uuid="$(jq -r '.identity.printer_uuid' "$evidence/control-printer.json")"
+          control_uri="$(jq -r '.public_uri' "$evidence/control-printer.json")"
+          cups_uuid="$(awk '/printer-uuid .* = urn:uuid:/ {print $NF; exit}' "$evidence/cups-printer.txt")"
+          cups_uri="$(awk '/printer-uri-supported .* = ipp:/ {print $NF; exit}' "$evidence/cups-printer.txt")"
+
+          test -n "$control_uuid"
+          test "$cups_uuid" = "$control_uuid"
+          test "$control_uri" = "$FOLIORELAY_PUBLIC_PRINTER_URI"
+          test "$cups_uri" = "$FOLIORELAY_PUBLIC_PRINTER_URI"
+          grep -Eq 'document-format-supported.*application/pdf' "$evidence/cups-printer.txt"
+          grep -Eq 'document-format-supported.*image/urf' "$evidence/cups-printer.txt"
+
+      - name: Submit PDF and Apple Raster through CUPS
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/foliorelay-mvp-evidence"
+          python3 scripts/make-probe-pdf.py "$RUNNER_TEMP/mvp.pdf"
+          cc -O2 -Wall -Wextra -Werror -o "$RUNNER_TEMP/generate-urf" experiments/airprint/generate-urf.c -lcups
+          "$RUNNER_TEMP/generate-urf" "$RUNNER_TEMP/mvp.urf"
+          test "$(head -c 7 "$RUNNER_TEMP/mvp.urf")" = "UNIRAST"
+          sha256sum "$RUNNER_TEMP/mvp.pdf" >"$evidence/source-pdf.sha256"
+          sha256sum "$RUNNER_TEMP/mvp.urf" >"$evidence/source-urf.sha256"
+
+          submit() {
+            media="$1"
+            file="$2"
+            label="$3"
+            test_path="$RUNNER_TEMP/print-$label.test"
+            cat >"$test_path" <<TEST
+          {
+            NAME "FolioRelay MVP $label"
+            OPERATION Print-Job
+            GROUP operation-attributes-tag
+            ATTR charset attributes-charset utf-8
+            ATTR language attributes-natural-language en
+            ATTR uri printer-uri $FOLIORELAY_PUBLIC_PRINTER_URI
+            ATTR name requesting-user-name runner
+            ATTR name job-name "FolioRelay MVP $label"
+            ATTR mimeMediaType document-format $media
+            FILE "$file"
+            STATUS successful-ok
+          }
+          TEST
+            ipptool -tv "$FOLIORELAY_PUBLIC_PRINTER_URI" "$test_path" >"$evidence/print-$label.txt"
+          }
+          submit application/pdf "$RUNNER_TEMP/mvp.pdf" pdf
+          submit image/urf "$RUNNER_TEMP/mvp.urf" urf
+
+      - name: Prove Inbox metadata and exact downloadable source artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/foliorelay-mvp-evidence"
+          token="$(sudo cat "$FOLIORELAY_TOKEN_FILE")"
+          for _ in $(seq 1 60); do
+            curl -kfsS -H "Authorization: Bearer $token" \
+              https://127.0.0.1:18443/api/v1/jobs >"$evidence/jobs.json"
+            [ "$(jq '.items | length' "$evidence/jobs.json")" -eq 2 ] && break
+            sleep 1
+          done
+          test "$(jq '.items | length' "$evidence/jobs.json")" -eq 2
+          jq -e '[.items[].media_type] | sort == ["application/pdf","image/urf"]' "$evidence/jobs.json" >/dev/null
+          jq -e '[.items[].substrate] | unique == ["cups"]' "$evidence/jobs.json" >/dev/null
+
+          verify_artifact() {
+            media="$1"
+            source="$2"
+            label="$3"
+            job="$(jq -r --arg media "$media" '.items[] | select(.media_type == $media) | .job_id' "$evidence/jobs.json")"
+            expected="$(sha256sum "$source" | awk '{print $1}')"
+            recorded="$(jq -r --arg media "$media" '.items[] | select(.media_type == $media) | .artifact_sha256' "$evidence/jobs.json")"
+            test -n "$job"
+            test "$recorded" = "$expected"
+            curl -kfsS -H "Authorization: Bearer $token" \
+              "https://127.0.0.1:18443/api/v1/jobs/$job/artifact" >"$evidence/download-$label"
+            test "$(sha256sum "$evidence/download-$label" | awk '{print $1}')" = "$expected"
+          }
+          verify_artifact application/pdf "$RUNNER_TEMP/mvp.pdf" pdf
+          verify_artifact image/urf "$RUNNER_TEMP/mvp.urf" urf
+
+          curl -kfsS -X POST -H "Authorization: Bearer $token" \
+            https://127.0.0.1:18443/api/v1/self-test >"$evidence/self-test.json"
+          jq -e '.status == "pass"' "$evidence/self-test.json" >/dev/null
+
+      - name: Prove app recreation preserves identity, Inbox, and artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/foliorelay-mvp-evidence"
+          token="$(sudo cat "$FOLIORELAY_TOKEN_FILE")"
+          before_uuid="$(jq -r '.identity.printer_uuid' "$evidence/control-printer.json")"
+
+          docker compose -f deploy/mvp/compose.yaml down
+          docker compose -f deploy/mvp/compose.yaml up -d
+
+          for _ in $(seq 1 90); do
+            if curl -kfsS https://127.0.0.1:18443/readyz >/dev/null 2>&1; then
+              testfile="$(find /usr/share/cups -type f -name get-printer-attributes.test -print -quit)"
+              if ipptool -tv "$FOLIORELAY_PUBLIC_PRINTER_URI" "$testfile" >"$evidence/cups-after-recreate.txt" 2>&1; then
+                break
+              fi
+            fi
+            sleep 1
+          done
+
+          curl -kfsS -H "Authorization: Bearer $token" \
+            https://127.0.0.1:18443/api/v1/printer >"$evidence/control-printer-after-recreate.json"
+          after_uuid="$(jq -r '.identity.printer_uuid' "$evidence/control-printer-after-recreate.json")"
+          cups_uuid="$(awk '/printer-uuid .* = urn:uuid:/ {print $NF; exit}' "$evidence/cups-after-recreate.txt")"
+          test "$after_uuid" = "$before_uuid"
+          test "$cups_uuid" = "$before_uuid"
+
+          curl -kfsS -H "Authorization: Bearer $token" \
+            https://127.0.0.1:18443/api/v1/jobs >"$evidence/jobs-after-recreate.json"
+          test "$(jq '.items | length' "$evidence/jobs-after-recreate.json")" -eq 2
+
+          while read -r job sha; do
+            test -n "$job"
+            curl -kfsS -H "Authorization: Bearer $token" \
+              "https://127.0.0.1:18443/api/v1/jobs/$job/artifact" >"$RUNNER_TEMP/recreated-artifact"
+            test "$(sha256sum "$RUNNER_TEMP/recreated-artifact" | awk '{print $1}')" = "$sha"
+          done < <(jq -r '.items[] | [.job_id,.artifact_sha256] | @tsv' "$evidence/jobs-after-recreate.json")
+
+      - name: Upload integrated evidence
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: mvp-integrated-runtime
+          path: ${{ runner.temp }}/foliorelay-mvp-evidence
+          if-no-files-found: warn
+          retention-days: 14
+          compression-level: 0
+
+      - name: Collect logs and tear down
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/foliorelay-mvp-evidence"
+          docker compose -f deploy/mvp/compose.yaml ps >"$RUNNER_TEMP/foliorelay-mvp-evidence/compose-ps.txt" 2>&1 || true
+          docker compose -f deploy/mvp/compose.yaml logs >"$RUNNER_TEMP/foliorelay-mvp-evidence/compose.log" 2>&1 || true
+          docker compose -f deploy/mvp/compose.yaml down || true

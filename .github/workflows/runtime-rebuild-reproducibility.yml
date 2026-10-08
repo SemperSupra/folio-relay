@@ -1,0 +1,161 @@
+name: Runtime Rebuild Reproducibility
+
+on:
+  pull_request:
+    paths:
+      - 'deploy/engineering-cups/Dockerfile'
+      - 'experiments/print-substrate/**'
+      - 'cmd/foliorelay-ipp-ingest/**'
+      - 'cmd/foliorelay-state-fixture/**'
+      - 'internal/state/**'
+      - 'internal/security/**'
+      - '.github/workflows/runtime-rebuild-reproducibility.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  source-authority:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Verify pinned release tag authorities
+        shell: bash
+        run: |
+          set -euo pipefail
+          cups_tag="$(git ls-remote https://github.com/OpenPrinting/cups.git 'refs/tags/v2.4.19' | awk '{print $1}')"
+          cups_commit="$(git ls-remote https://github.com/OpenPrinting/cups.git 'refs/tags/v2.4.19^{}' | awk '{print $1}')"
+          test "$cups_tag" = "f095f335b55607ae7ab7fdf9291113da81264959"
+          test "$cups_commit" = "6ba0487abb05afc93d639f37676add8fd65d3756"
+          {
+            echo "cups_tag_object=$cups_tag"
+            echo "cups_commit=$cups_commit"
+          } | tee source-authority.txt
+
+      - name: Upload source authority evidence
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: runtime-source-authority
+          path: source-authority.txt
+          retention-days: 14
+
+  rebuild:
+    needs: source-authority
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - candidate: cups
+            dockerfile: deploy/engineering-cups/Dockerfile
+            target: cups
+            expected_revision: 6ba0487abb05afc93d639f37676add8fd65d3756
+            binaries: /usr/sbin/cupsd /usr/lib/cups/daemon/cups-exec
+    steps:
+      - name: Checkout FolioRelay
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Build candidate twice without layer cache
+        shell: bash
+        env:
+          CANDIDATE: ${{ matrix.candidate }}
+          DOCKERFILE: ${{ matrix.dockerfile }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          docker build --no-cache --pull=false -f "$DOCKERFILE" --target "$TARGET" \
+            -t "foliorelay-$CANDIDATE:rebuild-a" .
+          docker build --no-cache --pull=false -f "$DOCKERFILE" --target "$TARGET" \
+            -t "foliorelay-$CANDIDATE:rebuild-b" .
+
+      - name: Capture rebuild manifests
+        shell: bash
+        env:
+          CANDIDATE: ${{ matrix.candidate }}
+          BINARIES: ${{ matrix.binaries }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/rebuild-$CANDIDATE"
+          mkdir -p "$root"
+
+          collect() {
+            image="$1"
+            out="$2"
+            mkdir -p "$out"
+
+            docker image inspect "$image" | jq -S '.[0].Config.Labels' >"$out/labels.json"
+            docker image inspect -f '{{.Size}}' "$image" >"$out/image-size.txt"
+            docker image history --no-trunc --format '{{json .}}' "$image" >"$out/history.jsonl"
+
+            docker run --rm --entrypoint /bin/sh "$image" -c \
+              'dpkg-query -W "-f=\${binary:Package}\t\${Version}\t\${Installed-Size}\n" | sort' \
+              >"$out/packages.tsv"
+
+            : >"$out/key-binaries.sha256"
+            for binary in $BINARIES; do
+              docker run --rm --entrypoint /bin/sh "$image" -c \
+                "sha256sum '$binary'" >>"$out/key-binaries.sha256"
+            done
+          }
+
+          collect "foliorelay-$CANDIDATE:rebuild-a" "$root/a"
+          collect "foliorelay-$CANDIDATE:rebuild-b" "$root/b"
+
+      - name: Prove immutable declared inputs and package closure
+        shell: bash
+        env:
+          CANDIDATE: ${{ matrix.candidate }}
+          EXPECTED_REVISION: ${{ matrix.expected_revision }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/rebuild-$CANDIDATE"
+
+          for rep in a b; do
+            jq -e --arg rev "$EXPECTED_REVISION" '
+              ."org.opencontainers.image.revision" == $rev and
+              ."io.sempersupra.ubuntu-snapshot" == "20260928T000000Z" and
+              ."io.sempersupra.base.ubuntu" == "ubuntu:24.04@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3" and
+              ."io.sempersupra.base.go" == "golang:1.27.1-bookworm@sha256:69a7b9788769bec032d238959b61854e9ae87f57be9029ec04e9885fabf99195"
+            ' "$root/$rep/labels.json" >/dev/null
+          done
+
+          cmp "$root/a/labels.json" "$root/b/labels.json"
+          cmp "$root/a/packages.tsv" "$root/b/packages.tsv"
+
+      - name: Characterize key-binary reproducibility
+        shell: bash
+        env:
+          CANDIDATE: ${{ matrix.candidate }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/rebuild-$CANDIDATE"
+          if cmp -s "$root/a/key-binaries.sha256" "$root/b/key-binaries.sha256"; then
+            echo "key_binary_hashes_match=true" | tee "$root/reproducibility.txt"
+          else
+            echo "key_binary_hashes_match=false" | tee "$root/reproducibility.txt"
+            diff -u "$root/a/key-binaries.sha256" "$root/b/key-binaries.sha256" \
+              | tee "$root/key-binary-hash.diff" || true
+          fi
+
+          size_a="$(cat "$root/a/image-size.txt")"
+          size_b="$(cat "$root/b/image-size.txt")"
+          {
+            echo "image_size_a=$size_a"
+            echo "image_size_b=$size_b"
+            echo "image_sizes_match=$([ "$size_a" = "$size_b" ] && echo true || echo false)"
+          } | tee -a "$root/reproducibility.txt"
+
+      - name: Upload rebuild evidence
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: runtime-rebuild-${{ matrix.candidate }}
+          path: ${{ runner.temp }}/rebuild-${{ matrix.candidate }}
+          if-no-files-found: warn
+          retention-days: 14

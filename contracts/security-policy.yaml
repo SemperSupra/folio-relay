@@ -1,0 +1,60 @@
+schema_version: 1
+product: FolioRelay
+security_model:
+  hostile_documents: assumed
+  physical_printers_are_parser_boundaries: true
+  scanner_verdict_is_authority: false
+  immutable_originals: required
+  untrusted_default_profile: hardened
+trust_profiles:
+  hardened:
+    raw_postscript: prohibited
+    raw_pcl: prohibited
+    raw_pjl: prohibited
+    external_resource_fetch: prohibited
+    renderer_network: none
+    output_preference: constrained-raster
+  trusted:
+    direct_pdf: policy-controlled
+    renderer_isolation: required
+  raw_compatibility:
+    default_enabled: false
+    admin_only: true
+    separate_qualification: required
+inspection:
+  abi: foliorelay.inspector/v1
+  mandatory_in_base_runtime: false
+  supported_classes:
+    - local-socket
+    - internal-network
+    - external-service
+    - hash-reputation
+  external_content_egress_default: deny
+  verdicts:
+    - clean
+    - malicious
+    - suspicious
+    - unknown
+    - error
+    - timeout
+    - unsupported
+  clean_means_safe: false
+agents:
+  document_content_is_untrusted_data: true
+  content_can_grant_authority: false
+  content_can_modify_routes: false
+availability:
+  admission_limits_required: true
+  bounded_worker_pools: required
+  backpressure: required
+  control_plane_must_remain_responsive_under_data_plane_load: required
+
+external_delivery:
+  user_specified_email:
+    enabled_capability: true
+    recipient_source: authorized-command-field
+    recipient_from_content: prohibited
+    default_attachment: canonical-page-faithful-derived-artifact
+    raw_printer_payload_attachment: prohibited
+    independent_route_leg: true
+    ambiguous_delivery_auto_retry: prohibited

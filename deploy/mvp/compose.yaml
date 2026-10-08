@@ -1,0 +1,107 @@
+services:
+  control:
+    build:
+      context: ../..
+      dockerfile: deploy/control/Dockerfile
+    image: foliorelay-control:mvp-local
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "18443:18443"
+    volumes:
+      - "${FOLIORELAY_DATA_ROOT:?}/control:/var/lib/foliorelay"
+      - "${FOLIORELAY_DATA_ROOT:?}/tls:/var/lib/foliorelay-tls"
+      - "${FOLIORELAY_DATA_ROOT:?}/artifacts:/var/lib/foliorelay/artifacts"
+      - "${FOLIORELAY_TOKEN_FILE:?}:/run/secrets/foliorelay.token:ro"
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m,mode=1777
+    command:
+      - -listen
+      - 0.0.0.0:18080
+      - -https-listen
+      - 0.0.0.0:18443
+      - -tls-state-dir
+      - /var/lib/foliorelay-tls
+      - -journal
+      - /var/lib/foliorelay/state/journal.frj
+      - -artifact-store
+      - /var/lib/foliorelay/artifacts
+      - -token-file
+      - /run/secrets/foliorelay.token
+      - -identity-file
+      - /var/lib/foliorelay/config/printer.json
+      - -printer-uri
+      - "${FOLIORELAY_PUBLIC_PRINTER_URI:?}"
+      - -printer-name
+      - "${FOLIORELAY_PRINTER_NAME:-FolioRelay}"
+      - -printer-location
+      - "${FOLIORELAY_PRINTER_LOCATION:-}"
+      - -airprint
+    healthcheck:
+      test: [CMD, /usr/local/bin/foliorelay-probe]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+
+  cups:
+    build:
+      context: ../..
+      dockerfile: deploy/engineering-cups/Dockerfile
+      target: cups
+    image: foliorelay-cups:mvp-local
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      control:
+        condition: service_healthy
+    ports:
+      - "8634:8634"
+    environment:
+      FOLIORELAY_IDENTITY_FILE: /var/lib/foliorelay-control/config/printer.json
+      FOLIORELAY_STATE_URL: http://control:18080
+      FOLIORELAY_STATE_TOKEN_FILE: /run/secrets/foliorelay.token
+      FOLIORELAY_INGRESS_STORE: /var/lib/foliorelay-artifacts
+      FOLIORELAY_MAX_INGRESS_BYTES: "104857600"
+    volumes:
+      - "${FOLIORELAY_DATA_ROOT:?}/control:/var/lib/foliorelay-control:ro"
+      - "${FOLIORELAY_DATA_ROOT:?}/artifacts:/var/lib/foliorelay-artifacts"
+      - "${FOLIORELAY_DATA_ROOT:?}/cups-state:/var/lib/cups"
+      - "${FOLIORELAY_DATA_ROOT:?}/cups-spool:/var/spool/cups"
+      - "${FOLIORELAY_TOKEN_FILE:?}:/run/secrets/foliorelay.token:ro"
+    tmpfs:
+      - /etc/cups:rw,noexec,nosuid,nodev,size=4m,uid=10001,gid=10001,mode=0750
+      - /var/cache/cups:rw,noexec,nosuid,nodev,size=16m,uid=10001,gid=10001,mode=0750
+      - /var/log/cups:rw,noexec,nosuid,nodev,size=16m,uid=10001,gid=10001,mode=0750
+
+  discovery:
+    build:
+      context: ../..
+      dockerfile: deploy/control/Dockerfile
+    image: foliorelay-control:mvp-local
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      control:
+        condition: service_healthy
+    network_mode: host
+    volumes:
+      - "${FOLIORELAY_DATA_ROOT:?}/control:/var/lib/foliorelay-control:ro"
+    entrypoint:
+      - /usr/local/bin/foliorelay-dnssd
+    command:
+      - -identity-file
+      - /var/lib/foliorelay-control/config/printer.json
+
