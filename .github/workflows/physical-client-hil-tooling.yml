@@ -55,3 +55,26 @@ jobs:
           if ($errors.Count -ne 0) {
             $errors | Format-List * | Out-String | Write-Error
           }
+          $scriptText = Get-Content -Raw 'scripts/hil/Invoke-FolioRelayPhysicalHil.ps1'
+          $docText = Get-Content -Raw 'docs/PHYSICAL_CLIENT_HIL.md'
+          foreach ($needle in @(
+            '$ExpectedManagementPort = 18443',
+            'BaseUrl must be the supported FolioRelay HTTPS management portal',
+            'RemoteCertificateNameMismatch',
+            'management_tls_fingerprint_sha256',
+            'WindowsWebUiConfirmed',
+            'AppleWebUiConfirmed'
+          )) {
+            if (-not $scriptText.Contains($needle)) {
+              throw "physical HIL HTTPS/WebUI contract missing: $needle"
+            }
+          }
+          if (-not $docText.Contains('https://<foliorelay-host>:18443')) {
+            throw 'physical HIL docs must use the supported HTTPS portal'
+          }
+          if ($docText.Contains('http://<foliorelay-host>:18080')) {
+            throw 'physical HIL docs must not expose retired LAN HTTP management'
+          }
+          if (-not $docText.Contains('sha256:d0ba6d1efbed0d9f84b20d374eeb44ee28ab0874a683396e628850f159193cf5')) {
+            throw 'physical HIL docs must bind the current control image'
+          }

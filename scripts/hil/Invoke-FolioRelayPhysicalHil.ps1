@@ -11,7 +11,9 @@ param(
     [string]$ObservedCupsImage,
     [string]$QueueName,
     [string]$AppleOSVersion,
+    [switch]$WindowsWebUiConfirmed,
     [switch]$AirPrintConfirmed,
+    [switch]$AppleWebUiConfirmed,
     [ValidateSet('iPhone','iPad')]
     [string]$AppleClientType = 'iPhone'
 )
@@ -20,14 +22,25 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $ExpectedTrueNASVersion = '25.04.1'
-$ExpectedControlDigest = 'sha256:c8d5787162db919f84e9607d13f368995138861355f3fa269cbb10561f24d80d'
+$ExpectedControlDigest = 'sha256:d0ba6d1efbed0d9f84b20d374eeb44ee28ab0874a683396e628850f159193cf5'
 $ExpectedCupsDigest = 'sha256:0997ad2054ca5e57f34291372aed55f549eee9ff201f171b430436b0655c0814'
+$ExpectedManagementPort = 18443
 $ExpectedPort = 8634
 $ExpectedResourcePath = '/printers/FolioRelay'
 
 New-Item -ItemType Directory -Force -Path $SessionDir | Out-Null
 $SessionDir = (Resolve-Path $SessionDir).Path
 $BaseUrl = $BaseUrl.TrimEnd('/')
+$baseUri = [Uri]$BaseUrl
+if (-not $baseUri.IsAbsoluteUri -or $baseUri.Scheme -ne 'https') {
+    throw 'BaseUrl must be the supported FolioRelay HTTPS management portal'
+}
+if ($baseUri.Port -ne $ExpectedManagementPort) {
+    throw "BaseUrl must use the supported FolioRelay HTTPS management port $ExpectedManagementPort"
+}
+if ($baseUri.AbsolutePath -ne '/') {
+    throw 'BaseUrl must identify the FolioRelay management portal root'
+}
 
 function ConvertFrom-SecureStringPlain([Security.SecureString]$Secure) {
     $ptr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($Secure)
@@ -67,6 +80,29 @@ if ([string]::IsNullOrWhiteSpace($token)) { throw 'management token is required'
 
 $handler = [System.Net.Http.HttpClientHandler]::new()
 $handler.UseProxy = $false
+$script:ObservedTlsFingerprint = $null
+$handler.ServerCertificateCustomValidationCallback = {
+    param($Message, $Certificate, $Chain, $SslPolicyErrors)
+    if ($null -eq $Certificate) { return $false }
+    $nameMismatch = [System.Net.Security.SslPolicyErrors]::RemoteCertificateNameMismatch
+    $notAvailable = [System.Net.Security.SslPolicyErrors]::RemoteCertificateNotAvailable
+    if (($SslPolicyErrors -band $nameMismatch) -ne 0 -or ($SslPolicyErrors -band $notAvailable) -ne 0) {
+        return $false
+    }
+    $allowed = [System.Net.Security.SslPolicyErrors]::None
+    $chainOnly = [System.Net.Security.SslPolicyErrors]::RemoteCertificateChainErrors
+    if ($SslPolicyErrors -ne $allowed -and $SslPolicyErrors -ne $chainOnly) {
+        return $false
+    }
+    $fingerprint = $Certificate.GetCertHashString([System.Security.Cryptography.HashAlgorithmName]::SHA256).ToLowerInvariant()
+    if ([string]::IsNullOrWhiteSpace($script:ObservedTlsFingerprint)) {
+        $script:ObservedTlsFingerprint = $fingerprint
+    }
+    elseif ($script:ObservedTlsFingerprint -ne $fingerprint) {
+        return $false
+    }
+    return $true
+}
 $client = [System.Net.Http.HttpClient]::new($handler)
 $client.Timeout = [TimeSpan]::FromSeconds(8)
 $client.DefaultRequestHeaders.Authorization = [System.Net.Http.Headers.AuthenticationHeaderValue]::new('Bearer', $token)
@@ -90,16 +126,20 @@ function Get-HttpStatus([string]$Path) {
 }
 
 function Read-LiveState {
+    $webui = Get-HttpStatus '/'
     $health = Get-HttpStatus '/healthz'
     $ready = Get-HttpStatus '/readyz'
-    if ($health -ne 204 -or $ready -ne 204) {
-        throw "FolioRelay is not healthy/ready (health=$health ready=$ready)"
+    if ($webui -ne 200 -or $health -ne 204 -or $ready -ne 204) {
+        throw "FolioRelay WebUI/health/readiness failed (webui=$webui health=$health ready=$ready)"
     }
     $capabilities = Get-Json '/.well-known/foliorelay'
     $status = Get-Json '/api/v1/status'
     $printer = Get-Json '/api/v1/printer'
     $jobs = Get-Json '/api/v1/jobs?limit=200'
     [ordered]@{
+        management_base_url = $BaseUrl
+        management_webui_http = $webui
+        management_tls_fingerprint_sha256 = $script:ObservedTlsFingerprint
         health_http = $health
         ready_http = $ready
         capabilities = $capabilities
@@ -194,6 +234,11 @@ try {
                 inbox_jobs = [int]$live.status.inbox_jobs
                 baseline_job_ids = @($live.job_ids)
                 discovery = $discovery
+                management = [ordered]@{
+                    base_url = $live.management_base_url
+                    webui_http = $live.management_webui_http
+                    tls_fingerprint_sha256 = $live.management_tls_fingerprint_sha256
+                }
                 health_http = $live.health_http
                 ready_http = $live.ready_http
             }
@@ -203,12 +248,18 @@ try {
         }
 
         'Windows' {
+            if (-not $WindowsWebUiConfirmed) {
+                throw 'Windows phase requires -WindowsWebUiConfirmed after opening the HTTPS Web UI in a real Windows browser and confirming the authenticated Overview/Inbox views'
+            }
             $preflightPath = Join-Path $SessionDir 'preflight.json'
             if (-not (Test-Path $preflightPath)) { throw 'run Preflight first using the same SessionDir' }
             $preflight = Get-Content -Raw $preflightPath | ConvertFrom-Json
             $before = Read-LiveState
             Assert-PublicCandidate $before
             Assert-IdentityEqual $preflight.identity $before.printer.identity
+            if ($before.management_tls_fingerprint_sha256 -ne $preflight.management.tls_fingerprint_sha256) {
+                throw 'management TLS certificate identity changed since H0'
+            }
             if ([int]$before.status.inbox_jobs -ne [int]$preflight.inbox_jobs) {
                 throw 'Inbox changed since H0; stop HIL and investigate as a separate campaign'
             }
@@ -297,6 +348,13 @@ try {
                     queue_drained = $queueDrained
                     new_jobs = $newJobs
                     identity = $after.printer.identity
+                    management = [ordered]@{
+                        base_url = $after.management_base_url
+                        webui_http = $after.management_webui_http
+                        tls_fingerprint_sha256 = $after.management_tls_fingerprint_sha256
+                        browser_operator_assertion = 'FolioRelay HTTPS Web UI rendered in a real Windows browser and authenticated Overview/Inbox views were usable.'
+                        browser_confirmed = $true
+                    }
                 }
                 Write-JsonFile (Join-Path $SessionDir 'windows.json') $windows
             }
@@ -316,6 +374,9 @@ try {
             if (-not $AirPrintConfirmed) {
                 throw 'Final requires -AirPrintConfirmed after selecting FolioRelay from the native AirPrint picker and submitting one print'
             }
+            if (-not $AppleWebUiConfirmed) {
+                throw 'Final requires -AppleWebUiConfirmed after opening the HTTPS Web UI in real iPhone/iPad Safari and confirming the authenticated Overview/Inbox views'
+            }
             $preflightPath = Join-Path $SessionDir 'preflight.json'
             $windowsPath = Join-Path $SessionDir 'windows.json'
             if (-not (Test-Path $preflightPath) -or -not (Test-Path $windowsPath)) {
@@ -326,6 +387,9 @@ try {
             $finalLive = Read-LiveState
             Assert-PublicCandidate $finalLive
             Assert-IdentityEqual $preflight.identity $finalLive.printer.identity
+            if ($finalLive.management_tls_fingerprint_sha256 -ne $preflight.management.tls_fingerprint_sha256) {
+                throw 'management TLS certificate identity changed before H4'
+            }
 
             $expected = [int]$preflight.inbox_jobs + 2
             if ([int]$finalLive.status.inbox_jobs -ne $expected) {
@@ -352,6 +416,8 @@ try {
                     os_version = $AppleOSVersion
                     operator_assertion = 'FolioRelay was selected from the native AirPrint picker and one print was submitted successfully.'
                     explicitly_confirmed = $true
+                    webui_operator_assertion = 'FolioRelay HTTPS Web UI rendered in real Safari and authenticated Overview/Inbox views were usable.'
+                    webui_confirmed = $true
                 }
                 identity = $finalLive.printer.identity
                 public_uri = $finalLive.printer.public_uri
@@ -384,12 +450,19 @@ try {
                 inbox_delta = [int]$finalLive.status.inbox_jobs - [int]$preflight.inbox_jobs
                 new_jobs = $newJobs
                 identity_unchanged = $true
+                management = [ordered]@{
+                    base_url = $preflight.management.base_url
+                    tls_fingerprint_sha256 = $preflight.management.tls_fingerprint_sha256
+                    webui_http = $finalLive.management_webui_http
+                    windows_browser_confirmed = $true
+                    apple_browser_confirmed = $true
+                }
                 services_healthy = $true
                 server_mutation_performed = $false
             }
             Write-JsonFile (Join-Path $SessionDir 'receipt.json') $receipt
             Assert-NoTokenLeak
-            Write-Host "H0-H4 PASS. Sanitized receipt: $(Join-Path $SessionDir 'receipt.json')"
+            Write-Host "H0-H4 + HTTPS WebUI smoke PASS. Sanitized receipt: $(Join-Path $SessionDir 'receipt.json')"
         }
     }
 }
