@@ -273,6 +273,67 @@ func TestWebSessionAuthenticatesSameAPIWithoutExposingBearerToken(t *testing.T) 
 	}
 }
 
+func TestWebSessionStatusIsPublicAndReflectsBrowserSession(t *testing.T) {
+	state, err := frstate.OpenDurableEngine(filepath.Join(t.TempDir(), "journal.frj"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer state.Close()
+	server, err := New(state, t.TempDir(), testToken, testPrinter(t), Profiles{WindowsIPP: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := server.Handler()
+
+	unauth := httptest.NewRecorder()
+	h.ServeHTTP(unauth, httptest.NewRequest(http.MethodGet, "/auth/session", nil))
+	if unauth.Code != http.StatusOK {
+		t.Fatalf("session status failed: %d %s", unauth.Code, unauth.Body.String())
+	}
+	var unauthStatus struct {
+		Authenticated bool `json:"authenticated"`
+	}
+	if err := json.Unmarshal(unauth.Body.Bytes(), &unauthStatus); err != nil {
+		t.Fatal(err)
+	}
+	if unauthStatus.Authenticated {
+		t.Fatal("unauthenticated browser reported authenticated")
+	}
+	if got := unauth.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("session status must be no-store, got %q", got)
+	}
+
+	login := httptest.NewRequest(http.MethodPost, "/auth/session",
+		bytes.NewBufferString(`{"token":"`+testToken+`"}`))
+	login.Header.Set("Content-Type", "application/json")
+	loginResp := httptest.NewRecorder()
+	h.ServeHTTP(loginResp, login)
+	if loginResp.Code != http.StatusNoContent {
+		t.Fatalf("login failed: %d %s", loginResp.Code, loginResp.Body.String())
+	}
+	cookies := loginResp.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("expected one session cookie, got %+v", cookies)
+	}
+
+	authReq := httptest.NewRequest(http.MethodGet, "/auth/session", nil)
+	authReq.AddCookie(cookies[0])
+	auth := httptest.NewRecorder()
+	h.ServeHTTP(auth, authReq)
+	if auth.Code != http.StatusOK {
+		t.Fatalf("authenticated session status failed: %d %s", auth.Code, auth.Body.String())
+	}
+	var authStatus struct {
+		Authenticated bool `json:"authenticated"`
+	}
+	if err := json.Unmarshal(auth.Body.Bytes(), &authStatus); err != nil {
+		t.Fatal(err)
+	}
+	if !authStatus.Authenticated {
+		t.Fatal("valid browser session was not recognized")
+	}
+}
+
 func TestWebSessionRejectsWrongCredential(t *testing.T) {
 	state, err := frstate.OpenDurableEngine(filepath.Join(t.TempDir(), "journal.frj"))
 	if err != nil {
@@ -312,5 +373,25 @@ func TestWebPortalIsPublicButContainsNoCredential(t *testing.T) {
 	}
 	if got := resp.Header().Get("Content-Security-Policy"); got == "" {
 		t.Fatal("web portal missing content security policy")
+	}
+}
+
+func TestWebFaviconProbeIsNoiseFree(t *testing.T) {
+	state, err := frstate.OpenDurableEngine(filepath.Join(t.TempDir(), "journal.frj"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer state.Close()
+	server, err := New(state, t.TempDir(), testToken, testPrinter(t), Profiles{WindowsIPP: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp := httptest.NewRecorder()
+	server.Handler().ServeHTTP(resp, httptest.NewRequest(http.MethodGet, "/favicon.ico", nil))
+	if resp.Code != http.StatusNoContent {
+		t.Fatalf("favicon probe should be noise-free: %d %s", resp.Code, resp.Body.String())
+	}
+	if got := resp.Header().Get("Content-Security-Policy"); got == "" {
+		t.Fatal("favicon response missing web security headers")
 	}
 }

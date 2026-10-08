@@ -11,6 +11,7 @@ on:
       - 'internal/printer/**'
       - 'internal/security/**'
       - 'internal/state/**'
+      - 'internal/transporttls/**'
       - 'internal/webui/**'
       - 'deploy/control/**'
       - '.github/workflows/control-runtime.yml'

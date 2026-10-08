@@ -1,0 +1,88 @@
+name: FolioRelay WebUI Browser Qualification
+
+on:
+  pull_request:
+    paths:
+      - 'cmd/foliorelayd/**'
+      - 'internal/control/**'
+      - 'internal/webui/**'
+      - 'scripts/webui/**'
+      - 'tests/webui/**'
+      - '.ci/static-hci-playwright.mjs'
+      - 'package.json'
+      - 'playwright.config.mjs'
+      - 'lighthouserc.cjs'
+      - '.github/workflows/webui-browser-qualification.yml'
+  push:
+    branches:
+      - mvp/production-cups-airprint
+    paths:
+      - 'cmd/foliorelayd/**'
+      - 'internal/control/**'
+      - 'internal/webui/**'
+      - 'scripts/webui/**'
+      - 'tests/webui/**'
+      - '.ci/static-hci-playwright.mjs'
+      - 'package.json'
+      - 'playwright.config.mjs'
+      - 'lighthouserc.cjs'
+      - '.github/workflows/webui-browser-qualification.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  browser-qualification:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout FolioRelay
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: '22'
+
+      - name: Prove control contract before rendered tests
+        run: go test ./internal/control
+
+      - name: Install WebUI qualification dependencies
+        run: npm install --ignore-scripts --no-audit --no-fund
+
+      - name: Install browser engines
+        run: npx playwright install --with-deps chromium firefox webkit
+
+      - name: Run five-profile browser and accessibility matrix
+        run: npm run webui:test
+
+      - name: Resolve Chromium for Lighthouse
+        run: |
+          CHROME_PATH="$(node --input-type=module -e "import { chromium } from '@playwright/test'; process.stdout.write(chromium.executablePath())")"
+          echo "CHROME_PATH=$CHROME_PATH" >> "$GITHUB_ENV"
+
+      - name: Run Lighthouse quality budgets
+        run: npm run webui:lighthouse
+
+      - name: Upload browser qualification evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: foliorelay-webui-browser-qualification
+          path: |
+            build/playwright-report
+            build/playwright-results
+            build/lighthouse
+          if-no-files-found: ignore
+          retention-days: 14

@@ -155,17 +155,24 @@ jobs:
           test "$(cat "$RUNNER_TEMP/engineering-runtime/cups-backends.txt")" = "foliorelay"
 
           docker compose -f "$compose" exec -T cups \
-            grep -Fxq 'Browsing Off' /etc/cups/cupsd.conf
+            grep -Fxq 'Browsing Off' /usr/share/foliorelay/cups/cupsd.conf.template
           docker compose -f "$compose" exec -T cups \
-            grep -Fxq 'WebInterface No' /etc/cups/cupsd.conf
+            grep -Fxq 'WebInterface No' /usr/share/foliorelay/cups/cupsd.conf.template
           docker compose -f "$compose" exec -T cups \
             grep -Fxq 'JobSheets none none' /etc/cups/printers.conf
           docker compose -f "$compose" exec -T cups \
-            grep -Fq 'cupsFilter2: "application/pdf application/pdf 0 -"' /etc/cups/ppd/FolioRelay.ppd
+            grep -Fxq 'Type 4100' /etc/cups/printers.conf
+          ipptool -tv ipp://127.0.0.1:8634/printers/FolioRelay \
+            "$(find /usr/share/cups -type f -name get-printer-attributes.test -print -quit)" \
+            | tee "$RUNNER_TEMP/engineering-runtime/live-printer-attributes.txt"
+          grep -Eq 'printer-type .* = 4100' "$RUNNER_TEMP/engineering-runtime/live-printer-attributes.txt"
+
+          docker compose -f "$compose" exec -T cups \
+            grep -Fq 'cupsFilter2: "application/pdf application/pdf 0 -"' /usr/share/foliorelay/cups/FolioRelay.ppd
 
           if docker compose -f "$compose" exec -T cups \
               grep -Eq 'CUPS-Add-Modify-Printer|CUPS-Create-Local-Printer|Create-Printer-Subscription|Create-Job-Subscriptions' \
-                /etc/cups/cupsd.conf; then
+                /usr/share/foliorelay/cups/cupsd.conf.template; then
             echo "unexpected printer-management/subscription operation admitted by CUPS policy" >&2
             exit 1
           fi

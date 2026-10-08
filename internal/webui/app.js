@@ -138,7 +138,7 @@ async function runSelfTest() {
   for (const check of receipt.checks || []) {
     const article = document.createElement("article");
     article.className = "panel check " + check.status;
-    const heading = document.createElement("h3");
+    const heading = document.createElement("h2");
     heading.textContent = check.code + " — " + check.status.toUpperCase();
     const message = document.createElement("p");
     message.textContent = check.message;
@@ -162,7 +162,13 @@ async function runSelfTest() {
 async function selectView(name) {
   document.querySelectorAll(".view").forEach((node) => { node.hidden = node.id !== name; });
   document.querySelectorAll(".tabs button").forEach((node) => {
-    node.classList.toggle("active", node.dataset.view === name);
+    const selected = node.dataset.view === name;
+    node.classList.toggle("active", selected);
+    if (selected) {
+      node.setAttribute("aria-current", "page");
+    } else {
+      node.removeAttribute("aria-current");
+    }
   });
   if (name === "inbox") await loadJobs();
   if (name === "diagnostics") await runSelfTest();
@@ -207,4 +213,22 @@ $("copy-uri").addEventListener("click", async () => {
   setTimeout(() => { $("copy-uri").textContent = "Copy"; }, 1200);
 });
 
-loadOverview().catch(() => showLogin());
+async function bootstrap() {
+  try {
+    const response = await fetch("/auth/session", {
+      credentials: "same-origin",
+      cache: "no-store"
+    });
+    if (!response.ok) throw new Error("session status unavailable");
+    const session = await response.json();
+    if (session.authenticated) {
+      await loadOverview();
+    } else {
+      showLogin();
+    }
+  } catch (_) {
+    showLogin();
+  }
+}
+
+bootstrap();

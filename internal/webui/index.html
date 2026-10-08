@@ -30,7 +30,7 @@
 
     <section id="app" hidden>
       <nav class="tabs" aria-label="FolioRelay views">
-        <button data-view="overview" class="active">Overview</button>
+        <button data-view="overview" class="active" aria-current="page">Overview</button>
         <button data-view="inbox">Inbox</button>
         <button data-view="printer">Printer</button>
         <button data-view="diagnostics">Diagnostics</button>
@@ -64,7 +64,7 @@
 
       <section id="printer" class="view" hidden>
         <p class="eyebrow">Native printing</p><h1>Printer</h1>
-        <div id="printer-details" class="panel definition-grid"></div>
+        <dl id="printer-details" class="panel definition-grid"></dl>
         <div class="cards two">
           <article class="panel"><h2>Windows</h2><p>Add the printer using the IPP endpoint above. No vendor driver is required.</p></article>
           <article class="panel"><h2>AirPrint</h2><p id="airprint-help">AirPrint status is loading.</p></article>
