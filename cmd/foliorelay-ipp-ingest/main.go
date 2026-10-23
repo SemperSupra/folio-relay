@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	frinbox "github.com/SemperSupra/folio-relay/internal/inbox"
 )
 
 const defaultMaxBytes int64 = 100 << 20
@@ -27,6 +29,7 @@ type ingestRequest struct {
 	MediaType           string `json:"media_type"`
 	Substrate           string `json:"substrate"`
 	SubstrateJobID      string `json:"substrate_job_id"`
+	SourceTitle         string `json:"source_title,omitempty"`
 	Copies              int64  `json:"copies"`
 }
 
@@ -105,6 +108,7 @@ func main() {
 		MediaType:           mediaType,
 		Substrate:           substrate,
 		SubstrateJobID:      jobID,
+		SourceTitle:         frinbox.CleanTitle(os.Getenv("FOLIORELAY_SOURCE_JOB_TITLE")),
 		Copies:              copies,
 	}
 	payload, _ := json.Marshal(req)

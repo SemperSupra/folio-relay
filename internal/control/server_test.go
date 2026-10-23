@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	frinbox "github.com/SemperSupra/folio-relay/internal/inbox"
@@ -52,6 +53,7 @@ func TestIngestInboxArtifactSurvivesRestart(t *testing.T) {
 		"media_type":           "application/pdf",
 		"substrate":            "pappl",
 		"substrate_job_id":     "7",
+		"source_title":         "Quarterly Report.pdf",
 		"copies":               1,
 	}
 	encoded, _ := json.Marshal(payload)
@@ -94,6 +96,11 @@ func TestIngestInboxArtifactSurvivesRestart(t *testing.T) {
 	if len(page.Items) != 1 || page.Items[0].AggregateID != "ingress/pappl/job-7" {
 		t.Fatalf("unexpected inbox: %+v", page.Items)
 	}
+	if page.Items[0].SourceTitle != "Quarterly Report.pdf" ||
+		!strings.HasPrefix(page.Items[0].DownloadName, "Quarterly-Report-") ||
+		!strings.HasSuffix(page.Items[0].DownloadName, ".pdf") {
+		t.Fatalf("unexpected descriptive download metadata: %+v", page.Items[0])
+	}
 
 	artifactReq := httptest.NewRequest(http.MethodGet, "/api/v1/jobs/"+page.Items[0].JobID+"/artifact", nil)
 	artifactReq.Header.Set("Authorization", "Bearer "+testToken)
@@ -101,6 +108,9 @@ func TestIngestInboxArtifactSurvivesRestart(t *testing.T) {
 	h.ServeHTTP(artifactResp, artifactReq)
 	if artifactResp.Code != http.StatusOK {
 		t.Fatalf("artifact failed: %d %s", artifactResp.Code, artifactResp.Body.String())
+	}
+	if got := artifactResp.Header().Get("Content-Disposition"); got != `attachment; filename="`+page.Items[0].DownloadName+`"` {
+		t.Fatalf("unexpected download header: %q", got)
 	}
 	got, _ := io.ReadAll(artifactResp.Body)
 	if !bytes.Equal(got, body) {
@@ -211,7 +221,7 @@ func TestOpenAPIAndSelfTestUseSharedProductSurface(t *testing.T) {
 	var receipt struct {
 		Status string `json:"status"`
 		Checks []struct {
-			Code string `json:"code"`
+			Code   string `json:"code"`
 			Status string `json:"status"`
 		} `json:"checks"`
 	}

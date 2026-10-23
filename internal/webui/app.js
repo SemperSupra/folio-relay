@@ -105,9 +105,9 @@ async function loadJobs() {
 
     const primary = document.createElement("div");
     const title = document.createElement("strong");
-    title.textContent = prettyTime(job.accepted_at);
+    title.textContent = job.source_title || job.download_name || prettyTime(job.accepted_at);
     const id = document.createElement("code");
-    id.textContent = job.job_id;
+    id.textContent = prettyTime(job.accepted_at) + " · " + job.job_id;
     primary.append(title, document.createElement("br"), id);
 
     const format = document.createElement("span");
@@ -116,6 +116,7 @@ async function loadJobs() {
     size.textContent = formatBytes(job.artifact_bytes);
     const link = document.createElement("a");
     link.href = "/api/v1/jobs/" + encodeURIComponent(job.job_id) + "/artifact";
+    link.download = job.download_name;
     link.textContent = "Download";
     link.className = "quiet";
     row.append(primary, format, size, link);

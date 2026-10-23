@@ -37,6 +37,7 @@ esac
 
 export FOLIORELAY_SUBSTRATE=cups
 export FOLIORELAY_SOURCE_JOB_ID="$job_id"
+export FOLIORELAY_SOURCE_JOB_TITLE="$3"
 export FOLIORELAY_MEDIA_TYPE="$media_type"
 export FOLIORELAY_COPIES="$copies"
 

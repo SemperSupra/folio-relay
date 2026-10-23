@@ -52,6 +52,7 @@ type ingestRequest struct {
 	MediaType           string `json:"media_type"`
 	Substrate           string `json:"substrate"`
 	SubstrateJobID      string `json:"substrate_job_id"`
+	SourceTitle         string `json:"source_title,omitempty"`
 	Copies              int64  `json:"copies"`
 }
 
@@ -459,7 +460,7 @@ func (s *Server) handleArtifact(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", record.MediaType)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, record.JobID))
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, record.DownloadName))
 	w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.Copy(w, file)
@@ -518,7 +519,7 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		IdempotencyKey:      idempotencyKey,
 		SemanticFingerprint: req.SemanticFingerprint,
 		Metadata: map[string]string{
-			"inbox_version":   "1",
+			"inbox_version":    "1",
 			"accepted_at":      acceptedAt,
 			"artifact_sha256":  req.ArtifactSHA256,
 			"artifact_bytes":   strconv.FormatInt(req.ArtifactBytes, 10),
@@ -526,6 +527,7 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 			"copies":           strconv.FormatInt(req.Copies, 10),
 			"substrate":        req.Substrate,
 			"substrate_job_id": req.SubstrateJobID,
+			"source_title":     frinbox.CleanTitle(req.SourceTitle),
 		},
 	}, func(current frstate.Snapshot, _ frstate.Command) (frstate.TransitionResult, error) {
 		if current.Generation != 0 {
