@@ -14,8 +14,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	frinbox "github.com/SemperSupra/folio-relay/internal/inbox"
 )
 
 const defaultMaxBytes int64 = 100 << 20
@@ -99,6 +97,10 @@ func main() {
 	}, "\x00")
 	fpSum := sha256.Sum256([]byte(fingerprintInput))
 
+	title := []rune(os.Getenv("FOLIORELAY_SOURCE_JOB_TITLE"))
+	if len(title) > 160 {
+		title = title[:160]
+	}
 	req := ingestRequest{
 		AggregateID:         aggregate,
 		IdempotencyKey:      key,
@@ -108,7 +110,7 @@ func main() {
 		MediaType:           mediaType,
 		Substrate:           substrate,
 		SubstrateJobID:      jobID,
-		SourceTitle:         frinbox.CleanTitle(os.Getenv("FOLIORELAY_SOURCE_JOB_TITLE")),
+		SourceTitle:         string(title),
 		Copies:              copies,
 	}
 	payload, _ := json.Marshal(req)
