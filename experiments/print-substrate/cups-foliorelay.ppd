@@ -5,6 +5,7 @@
 *LanguageEncoding: ISOLatin1
 *PCFileName: "FOLIORLY.PPD"
 *Manufacturer: "FolioRelay"
+*1284DeviceId: "MFG:FolioRelay;MDL:Virtual Printer;CMD:PDF,URF;"
 *Product: "(FolioRelay Virtual Printer)"
 *ModelName: "FolioRelay Virtual Printer"
 *ShortNickName: "FolioRelay Virtual Printer"
