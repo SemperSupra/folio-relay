@@ -115,6 +115,7 @@ func NewReviewBrowserHandler(lookup ReviewGrantLookup,load ReviewLoader,
   if r.TLS==nil||r.Host!=parsed.Host {
     http.Error(w,"browser review unavailable",http.StatusUnauthorized);return
   }
+  if serveReviewLoginAsset(w,r){return}
   if r.URL.Path=="/filing/review-sessions" {
    if r.Method!=http.MethodPost{
     w.Header().Set("Allow","POST")
