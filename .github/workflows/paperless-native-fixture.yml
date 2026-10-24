@@ -96,7 +96,7 @@ jobs:
           )"
           echo "::add-mask::$FOLIO_FIXTURE_PAPERLESS_TOKEN"
           unset FOLIO_FIXTURE_PAPERLESS_PASSWORD
-          go test -tags=paperless_integration ./internal/filing/paperless -run '^TestDisposableRealPaperless313$' -count=1 -v
+          go test -tags=paperless_integration ./internal/filing/paperless -run '^(TestDisposableRealPaperless313|TestPaperless313ConditionalUpdateRace)$' -count=1 -v
       - name: Fixture cleanup
         if: always()
         shell: bash
