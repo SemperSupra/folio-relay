@@ -3,6 +3,7 @@ package paperless
 import (
  "context"
  "crypto/sha256"
+ "crypto/tls"
  "encoding/base64"
  "errors"
  "net/http"
@@ -36,6 +37,7 @@ func TestScopedReviewerRequiresExactEffectAndUnexpiredGrant(t *testing.T){
  if err!=nil{t.Fatal(err)}
  makeRequest:=func(effect,credential string)*http.Request {
     req:=httptest.NewRequest(http.MethodGet,"/filing/reviews/"+effect,nil)
+    req.TLS=&tls.ConnectionState{}
     if credential!=""{req.Header.Set("Authorization",credential)}
     return req
  }
@@ -78,6 +80,7 @@ func TestReviewTokensCannotBeSpoofedViaProxyCookieOrQuery(t *testing.T){
  auth,err:=NewScopedReviewAuthorizer(resolver,func()time.Time{return now})
  if err!=nil{t.Fatal(err)}
  req:=httptest.NewRequest("GET","/filing/reviews/"+effect+"?token="+token,nil)
+ req.TLS=&tls.ConnectionState{}
  req.Header.Set("X-Forwarded-User","administrator")
  req.Header.Set("X-Actor","trusted-actor")
  req.Header.Set("X-User","reviewer-a")
@@ -100,6 +103,12 @@ func TestReviewTokensCannotBeSpoofedViaProxyCookieOrQuery(t *testing.T){
   }
  }
  req.Header.Set("Authorization","Bearer "+token)
+ req.TLS=nil
+ req.Header.Set("X-Forwarded-Proto","https")
+ if _,err:=auth(req,effect);!errors.Is(err,ErrReviewGrant){
+   t.Fatal("plaintext or forged X-Forwarded-Proto bypassed TLS prerequisite")
+ }
+ req.TLS=&tls.ConnectionState{}
  if p,err:=auth(req,effect);err!=nil||p.ActorID!="viewer"{
    t.Fatalf("genuine token failed with forged proxy headers: %#v %v",p,err)
  }
@@ -130,6 +139,7 @@ func TestScopedReviewHandlerDeniesCrossDocumentAndDisclosesNoSecrets(t *testing.
  if err!=nil{t.Fatal(err)}
  call:=func(uri,credential string)*httptest.ResponseRecorder{
   req:=httptest.NewRequest(http.MethodGet,uri,nil)
+  req.TLS=&tls.ConnectionState{}
   if credential!=""{req.Header.Set("Authorization",credential)}
   recorder:=httptest.NewRecorder()
   handler.ServeHTTP(recorder,req)
