@@ -27,15 +27,15 @@ func NewArchivedReviewLoader(outbox *Outbox,client *Client,targetID string,langu
     !identRe.MatchString(targetID)||language==nil{
   return nil,ErrReviewUnavailable
  }
- return func(ctx context.Context,effectID string)(ReviewEnvelope,error){
-  if !shaRe.MatchString(effectID){return ReviewEnvelope{},ErrReviewUnavailable}
-  ticket,err:=outbox.Get(effectID)
+ return func(ctx context.Context,effect string)(ReviewEnvelope,error){
+  if !shaRe.MatchString(effect){return ReviewEnvelope{},ErrReviewUnavailable}
+  ticket,err:=outbox.Get(effect)
   if err!=nil||ticket.State!="archived"||ticket.DocumentID<=0||
-     ticket.ID!=effectID||ticket.Intent.Validate()!=nil||
+     ticket.ID!=effect||ticket.Intent.Validate()!=nil||
      effectID(ticket.Intent)!=ticket.ID||ticket.Intent.TargetID!=targetID{
     return ReviewEnvelope{},ErrReviewUnavailable
   }
-  selectedLanguage,err:=language(ctx,effectID)
+  selectedLanguage,err:=language(ctx,effect)
   if err!=nil{return ReviewEnvelope{},ErrReviewUnavailable}
   // The remote token is scoped by the operator-configured Paperless Client,
   // which rejects redirects and unapproved non-HTTPS hosts. It is never
