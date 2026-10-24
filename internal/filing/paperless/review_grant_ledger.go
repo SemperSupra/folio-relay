@@ -87,7 +87,7 @@ func OpenEncryptedReviewGrantLedger(path string,key []byte,decide ReviewGrantDec
  if info,err:=os.Lstat(dir);err==nil{
   if !info.IsDir()||info.Mode()&os.ModeSymlink!=0||
     runtime.GOOS!="windows"&&info.Mode().Perm()&0o077!=0 {
-   return nil,ErrReviewGrantLedger
+   return nil,fmt.Errorf("%w: parent directory unsafe: %v",ErrReviewGrantLedger,info.Mode())
   }
  }else if !errors.Is(err,os.ErrNotExist){return nil,ErrReviewGrantLedger}
  block,err:=aes.NewCipher(key)
