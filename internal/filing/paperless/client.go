@@ -181,16 +181,18 @@ func (c *Client) Observe(ctx context.Context,taskID string)(Task,error) {
  }
  r:=out.Results[0]
  task:=Task{TaskID:taskID,Status:r.Status,DocumentID:r.ResultData.DocumentID,DuplicateOf:r.ResultData.DuplicateOf}
+ // Paperless v3.1.3 API v10 serializes lowercase model statuses.
+ // Older v9 Celery uppercase states must not silently be mistaken for v10.
  switch r.Status {
- case "PENDING","RECEIVED","STARTED","RETRY":
+ case "pending","started":
     task.Outcome="pending"
- case "SUCCESS":
+ case "success":
     switch {
     case task.DocumentID>0 && task.DuplicateOf==0: task.Outcome="archived"
     case task.DuplicateOf>0 && task.DocumentID==0: task.Outcome="duplicate"
-    default:task.Outcome="unknown"
+    default: task.Outcome="unknown"
     }
- case "FAILURE","REVOKED":
+ case "failure","revoked":
     task.Outcome="rejected"
  default:
     task.Outcome="unknown"

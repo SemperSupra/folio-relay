@@ -72,7 +72,7 @@ func TestDisposableRealPaperless313(t *testing.T){
  t.Logf("synthetic bytes=%d task accepted=true",len(doc.Content))
  var observed Task
  for {
-  if err:=ctx.Err();err!=nil{t.Fatalf("timed out waiting for Paperless task: %v",err)}
+  if err:=ctx.Err();err!=nil{t.Fatalf("timed out waiting for Paperless task: %v last_status=%q last_outcome=%q",err,observed.Status,observed.Outcome)}
   observed,err=c.Observe(ctx,taskID)
   if err!=nil{t.Fatalf("task API v10 contract: %v",err)}
   if observed.Outcome=="archived"||observed.Outcome=="duplicate"||observed.Outcome=="rejected" {break}

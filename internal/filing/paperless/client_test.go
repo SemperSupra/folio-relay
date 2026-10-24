@@ -54,12 +54,13 @@ func TestUploadPassesUnmodifiedDocumentAndNoAIOverwrites(t *testing.T){
 }
 func TestObserveAsynchronousStatesAndNativeClassificationReadback(t *testing.T){
  cases:=[]struct{label,status,body,want string}{
-  {"pending","STARTED","","pending"},
-  {"success","SUCCESS","\"document_id\":47","archived"},
-  {"duplicate","SUCCESS","\"duplicate_of\":12","duplicate"},
-  {"failure","FAILURE","","rejected"},
-  {"no-linked-document","SUCCESS","","unknown"},
+  {"pending","started","","pending"},
+  {"success","success","\"document_id\":47","archived"},
+  {"duplicate","success","\"duplicate_of\":12","duplicate"},
+  {"failure","failure","","rejected"},
+  {"no-linked-document","success","","unknown"},
   {"unexpected","FUTURE_STATUS","","unknown"},
+  {"legacy-v9-uppercase","SUCCESS","\"document_id\":47","unknown"},
  }
  for _,tc:=range cases{
   t.Run(tc.label,func(t *testing.T){
