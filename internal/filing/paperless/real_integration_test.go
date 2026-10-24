@@ -157,7 +157,7 @@ func TestDisposableRealPaperless313(t *testing.T){
   "https://reviews.example.test",[]byte(strings.Repeat("g",32)),time.Now)
  if err!=nil{t.Fatal(err)}
  gatedPost:=httptest.NewRequest("POST","https://reviews.example.test/filing/review-sessions",
-   strings.NewReader(fmt.Sprintf("{\\\"effect_id\\\":%q}",ticket.ID)))
+   strings.NewReader(fmt.Sprintf("{\"effect_id\":%q}",ticket.ID)))
  gatedPost.Header.Set("Authorization","Bearer "+gatedToken)
  gatedPost.Header.Set("Origin","https://reviews.example.test")
  gatedPost.Header.Set("X-FolioRelay-Review-Session","1")
