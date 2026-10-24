@@ -10,12 +10,14 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
 var (
 	ErrCollision = errors.New("export destination already exists")
 	ErrSource = errors.New("canonical artifact invalid or unavailable")
+	ErrUnsafeShare = errors.New("managed share must be separate from protected staging root")
 )
 
 // Artifact references an immutable content-addressed canonical artifact.
@@ -63,6 +65,33 @@ func NewWorkerWithMode(canonicalDir, exportDir string, mode os.FileMode) (*Worke
 	if err != nil { return nil, err }
 	target, err := os.OpenRoot(out)
 	if err != nil { source.Close(); return nil, err }
+	// Export root is the protected parent of the separately published
+	// "shared/" subtree. SMB writers may rename files inside shared/, but
+	// must never rename staging paths in the protected parent.
+	rootStat, err := os.Lstat(out)
+	if err != nil || runtime.GOOS != "windows" && rootStat.Mode().Perm()&0o022 != 0 {
+		source.Close(); target.Close()
+		return nil, ErrUnsafeShare
+	}
+	if err := target.Mkdir(".foliorelay-private-stage", 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+		source.Close(); target.Close()
+		return nil, err
+	}
+	stageInfo, err := target.Lstat(".foliorelay-private-stage")
+	if err != nil || !stageInfo.IsDir() || stageInfo.Mode()&os.ModeSymlink != 0 || runtime.GOOS != "windows" && stageInfo.Mode().Perm() != 0o700 {
+		source.Close(); target.Close()
+		return nil, ErrUnsafeShare
+	}
+	if mode == 0o660 {
+		if runtime.GOOS == "windows" { source.Close(); target.Close(); return nil, ErrUnsafeShare }
+		// The share root must be site-provisioned with the intended SMB
+		// group, mode and ACL. Never create or chmod it by guesswork.
+		shareInfo, err := target.Lstat("shared")
+		if err != nil || !shareInfo.IsDir() || shareInfo.Mode()&os.ModeSymlink != 0 || shareInfo.Mode().Perm()&0o770 != 0o770 {
+			source.Close(); target.Close()
+			return nil, ErrUnsafeShare
+		}
+	}
 	dirMode := os.FileMode(0o750)
 	if mode == 0o660 { dirMode = 0o770 }
 	return &Worker{canonical: source, exports: target, fileMode:mode, directoryMode:dirMode}, nil
@@ -147,6 +176,10 @@ func (w *Worker) ensureFolder(folder string) error {
 	parts := strings.Split(folder, "/")
 	for i := range parts {
 		name := strings.Join(parts[:i+1], "/")
+		if w.fileMode == 0o660 && i == 0 {
+			// Never try to create/reown/repair a managed share root.
+			continue
+		}
 		err := w.exports.Mkdir(name, w.directoryMode)
 		created := err == nil
 		if err != nil && !errors.Is(err, os.ErrExist) { return err }
@@ -177,13 +210,16 @@ func (w *Worker) ensureFolder(folder string) error {
 func (w *Worker) Publish(p Plan, a Artifact) (Receipt, error) {
 	if w == nil || w.canonical == nil || w.exports == nil { return Receipt{}, errors.New("worker closed") }
 	if err := validatePlan(p); err != nil { return Receipt{}, err }
+	if w.fileMode == 0o660 && p.Folder != "shared" && !strings.HasPrefix(p.Folder, "shared/") { return Receipt{}, ErrUnsafeShare }
 	source, err := w.sourceFile(a)
 	if err != nil { return Receipt{}, err }
 	defer source.Close()
 	if err := w.ensureFolder(p.Folder); err != nil { return Receipt{}, err }
 	var nonce [16]byte
 	if _, err := rand.Read(nonce[:]); err != nil { return Receipt{}, err }
-	temp := path.Join(p.Folder, ".foliorelay-stage-"+hex.EncodeToString(nonce[:]))
+	// Private staging is a sibling of the shared subtree, not a user-writable
+	// entry in that subtree. A named SMB user cannot rename/swap staging.
+	temp := path.Join(".foliorelay-private-stage", hex.EncodeToString(nonce[:]))
 	output, err := w.exports.OpenFile(temp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil { return Receipt{}, err }
 	defer w.exports.Remove(temp)
@@ -211,6 +247,7 @@ func (w *Worker) Publish(p Plan, a Artifact) (Receipt, error) {
 func (w *Worker) Inspect(receipt Receipt) (string, error) {
 	if w == nil || w.exports == nil { return "", errors.New("worker closed") }
 	if err := validateArtifact(Artifact{SHA256:receipt.SHA256, Bytes:receipt.Bytes}); err != nil { return "", err }
+	if w.fileMode == 0o660 && !strings.HasPrefix(receipt.RelativePath,"shared/") {return "",ErrUnsafeShare}
 	if receipt.RelativePath == "." || strings.HasPrefix(receipt.RelativePath, "/") {
 		return "", errors.New("invalid export receipt")
 	}
