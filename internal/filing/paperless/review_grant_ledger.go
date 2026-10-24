@@ -61,6 +61,9 @@ type EncryptedReviewGrantLedger struct {
  aead cipher.AEAD
  grants map[[32]byte]ReviewGrant
  sequence uint64
+ digest [32]byte
+ anchor ReviewGrantAnchor
+ quarantined bool
  decide ReviewGrantDecision
  clock func()time.Time
  closed bool
@@ -138,6 +141,7 @@ func (l *EncryptedReviewGrantLedger) replay(ciphertext []byte)error{
   l.grants[event.Grant.TokenHash]=event.Grant
  default:return ErrReviewGrantLedger
  }
+ l.digest=advanceReviewGrantDigest(l.digest,event.Sequence,ciphertext)
  l.sequence=event.Sequence
  return nil
 }
@@ -147,11 +151,31 @@ func (l *EncryptedReviewGrantLedger) append(event grantEvent)error{
  nonce:=make([]byte,l.aead.NonceSize())
  if _,err=rand.Read(nonce);err!=nil{return ErrReviewGrantLedger}
  encrypted:=l.aead.Seal(nil,nonce,data,[]byte(grantEventAAD))
- if err=l.journal.Append(append(nonce,encrypted...));err!=nil{
+ previous:=l.currentCheckpoint()
+ frame:=append(nonce,encrypted...)
+ if err=l.journal.Append(frame);err!=nil{
+  // An ambiguous local append is fatal to an anchored live issuer.
+  if l.anchor!=nil {l.quarantined=true}
   return fmt.Errorf("%w: commit failed",ErrReviewGrantLedger)
  }
- // All mutations to the in-memory projection happen only after fsync.
- return l.replay(append(nonce,encrypted...))
+ // The journal is fsynced before any grant becomes visible. For an anchored
+ // issuer, an independent compare-and-advance must also be durable before
+ // the caller gets the bearer or a revoke success.
+ if err=l.replay(frame);err!=nil{
+  l.quarantined=true
+  return ErrReviewGrantLedger
+ }
+ if l.anchor!=nil {
+  ctx,cancel:=context.WithTimeout(context.Background(),grantAnchorTimeout)
+  err=l.anchor.CompareAndAdvance(ctx,previous,l.currentCheckpoint())
+  cancel()
+  if err!=nil {
+   l.quarantined=true
+   return ErrReviewGrantAnchor
+  }
+  if err=l.checkAnchorBounded(context.Background());err!=nil{return err}
+ }
+ return nil
 }
 
 // Issue performs no DMS writes; admission is delegated to a trusted,
@@ -164,7 +188,10 @@ func (l *EncryptedReviewGrantLedger) Issue(ctx context.Context,actor,effect,oper
    ttl<time.Minute||ttl>maxGrantLifetime{return "",ErrReviewGrantLedger}
  l.mu.Lock()
  defer l.mu.Unlock()
- if l.closed{return "",ErrReviewGrantLedger}
+ if l.closed||l.quarantined{return "",ErrReviewGrantLedger}
+ if l.anchor!=nil {
+  if err:=l.checkAnchorBounded(ctx);err!=nil{return "",err}
+ }
  if err:=l.decide(ctx,GrantIssue,actor,effect,operator);err!=nil{return "",ErrReviewGrantLedger}
  if ctx.Err()!=nil{return "",ErrReviewGrantLedger}
  raw:=make([]byte,32)
@@ -187,7 +214,10 @@ func (l *EncryptedReviewGrantLedger) Revoke(ctx context.Context,hash [32]byte,op
  if l==nil||ctx==nil||ctx.Err()!=nil||!identRe.MatchString(operator){return ErrReviewGrantLedger}
  l.mu.Lock()
  defer l.mu.Unlock()
- if l.closed{return ErrReviewGrantLedger}
+ if l.closed||l.quarantined{return ErrReviewGrantLedger}
+ if l.anchor!=nil {
+  if err:=l.checkAnchorBounded(ctx);err!=nil{return err}
+ }
  grant,ok:=l.grants[hash]
  if !ok||grant.Revoked{return ErrReviewGrantLedger}
  if err:=l.decide(ctx,GrantRevoke,grant.ActorID,grant.EffectID,operator);err!=nil{return ErrReviewGrantLedger}
@@ -205,7 +235,10 @@ func (l *EncryptedReviewGrantLedger) Lookup(hash [32]byte)(ReviewGrant,error){
  if l==nil{return ReviewGrant{},ErrReviewGrantLedger}
  l.mu.Lock()
  defer l.mu.Unlock()
- if l.closed{return ReviewGrant{},ErrReviewGrantLedger}
+ if l.closed||l.quarantined{return ReviewGrant{},ErrReviewGrantLedger}
+ if l.anchor!=nil {
+  if err:=l.checkAnchorBounded(context.Background());err!=nil{return ReviewGrant{},err}
+ }
  grant,ok:=l.grants[hash]
  if !ok{return ReviewGrant{},ErrReviewGrantLedger}
  return grant,nil
