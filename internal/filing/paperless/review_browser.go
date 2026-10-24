@@ -1,7 +1,6 @@
 package paperless
 
 import (
- "context"
  "crypto/aes"
  "crypto/cipher"
  "crypto/rand"
@@ -207,7 +206,3 @@ func NewReviewBrowserHandler(lookup ReviewGrantLookup,load ReviewLoader,
  }),nil
 }
 
-// ReviewBrowserContextProbe is a deliberate compile-time reminder that
-// the handler and its injected loader use request context, not a background
-// task or a scheduler that could outlive the user's scope.
-var _ context.Context
