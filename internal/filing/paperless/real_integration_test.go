@@ -8,6 +8,9 @@ import (
  "crypto/sha256"
  "encoding/hex"
  "fmt"
+ "encoding/json"
+ "net/http"
+ "net/http/httptest"
  "os"
  "path/filepath"
  "strings"
@@ -101,6 +104,48 @@ func TestDisposableRealPaperless313(t *testing.T){
  if err!=nil||recovered.State!="archived"||recovered.DocumentID!=record.ID{
    t.Fatalf("durable end-to-end recovery %#v %v",recovered,err)
  }
+ // End-to-end, the REAL disposable Paperless metadata feeds our inert
+ // reviewer API and a preview, without registering runtime routes or PATCH.
+ packet,err:=BuildReviewEnvelope(recovered,record,classic,ReviewEnglish)
+ if err!=nil{t.Fatalf("real native readback rejected for review: %v",err)}
+ reviews:=0
+ handler,err:=NewReviewHandler(
+   func(_ *http.Request, effect string)(ReviewPrincipal,error){
+     if effect!=packet.EffectID{return ReviewPrincipal{},ErrReview}
+     return ReviewPrincipal{ActorID:"synthetic-fixture",CanRead:true},nil
+   },
+   func(_ context.Context,effect string)(ReviewEnvelope,error){
+     reviews++
+     if effect!=packet.EffectID{return ReviewEnvelope{},ErrReview}
+     return packet,nil
+   })
+ if err!=nil{t.Fatal(err)}
+ rr:=httptest.NewRecorder()
+ handler.ServeHTTP(rr,httptest.NewRequest("GET","/api/filing/reviews/"+packet.EffectID,nil))
+ if rr.Code!=200{t.Fatalf("real native review JSON not served: HTTP %d",rr.Code)}
+ var reviewed ReviewEnvelope
+ if err:=json.Unmarshal(rr.Body.Bytes(),&reviewed);err!=nil{t.Fatal(err)}
+ if reviews!=1||reviewed.PaperlessDocumentID!=record.ID||
+    !reviewed.RequiresHumanReview||reviewed.AutoApplyAllowed{
+    t.Fatalf("real review contract unsafe: %#v calls=%d",reviewed,reviews)
+ }
+ fingerprint,err:=ReviewFingerprint(reviewed)
+ if err!=nil{t.Fatal(err)}
+ reviewedTitle:="Synthetic paperless invoice – review only"
+ preview,err:=PlanCorrection(reviewed,CorrectionActor{
+    ActorID:"synthetic-fixture",MayPropose:true,
+ },TaxonomyAllowlist{},CorrectionRequest{
+    ExpectedReviewFingerprint:fingerprint,
+    Choice:CorrectionChoice{Title:&reviewedTitle},
+ })
+ if err!=nil||preview.MayWriteRemotely||!preview.RequiresHumanApproval{
+   t.Fatalf("real native metadata preview unsafe: %#v err %v",preview,err)
+ }
+ actualAfter,err:=c.ReadRecord(ctx,record.ID)
+ if err!=nil||actualAfter.Title!=record.Title{
+   t.Fatalf("preview mutated DMS despite being read-only: %#v %v",actualAfter,err)
+ }
+ t.Log("native_paperless_to_review_html_json_to_preview=true writes_to_dms=false")
  // The first real v3.1.3 qualification showed that a raw second
  // POST of identical bytes can create a SECOND archive ID. Prevent that
  // POST at our durable adapter boundary, including after journal restart.
