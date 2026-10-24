@@ -40,6 +40,11 @@ source_path="$(find "$canon/sha256" -type f -print -quit)"
 canonical_before="$(sha256sum "$source_path" | cut -d' ' -f1)"
 echo "Fixture file and canonical digest verified (no identity/secret output)"
 
+# Samba requires a private 0700 passdb root and distinct traversable state
+# directories; neither location is shared to SMB clients.
+sudo mkdir -p "$work/private" "$work/lock" "$work/state" "$work/cache"
+sudo chmod 0700 "$work/private"
+sudo chmod 0755 "$work/lock" "$work/state" "$work/cache"
 config="$work/smb.conf"
 cat >"$config" <<EOF
 [global]
@@ -50,10 +55,10 @@ cat >"$config" <<EOF
     interfaces = lo 127.0.0.1
     log file = $work/samba-%m.log
     pid directory = $work
-    lock directory = $work
-    state directory = $work
-    cache directory = $work
-    private dir = $work
+    lock directory = $work/lock
+    state directory = $work/state
+    cache directory = $work/cache
+    private dir = $work/private
     server min protocol = SMB2
 [foliorelay-fixture]
     path = $exports
@@ -67,7 +72,10 @@ testparm -s "$config" >/dev/null
 # Use the same isolated passdb/config as smbd; no account password in argv.
 secret="$(openssl rand -hex 20)"
 for user in folio_ci_rw1 folio_ci_rw2 folio_ci_denied; do
-  printf '%s\n%s\n' "$secret" "$secret" | sudo smbpasswd -c "$config" -a -s "$user" >/dev/null
+  if ! printf '%s\n%s\n' "$secret" "$secret" | sudo smbpasswd -c "$config" -a -s "$user" >"$work/passdb-result.log" 2>&1; then
+    echo "synthetic Samba passdb enrollment failed" >&2
+    exit 1
+  fi
   auth="$work/$user.auth"
   printf 'username = %s\npassword = %s\n' "$user" "$secret" > "$auth"
   chmod 0600 "$auth"
