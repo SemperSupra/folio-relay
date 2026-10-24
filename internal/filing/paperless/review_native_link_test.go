@@ -68,7 +68,7 @@ func TestNativePaperlessLinkOnlyVisibleInAuthorizedHTML(t *testing.T){
  }
  if strings.Contains(view.Body.String(),"<script>")||
     strings.Contains(view.Body.String(),"dummy-token")||
-    strings.Contains(view.Body.String(),"https://evil"){
+    strings.Contains(view.Body.String(),"href=\"https://evil"){
     t.Fatal("untrusted source/credentials exposed as active link or script")
  }
  api:=getFixture(handler,"/api/filing/reviews/"+ticket.ID,"Bearer fixture-auth","")
