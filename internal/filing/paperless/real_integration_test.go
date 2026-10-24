@@ -104,6 +104,21 @@ func TestDisposableRealPaperless313(t *testing.T){
  if err!=nil||recovered.State!="archived"||recovered.DocumentID!=record.ID{
    t.Fatalf("durable end-to-end recovery %#v %v",recovered,err)
  }
+ // First qualify the *concrete*, per-target, read-only loader against
+ // the actual pinned Paperless container and the restarted durable outbox.
+ sourceLoader,err:=NewArchivedReviewLoader(recovery,c,"paperless-fixture",
+   func(_ context.Context,effect string)(ReviewLanguage,error){
+     if effect!=ticket.ID{return ReviewUnknown,ErrReviewUnavailable}
+     return ReviewEnglish,nil
+   })
+ if err!=nil{t.Fatal(err)}
+ loadedPacket,err:=sourceLoader(ctx,ticket.ID)
+ if err!=nil||loadedPacket.PaperlessDocumentID!=record.ID||
+   loadedPacket.EffectID!=ticket.ID||loadedPacket.AutoApplyAllowed||
+   !loadedPacket.RequiresHumanReview {
+   t.Fatalf("concrete archived Paperless GET loader unsafe: %#v %v",loadedPacket,err)
+ }
+ t.Log("archived_paperless_native_readonly_loader=true auto_apply=false")
  // End-to-end, the REAL disposable Paperless metadata feeds our inert
  // reviewer API and a preview, without registering runtime routes or PATCH.
  packet,err:=BuildReviewEnvelope(recovered,record,classic,ReviewEnglish)
