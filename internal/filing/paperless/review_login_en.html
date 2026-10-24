@@ -1,0 +1,7 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Document review sign-in</title><script src="/filing/review-login.js" defer></script></head>
+<body><main><h1>Document review sign-in</h1><p>This grants read-only access to one filing record. No changes are made to Paperless-ngx.</p>
+<form data-review-form autocomplete="off" method="post"><p><label for="effect">Filing record ID</label><input id="effect" name="effect" type="text" minlength="64" maxlength="64" spellcheck="false" autocomplete="off" required></p>
+<p><label for="grant">One-record review credential</label><input id="grant" name="grant" type="password" autocomplete="off" spellcheck="false" required></p>
+<p><button type="submit">Open read-only review</button></p></form><p role="status" aria-live="polite" data-status></p>
+<p>This sign-in requires an independently issued credential. It does not accept your FolioRelay management token.</p></main></body></html>

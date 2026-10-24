@@ -115,6 +115,7 @@ func NewReviewBrowserHandler(lookup ReviewGrantLookup,load ReviewLoader,
   if r.TLS==nil||r.Host!=parsed.Host {
     http.Error(w,"browser review unavailable",http.StatusUnauthorized);return
   }
+  if serveReviewLoginAsset(w,r){return}
   if r.URL.Path=="/filing/review-sessions" {
    if r.Method!=http.MethodPost{
     w.Header().Set("Allow","POST")
@@ -124,6 +125,8 @@ func NewReviewBrowserHandler(lookup ReviewGrantLookup,load ReviewLoader,
    // Forged X-Forwarded-* headers are never consulted.
    origins:=r.Header.Values("Origin")
    if len(origins)!=1||origins[0]!=publicOrigin||
+     len(r.Header.Values("Authorization"))!=1||
+     len(r.Header.Values("X-FolioRelay-Review-Session"))!=1||
      r.Header.Get("X-FolioRelay-Review-Session")!="1"{
     http.Error(w,"review exchange denied",http.StatusForbidden);return
    }

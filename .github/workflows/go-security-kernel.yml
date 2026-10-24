@@ -74,3 +74,19 @@ jobs:
 
       - name: Fuzz admission parser
         run: go test ./internal/security -run=^$ -fuzz=FuzzAdmissionBounds -fuzztime=45s
+
+  # Public $0 synthetic browser-client unit runner; no secrets, browsers,
+  # network calls, personal records or browser-storage use.
+  paperless_browser_js:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'feat/paperless-review-login-ui-20261024'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 7
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Verify Node runtime
+        run: node --version
+      - name: Exercise local EN DE TH browser login behavior
+        run: node --test scripts/ci/paperless-browser-login.test.mjs
