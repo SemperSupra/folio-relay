@@ -23,6 +23,13 @@ func TestProviderProfilesOnlySecureKnownBindings(t *testing.T) {
 	m:=base
 	m.Provider="microsoft";m.Host="smtp.office365.com";m.Auth="xoauth2"
 	if err:=m.Validate();err!=nil {t.Fatal(err)}
+	o:=base
+	o.Provider="outlook_com";o.Host="smtp-mail.outlook.com";o.Auth="xoauth2"
+	if err:=o.Validate();err!=nil {t.Fatal(err)}
+	o.Host="smtp.office365.com"
+	if !errors.Is(o.Validate(),ErrInvalidProfile) {t.Fatal("consumer Outlook.com must not silently use the Microsoft 365 endpoint")}
+	m.Host="smtp-mail.outlook.com"
+	if !errors.Is(m.Validate(),ErrInvalidProfile) {t.Fatal("Microsoft 365 must not silently use the consumer endpoint")}
 	c:=base
 	c.Provider="custom";c.Host="mail.example.net";c.Port=2465;c.TLS="implicit_tls"
 	if err:=c.Validate();err!=nil {t.Fatal(err)}
