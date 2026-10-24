@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"os"
+	"runtime"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -139,4 +140,37 @@ func TestInspectRefusesUntrustedReceipt(t *testing.T) {
 	for _,bad:=range []string{"../../outside.pdf","/absolute.pdf","..\\backslash.pdf","CON.pdf"} {
 		if _,err:=w.Inspect(Receipt{RelativePath:bad,SHA256:a.SHA256,Bytes:a.Bytes});err==nil { t.Errorf("accepted forged receipt %q",bad) }
 	}
+}
+
+
+func TestExplicitGroupWritableModeAndPrivateDefault(t *testing.T) {
+	w,p,a,_,_,root:=fixture(t)
+	first,err:=w.Publish(p,a)
+	if err!=nil {t.Fatal(err)}
+	if runtime.GOOS!="windows" {
+		st,err:=os.Stat(filepath.Join(root,filepath.FromSlash(first.RelativePath)))
+		if err!=nil || st.Mode().Perm()!=0o600 {t.Fatalf("private default mode=%v err=%v",st,err)}
+	}
+	// A separate export root is required for any alternative mode.
+	base:=t.TempDir()
+	canon:=filepath.Join(base,"canonical")
+	shared:=filepath.Join(base,"shared")
+	if err:=os.MkdirAll(canon,0700);err!=nil {t.Fatal(err)}
+	if err:=os.MkdirAll(shared,0700);err!=nil {t.Fatal(err)}
+	canonicalFile:=filepath.Join(canon,"sha256",a.SHA256[:2],a.SHA256)
+	if err:=os.MkdirAll(filepath.Dir(canonicalFile),0700);err!=nil {t.Fatal(err)}
+	// Copy the source fixture bytes independently; never copy the export file
+	// back into the canonical tree as part of production flow.
+	originalData:=[]byte("%PDF-1.7\ncontrolled fixture\n")
+	if err:=os.WriteFile(canonicalFile,originalData,0600);err!=nil {t.Fatal(err)}
+	groupWorker,err:=NewWorkerWithMode(canon,shared,0o660)
+	if err!=nil {t.Fatal(err)}
+	defer groupWorker.Close()
+	rcpt,err:=groupWorker.Publish(p,a)
+	if err!=nil {t.Fatal(err)}
+	if runtime.GOOS!="windows" {
+		st,err:=os.Stat(filepath.Join(shared,filepath.FromSlash(rcpt.RelativePath)))
+		if err!=nil || st.Mode().Perm()!=0o660 {t.Fatalf("group mode=%v err=%v",st,err)}
+	}
+	if _,err:=NewWorkerWithMode(canon,shared,0o666);err==nil {t.Fatal("world-writable mode accepted")}
 }
