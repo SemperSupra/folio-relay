@@ -479,3 +479,36 @@ jobs:
         run: |
           docker rm -f folio_ci_paperless folio_ci_valkey >/dev/null 2>&1 || true
           docker network rm folio_paperless_ci >/dev/null 2>&1 || true
+
+  # Source-only OCR DoE. Direct Tesseract results must not be conflated with
+  # complete Paperless OCRmyPDF ingest, native AI, or authorized filing.
+  thai_ocr_sweep:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'test/paperless-thai-ocr-parameter-sweep-20261024'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 23
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install public Tesseract language packs and synthetic renderer
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+            tesseract-ocr tesseract-ocr-eng tesseract-ocr-deu tesseract-ocr-tha \
+            fonts-noto-core python3-pil fontconfig
+          tesseract --version
+          languages="$(tesseract --list-langs 2>/dev/null)"
+          for lang in eng deu tha; do
+            grep -qx "$lang" <<<"$languages" || { echo "missing $lang" >&2; exit 1; }
+          done
+          /usr/bin/python3 -m py_compile scripts/ci/generate-paperless-en-de-th.py scripts/ci/qualify-thai-tesseract-sweep.py
+      - name: Generate synthetic Thai scanned documents and compare language-order/PSM
+        shell: bash
+        timeout-minutes: 18
+        run: |
+          set -euo pipefail
+          output="$RUNNER_TEMP/foliorelay-thai-ocr-doe"
+          /usr/bin/python3 scripts/ci/generate-paperless-en-de-th.py "$output"
+          /usr/bin/python3 scripts/ci/qualify-thai-tesseract-sweep.py "$output"
