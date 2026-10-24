@@ -1,0 +1,23 @@
+# Paperless-ngx: durable encrypted review grants — source-only gate
+
+**Authority:** FolioRelay product DLE #58 and Foundry #291. Draft PR #77 is stacked on #76. This is not a deployed service, identity product, Paperless configuration, HIL action or grant-delivery mechanism. Physical H0 stays HOLD / STOP_AND_RECONCILE.
+
+## Why this component exists
+
+The approved baseline supports three audiences: accessible human EN/DE/TH review pages, automation/agent JSON review, and a native Paperless UI handoff for human correction. Prior #74–#76 grant and browser-session logic was memory-based and accepted only an externally injected lookup. Grant issuance and durable revocation were not implemented. Reusing the FolioRelay management token as blanket read authority was expressly ruled out.
+
+`EncryptedReviewGrantLedger` composes the existing FolioRelay single-writer locked and fsynced `state.Journal` with AES-256-GCM encryption at rest. The caller MUST supply a separate 32-byte at-rest key and independently authenticated `ReviewGrantDecision`. The issuer generates a fresh 32-byte random bearer and returns it to the caller once, without persisting its raw value. The ledger persists encrypted authorization events containing only SHA-256 credential digest, actor, filing-effect SHA, not-before/expiry, revocation state and authorized operator metadata. Issue/revoke are serialized, and revocation is committed to disk before the request returns success. A different process can reopen the ledger with the right key and independently check revoked grants using `Lookup`, which is compatible with existing scoped API/browser authorizers.
+
+No caller-supplied OCR, LLM response, client identity header, management cookie, website link or document title can mint access via this component; a trusted external policy must make a positive admission decision for EACH issue and revoke. Every credential is bound to exactly one effect, actor and read-only scope, and its lifetime is at most one hour. A browser session remains scoped to one effect and at most 15 minutes and checks the live ledger on every document GET.
+
+## Security tests and limits
+
+Tests simulate private 0700 state directory creation, 0600 journal file, issuance and immediate revocation, full journal close/reopen, cross-document scope, wrong encryption key, altered bytes, duplicate revocation, invalid operator, overlong/short TTL, and concurrent issuance. The real hosted Paperless 3.1.3 synthetic PDF fixture adds encrypted grant issuance, journal restart, HTTPS browser review, post-revocation denial, and reaffirms no Paperless PATCH.
+
+**IMPORTANT:** This is **not** a tamper-proof external audit. FolioRelay's journal can truncate an incomplete final frame during crash recovery; a fully removed final revocation frame is likewise not detectable solely by its local sequence numbers. A privileged actor with filesystem access can remove a complete final record and resurrect an otherwise-revoked grant. Before deployment, the issuer must be backed by an independently anchored monotonic checkpoint / external append-only authority and a rehearsed restore/reconcile process. On ambiguous restores, admission must be HOLD, not automatic reissue. Other preproduction gates: secure off-repo encryption key source and rotation; multi-process/host ownership discipline; actor directory, per-document authorization backed by archived receipt; high-entropy secure token delivery; separate cookie key; revocation audit and rate limits; Windows ACL and TrueNAS App volume isolation; actual browser, assistive technology and native Thai filing review.
+
+A source-only successful test is NOT permission to connect this ledger to the live FolioRelay daemon, mutate records, enable automatic filing, or start physical HIL. Existing Paperless v3.1.3 metadata PATCH ignores bogus `If-Match` and last-writer-wins; review/preview should remain read-only and native Paperless UI owns human corrections. English, German, Thai and mixed-script review are mandatory, and Thai semantic auto-classification remains unqualified.
+
+## Next baton
+
+Adjudicate PR #77 exact-head six hosted checks; resolve first real failure without weakening file protection. Obtain independent security review and model a tamper-resistant revocation checkpoint and restricted actor-to-effect grant policy as separate bounded changes. Retest on disposable free-tier runners, then resume virtual TrueNAS App/HTTPS/ACL matrix only within approved Foundry authority. Physical H0 remains HOLD.
