@@ -15,7 +15,7 @@ import (
 func capabilityFixture()(string,[32]byte) {
  // Deterministic and synthetic! This is a unit-test credential only, not
  // cryptographically random and NEVER permitted for deployed provisioning.
- raw:=[]byte("synthetic-paperless-review-32-byte")
+ raw:=[]byte("0123456789abcdef0123456789abcdef")
  if len(raw)!=32 {panic("test-only credential fixture is not 32 bytes")}
  return base64.RawURLEncoding.EncodeToString(raw),sha256.Sum256(raw)
 }
