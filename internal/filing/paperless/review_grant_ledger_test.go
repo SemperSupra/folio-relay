@@ -17,7 +17,9 @@ import (
 
 func grantLedgerFixture(t *testing.T)(*EncryptedReviewGrantLedger,string,[]byte,*time.Time,*int) {
  t.Helper()
- path:=filepath.Join(t.TempDir(),"grants.frj")
+ dir:=filepath.Join(t.TempDir(),"private-grants")
+ if err:=os.Mkdir(dir,0o700);err!=nil{t.Fatal(err)}
+ path:=filepath.Join(dir,"grants.frj")
  key:=[]byte("0123456789abcdef0123456789abcdef") // TEST ONLY
  current:=time.Date(2026,10,24,14,0,0,0,time.UTC)
  calls:=0
