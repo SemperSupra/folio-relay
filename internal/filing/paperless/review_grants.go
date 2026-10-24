@@ -48,7 +48,10 @@ func NewScopedReviewAuthorizer(lookup ReviewGrantLookup,now func()time.Time)(Rev
  if lookup==nil{return nil,ErrReviewGrant}
  if now==nil {now=time.Now}
  return func(r *http.Request,effectID string)(ReviewPrincipal,error){
-  if r==nil||!shaRe.MatchString(effectID){return ReviewPrincipal{},ErrReviewGrant}
+  // Bearer capabilities may only traverse a directly authenticated TLS
+  // request. Never trust X-Forwarded-Proto to promote plaintext into TLS;
+  // approved TLS-terminating proxies need a separately qualified adapter.
+  if r==nil||r.TLS==nil||!shaRe.MatchString(effectID){return ReviewPrincipal{},ErrReviewGrant}
   raw:=r.Header.Get("Authorization")
   if len(raw)!=len("Bearer ")+43||!strings.HasPrefix(raw,"Bearer ") {
    return ReviewPrincipal{},ErrReviewGrant
