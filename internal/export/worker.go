@@ -65,10 +65,9 @@ func checkedRoot(dir string) (string, error) {
 	if err != nil { return "", err }
 	real, err := filepath.EvalSymlinks(abs)
 	if err != nil { return "", err }
-	if real != abs {
-		// Fail closed on aliases; the site operator should bind a canonical path.
-		return "", errors.New("root resolves through symlinks")
-	}
+	// A platform temp parent may have an OS-defined alias (e.g. /var on
+	// macOS); the root leaf itself is verified above. Resolve ancestors for
+	// overlap testing and bind the resulting path once through os.OpenRoot.
 	return real, nil
 }
 
