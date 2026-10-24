@@ -1,0 +1,60 @@
+name: Formal State Models
+
+on:
+  pull_request:
+    paths:
+      - 'formal/**'
+      - '.github/workflows/formal-state-models.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'formal/**'
+      - '.github/workflows/formal-state-models.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tlc:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Verify Java
+        shell: bash
+        run: java -version
+
+      - name: Fetch pinned TLC model checker
+        shell: bash
+        env:
+          TLA_URL: https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar
+          TLA_SHA256: 936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88
+        run: |
+          set -euo pipefail
+          curl -fsSL "$TLA_URL" -o "$RUNNER_TEMP/tla2tools.jar"
+          echo "$TLA_SHA256  $RUNNER_TEMP/tla2tools.jar" | sha256sum -c -
+
+      - name: Check command idempotency model
+        shell: bash
+        run: |
+          set -euo pipefail
+          java -jar "$RUNNER_TEMP/tla2tools.jar"             -workers auto             -config formal/CommandIdempotency.cfg             formal/CommandIdempotency.tla
+
+      - name: Check ambiguous delivery model
+        shell: bash
+        run: |
+          set -euo pipefail
+          java -jar "$RUNNER_TEMP/tla2tools.jar"             -workers auto             -config formal/DeliveryAmbiguity.cfg             formal/DeliveryAmbiguity.tla
+
+      - name: Check resource backpressure model
+        shell: bash
+        run: |
+          set -euo pipefail
+          java -jar "$RUNNER_TEMP/tla2tools.jar"             -workers auto             -config formal/ResourceBackpressure.cfg             formal/ResourceBackpressure.tla

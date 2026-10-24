@@ -1,0 +1,74 @@
+schema_version: 1
+product: FolioRelay
+milestone: virtual-printer-mvp
+status: implementation
+
+user_outcome:
+  install_target: truenas
+  default_route: inbox
+  required_native_clients:
+    - windows-inbox-ipp
+    - apple-airprint-real-device
+
+admission_gates:
+  durable_authority:
+    state_journal_persistent: required
+    accepted_artifact_persistent: required
+    replay_safe: required
+    idempotency_conflicts_zero_on_happy_path: required
+
+  product_surface:
+    management_gui: required
+    versioned_json_api: required
+    machine_capability_document: required
+    authenticated_inbox: required
+    authenticated_artifact_download: required
+    structured_self_test: required
+
+  printer_identity:
+    canonical_public_identity: required
+    external_printer_uri_reachable: required
+    dnssd_uuid_equals_ipp_printer_uuid: required
+    dnssd_resource_path_equals_public_uri_path: required
+    tls_identity_matches_advertised_host_when_ipps: required
+
+  windows:
+    native_path: microsoft-ipp-class-driver
+    vendor_driver_required: false
+    installed_truenas_e2e: required
+    durable_acceptance: required
+    inbox_visibility: required
+
+  airprint:
+    real_iphone_or_ipad: required
+    same_lan_discovery: required
+    universal_subtype: required
+    urf_advertised_truthfully: required
+    installed_truenas_e2e: required
+    durable_acceptance: required
+    inbox_visibility: required
+
+  deployment:
+    one_production_print_substrate: required
+    truenas_app_installable: required
+    shell_steps_for_normal_install: prohibited
+    persistent_dataset: required
+    immutable_runtime_image_digests: required
+    restart_preserves_identity_state_and_jobs: required
+
+supported_mvp_topology:
+  network: same-lan-broadcast-domain
+  routed_mdns: post-mvp
+  windows_protected_print_mode: post-mvp
+  ipp_everywhere_2_0: post-mvp
+  libcups_3_client_generation: post-mvp
+  chromeos: post-mvp
+
+production_substrate:
+  selected: cups-minimal
+  selected_at: 2026-09-30
+  human_selection_complete: true
+  pappl_status: archived-reference
+  pappl_future_role:
+    - interoperability-oracle
+    - future-printer-application-product-reference

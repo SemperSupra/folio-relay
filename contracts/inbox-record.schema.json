@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sempersupra.github.io/folio-relay/contracts/inbox-record.schema.json",
+  "title": "FolioRelay Inbox Record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "job_id",
+    "aggregate_id",
+    "accepted_at",
+    "state",
+    "artifact_sha256",
+    "artifact_bytes",
+    "media_type",
+    "copies",
+    "substrate",
+    "substrate_job_id"
+  ],
+  "properties": {
+    "job_id": {"type": "string", "minLength": 1, "maxLength": 512},
+    "aggregate_id": {"type": "string", "minLength": 1, "maxLength": 512},
+    "accepted_at": {"type": "string", "format": "date-time"},
+    "state": {"enum": ["accepted", "replayed", "rejected", "conflict"]},
+    "artifact_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "artifact_bytes": {"type": "integer", "minimum": 0},
+    "media_type": {"type": "string", "minLength": 1, "maxLength": 128},
+    "copies": {"type": "integer", "minimum": 1, "maximum": 1000},
+    "substrate": {"type": "string", "minLength": 1, "maxLength": 64},
+    "substrate_job_id": {"type": "string", "minLength": 1, "maxLength": 128}
+  }
+}

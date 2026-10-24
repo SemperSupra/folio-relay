@@ -1,0 +1,14 @@
+{
+  "name": "foliorelay-webui-qualification",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "webui:test": "playwright test",
+    "webui:lighthouse": "lhci autorun"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.13.0",
+    "@lhci/cli": "0.15.1",
+    "@playwright/test": "1.62.1"
+  }
+}

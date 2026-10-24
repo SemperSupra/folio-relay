@@ -1,0 +1,1654 @@
+name: IPP Ingress Phase 1
+
+on:
+  pull_request:
+    paths:
+      - 'cmd/foliorelay-ipp-ingest/**'
+      - 'cmd/foliorelay-state-fixture/**'
+      - 'internal/state/**'
+      - 'experiments/print-substrate/**'
+      - '.github/workflows/ipp-ingress-phase1.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'cmd/foliorelay-ipp-ingest/**'
+      - 'cmd/foliorelay-state-fixture/**'
+      - 'internal/state/**'
+      - 'experiments/print-substrate/**'
+      - '.github/workflows/ipp-ingress-phase1.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ippeveprinter:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout FolioRelay
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Setup Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: '1.27.1'
+          cache: false
+
+      - name: Build FolioRelay ingress components
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./cmd/foliorelay-ipp-ingest ./internal/state
+          mkdir -p "$RUNNER_TEMP/bin"
+          CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/bin/foliorelay-state-fixture" ./cmd/foliorelay-state-fixture
+          CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/bin/foliorelay-ipp-ingest" ./cmd/foliorelay-ipp-ingest
+          file "$RUNNER_TEMP/bin/"*
+
+      - name: Build pinned ippeveprinter
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            autoconf build-essential pkg-config git ca-certificates curl \
+            libssl-dev zlib1g-dev libcups2-dev cups-client cups-ipp-utils
+          git clone --depth 1 --branch v2.4.19 https://github.com/OpenPrinting/cups.git "$RUNNER_TEMP/cups"
+          cd "$RUNNER_TEMP/cups"
+          ./configure \
+            --prefix=/usr \
+            --with-tls=openssl \
+            --with-dnssd=no \
+            --disable-pam \
+            --disable-gssapi \
+            --disable-libusb \
+            --disable-webif \
+            --disable-browsing \
+            --disable-default-shared \
+            --disable-raw-printing \
+            --with-languages=none
+          make -C cups -j"$(nproc)"
+          make -C tools -j"$(nproc)" ippeveprinter-static
+
+      - name: Start state authority fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/evidence" "$RUNNER_TEMP/ingress" "$RUNNER_TEMP/state"
+          "$RUNNER_TEMP/bin/foliorelay-state-fixture" -listen 127.0.0.1:18080 \
+            -journal "$RUNNER_TEMP/state/journal.frj" \
+            >"$RUNNER_TEMP/evidence/state-fixture.log" 2>&1 &
+          echo $! >"$RUNNER_TEMP/evidence/state.pid"
+          for i in $(seq 1 30); do
+            if curl -fsS -o /dev/null http://127.0.0.1:18080/health; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "state fixture did not become ready" >&2
+          exit 1
+
+      - name: Start IPP ingress
+        shell: bash
+        env:
+          FOLIORELAY_STATE_URL: http://127.0.0.1:18080
+          FOLIORELAY_INGRESS_STORE: ${{ runner.temp }}/ingress
+          FOLIORELAY_MAX_INGRESS_BYTES: "104857600"
+          FOLIORELAY_SUBSTRATE_INSTANCE: gha-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/ippeve-spool"
+          "$RUNNER_TEMP/cups/tools/ippeveprinter-static" \
+            -r off \
+            -p 8632 \
+            -d "$RUNNER_TEMP/ippeve-spool" \
+            -k \
+            -f application/pdf,image/pwg-raster,image/jpeg \
+            -c "$RUNNER_TEMP/bin/foliorelay-ipp-ingest" \
+            "FolioRelay Phase1" \
+            >"$RUNNER_TEMP/evidence/ippeveprinter.log" 2>&1 &
+          echo $! >"$RUNNER_TEMP/evidence/ippeve.pid"
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8632/ >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "ippeveprinter did not become ready" >&2
+          cat "$RUNNER_TEMP/evidence/ippeveprinter.log" >&2 || true
+          exit 1
+
+      - name: Submit real PDF job and verify immutable artifact handoff
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat >"$RUNNER_TEMP/sample.pdf" <<'PDF'
+          %PDF-1.1
+          1 0 obj
+          << /Type /Catalog /Pages 2 0 R >>
+          endobj
+          2 0 obj
+          << /Type /Pages /Kids [3 0 R] /Count 1 >>
+          endobj
+          3 0 obj
+          << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>
+          endobj
+          trailer
+          << /Root 1 0 R >>
+          %%EOF
+          PDF
+
+          ipptool -tv -f "$RUNNER_TEMP/sample.pdf" \
+            ipp://127.0.0.1:8632/ipp/print \
+            "$RUNNER_TEMP/cups/examples/print-job.test" \
+            | tee "$RUNNER_TEMP/evidence/print-job.txt"
+
+          for i in $(seq 1 30); do
+            accepted="$(curl -fsS http://127.0.0.1:18080/v1/stats | python3 -c 'import json,sys; print(json.load(sys.stdin)["accepted"])')"
+            if [ "$accepted" -ge 1 ]; then
+              break
+            fi
+            sleep 1
+          done
+
+          expected="$(sha256sum "$RUNNER_TEMP/sample.pdf" | awk '{print $1}')"
+          object="$RUNNER_TEMP/ingress/sha256/${expected:0:2}/$expected"
+          test -f "$object"
+          cmp "$RUNNER_TEMP/sample.pdf" "$object"
+          printf '{"sha256":"%s","object":"%s"}\n' "$expected" "$object" \
+            >"$RUNNER_TEMP/evidence/artifact.json"
+
+      - name: Validate pinned IPP Everywhere oracle
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/cups/examples"
+          timeout 180 ipptool -V 2.0 -tv             -f "$RUNNER_TEMP/sample.pdf"             ipp://127.0.0.1:8632/ipp/print             ./ipp-everywhere.test             | tee "$RUNNER_TEMP/evidence/ippeve-ipp-everywhere.txt"
+
+      - name: Prove adapter replay and conflict behavior
+        shell: bash
+        env:
+          CONTENT_TYPE: application/pdf
+          IPP_JOB_ID: "9001"
+          FOLIORELAY_STATE_URL: http://127.0.0.1:18080
+          FOLIORELAY_INGRESS_STORE: ${{ runner.temp }}/ingress
+          FOLIORELAY_SUBSTRATE_INSTANCE: gha-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          curl -fsS http://127.0.0.1:18080/v1/stats \
+            | tee "$RUNNER_TEMP/evidence/replay-baseline-stats.json"
+
+          "$RUNNER_TEMP/bin/foliorelay-ipp-ingest" "$RUNNER_TEMP/sample.pdf" \
+            2>>"$RUNNER_TEMP/evidence/adapter.log"
+          "$RUNNER_TEMP/bin/foliorelay-ipp-ingest" "$RUNNER_TEMP/sample.pdf" \
+            2>>"$RUNNER_TEMP/evidence/adapter.log"
+
+          cp "$RUNNER_TEMP/sample.pdf" "$RUNNER_TEMP/conflict.pdf"
+          printf '\n%% conflicting bytes\n' >>"$RUNNER_TEMP/conflict.pdf"
+          if "$RUNNER_TEMP/bin/foliorelay-ipp-ingest" "$RUNNER_TEMP/conflict.pdf" \
+              2>>"$RUNNER_TEMP/evidence/adapter.log"; then
+            echo "conflicting idempotency replay unexpectedly succeeded" >&2
+            exit 1
+          fi
+
+          curl -fsS http://127.0.0.1:18080/v1/stats \
+            | tee "$RUNNER_TEMP/evidence/stats.json"
+          python3 - "$RUNNER_TEMP/evidence/replay-baseline-stats.json" "$RUNNER_TEMP/evidence/stats.json" <<'PY'
+          import json, pathlib, sys
+          baseline = json.loads(pathlib.Path(sys.argv[1]).read_text())
+          stats = json.loads(pathlib.Path(sys.argv[2]).read_text())
+          assert stats["accepted"] == baseline["accepted"] + 1, (baseline, stats)
+          assert stats["replayed"] == baseline["replayed"] + 1, (baseline, stats)
+          assert stats["conflicts"] == baseline["conflicts"] + 1, (baseline, stats)
+          PY
+
+      - name: Prove state-authority restart preserves idempotency
+        shell: bash
+        env:
+          CONTENT_TYPE: application/pdf
+          IPP_JOB_ID: "9001"
+          FOLIORELAY_STATE_URL: http://127.0.0.1:18080
+          FOLIORELAY_INGRESS_STORE: ${{ runner.temp }}/ingress
+          FOLIORELAY_SUBSTRATE_INSTANCE: gha-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          kill "$(cat "$RUNNER_TEMP/evidence/state.pid")"
+          wait "$(cat "$RUNNER_TEMP/evidence/state.pid")" || true
+
+          "$RUNNER_TEMP/bin/foliorelay-state-fixture" -listen 127.0.0.1:18080 \
+            -journal "$RUNNER_TEMP/state/journal.frj" \
+            >>"$RUNNER_TEMP/evidence/state-fixture.log" 2>&1 &
+          echo $! >"$RUNNER_TEMP/evidence/state.pid"
+
+          for i in $(seq 1 30); do
+            if curl -fsS -o /dev/null http://127.0.0.1:18080/health; then
+              break
+            fi
+            sleep 1
+          done
+          curl -fsS -o /dev/null http://127.0.0.1:18080/health
+
+          "$RUNNER_TEMP/bin/foliorelay-ipp-ingest" "$RUNNER_TEMP/sample.pdf" \
+            2>>"$RUNNER_TEMP/evidence/adapter.log"
+
+          curl -fsS http://127.0.0.1:18080/v1/stats \
+            | tee "$RUNNER_TEMP/evidence/post-restart-stats.json"
+          python3 - "$RUNNER_TEMP/evidence/post-restart-stats.json" <<'PY'
+          import json, pathlib, sys
+          stats = json.loads(pathlib.Path(sys.argv[1]).read_text())
+          assert stats["accepted"] == 0, stats
+          assert stats["replayed"] == 1, stats
+          assert stats["conflicts"] == 0, stats
+          PY
+
+      - name: Verify no parser responsibilities leaked into adapter
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Adapter is deliberately content-opaque: the Go binary has no CUPS,
+          # PDF, PostScript, image, archive, or renderer dependency.
+          ldd "$RUNNER_TEMP/bin/foliorelay-ipp-ingest" >"$RUNNER_TEMP/evidence/adapter-ldd.txt" 2>&1 || true
+          file "$RUNNER_TEMP/bin/foliorelay-ipp-ingest" | tee "$RUNNER_TEMP/evidence/adapter-file.txt"
+          ! grep -Eiq 'libcups|ghostscript|poppler|mupdf|libjpeg|libpng' "$RUNNER_TEMP/evidence/adapter-ldd.txt"
+
+      - name: Stop fixtures
+        if: always()
+        shell: bash
+        run: |
+          for name in ippeve state; do
+            if [ -f "$RUNNER_TEMP/evidence/$name.pid" ]; then
+              kill "$(cat "$RUNNER_TEMP/evidence/$name.pid")" 2>/dev/null || true
+            fi
+          done
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: ipp-ingress-phase1-ippeveprinter
+          path: ${{ runner.temp }}/evidence
+          if-no-files-found: error
+          retention-days: 14
+
+  pappl:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout FolioRelay
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Setup Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: '1.27.1'
+          cache: false
+
+      - name: Build FolioRelay state and ingress binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./cmd/foliorelay-ipp-ingest ./internal/state
+          mkdir -p "$RUNNER_TEMP/bin"
+          CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' \
+            -o "$RUNNER_TEMP/bin/foliorelay-state-fixture" ./cmd/foliorelay-state-fixture
+          CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' \
+            -o "$RUNNER_TEMP/bin/foliorelay-ipp-ingest" ./cmd/foliorelay-ipp-ingest
+
+      - name: Build pinned PAPPL and minimal FolioRelay bridge
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            autoconf build-essential pkg-config git ca-certificates curl \
+            libssl-dev zlib1g-dev libcups2-dev cups-client cups-ipp-utils \
+            libpng-dev libjpeg-dev
+
+          git init "$RUNNER_TEMP/pappl"
+          cd "$RUNNER_TEMP/pappl"
+          git remote add origin https://github.com/michaelrsweet/pappl.git
+          git fetch --depth 1 origin 6db8e137557ad84662e78d24fdb2a591c621f4ac
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "6db8e137557ad84662e78d24fdb2a591c621f4ac"
+          ./configure \
+            --with-dnssd=no \
+            --with-tls=openssl \
+            --disable-libpam \
+            --disable-libusb \
+            --disable-shared
+          make -j"$(nproc)"
+
+          cd "$GITHUB_WORKSPACE"
+          cc -D_GNU_SOURCE \
+            -I"$RUNNER_TEMP/pappl" -I"$RUNNER_TEMP/pappl/pappl" \
+            $(cups-config --cflags) \
+            -o "$RUNNER_TEMP/bin/foliorelay-pappl-ingress" \
+            experiments/print-substrate/pappl-ingress.c \
+            "$RUNNER_TEMP/pappl/pappl/libpappl.a" \
+            $(cups-config --image --libs) \
+            $(pkg-config --libs openssl libjpeg libpng zlib) \
+            -lpthread -lm
+
+          file "$RUNNER_TEMP/bin/foliorelay-pappl-ingress"
+          ldd "$RUNNER_TEMP/bin/foliorelay-pappl-ingress" \
+            | tee "$RUNNER_TEMP/pappl-bridge-ldd.txt"
+
+      - name: Start durable FolioRelay state authority
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/evidence" "$RUNNER_TEMP/ingress" "$RUNNER_TEMP/state"
+          "$RUNNER_TEMP/bin/foliorelay-state-fixture" \
+            -listen 127.0.0.1:18080 \
+            -journal "$RUNNER_TEMP/state/journal.frj" \
+            >"$RUNNER_TEMP/evidence/state.log" 2>&1 &
+          echo $! >"$RUNNER_TEMP/evidence/state.pid"
+          for i in $(seq 1 30); do
+            curl -fsS -o /dev/null http://127.0.0.1:18080/health && exit 0
+            sleep 1
+          done
+          exit 1
+
+      - name: Start minimal PAPPL IPP ingress
+        shell: bash
+        env:
+          FOLIORELAY_INGEST_BIN: ${{ runner.temp }}/bin/foliorelay-ipp-ingest
+          FOLIORELAY_STATE_URL: http://127.0.0.1:18080
+          FOLIORELAY_INGRESS_STORE: ${{ runner.temp }}/ingress
+          FOLIORELAY_MAX_INGRESS_BYTES: "104857600"
+          FOLIORELAY_SUBSTRATE_INSTANCE: gha-${{ github.run_id }}-${{ github.run_attempt }}
+          FOLIORELAY_PAPPL_SPOOL: ${{ runner.temp }}/pappl-spool
+          FOLIORELAY_PAPPL_PORT: "8633"
+        run: |
+          set -euo pipefail
+          mkdir -p "$FOLIORELAY_PAPPL_SPOOL"
+          setpriv --no-new-privs -- "$RUNNER_TEMP/bin/foliorelay-pappl-ingress" \
+            >"$RUNNER_TEMP/evidence/pappl.log" 2>&1 &
+          echo $! >"$RUNNER_TEMP/evidence/pappl.pid"
+
+          testfile="$(find /usr/share/cups -type f -name get-printer-attributes.test -print -quit)"
+          test -n "$testfile"
+          for i in $(seq 1 30); do
+            if ipptool -q ipp://127.0.0.1:8633/ipp/print "$testfile"; then
+              printf '%s\n' "$testfile" >"$RUNNER_TEMP/evidence/get-printer-test-path.txt"
+              exit 0
+            fi
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/evidence/pappl.log" >&2 || true
+          exit 1
+
+      - name: Prove PAPPL least-privilege runtime envelope
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v setpriv >/dev/null
+          pid="$(cat "$RUNNER_TEMP/evidence/pappl.pid")"
+          status="/proc/$pid/status"
+          test -r "$status"
+          euid="$(awk '/^Uid:/ {print $3}' "$status")"
+          capeff="$(awk '/^CapEff:/ {print $2}' "$status")"
+          nnp="$(awk '/^NoNewPrivs:/ {print $2}' "$status")"
+          test "$euid" -ne 0
+          python3 - "$capeff" <<'PY'
+          import sys
+          assert int(sys.argv[1], 16) == 0, sys.argv[1]
+          PY
+          test "$nnp" -eq 1
+          {
+            echo "effective_uid=$euid"
+            echo "cap_eff=$capeff"
+            echo "no_new_privs=$nnp"
+          } | tee "$RUNNER_TEMP/evidence/pappl-privilege-envelope.txt"
+
+      - name: Prove PAPPL TLS-only IPP surface
+        shell: bash
+        env:
+          FOLIORELAY_INGEST_BIN: ${{ runner.temp }}/bin/foliorelay-ipp-ingest
+          FOLIORELAY_STATE_URL: http://127.0.0.1:18080
+          FOLIORELAY_INGRESS_STORE: ${{ runner.temp }}/ingress
+          FOLIORELAY_MAX_INGRESS_BYTES: "104857600"
+          FOLIORELAY_SUBSTRATE_INSTANCE: gha-${{ github.run_id }}-${{ github.run_attempt }}-tls
+          FOLIORELAY_PAPPL_SPOOL: ${{ runner.temp }}/pappl-tls-spool
+          FOLIORELAY_PAPPL_PORT: "8636"
+          FOLIORELAY_PAPPL_TLS_ONLY: "1"
+          FOLIORELAY_PAPPL_HOSTNAME: localhost
+        run: |
+          set -euo pipefail
+          mkdir -p "$FOLIORELAY_PAPPL_SPOOL"
+          setpriv --no-new-privs -- "$RUNNER_TEMP/bin/foliorelay-pappl-ingress" \
+            >"$RUNNER_TEMP/evidence/pappl-tls.log" 2>&1 &
+          tls_pid=$!
+          echo "$tls_pid" >"$RUNNER_TEMP/evidence/pappl-tls.pid"
+          trap 'kill "$tls_pid" 2>/dev/null || true; wait "$tls_pid" 2>/dev/null || true' EXIT
+
+          ready=0
+          for i in $(seq 1 30); do
+            set +e
+            handshake="$(timeout 4 openssl s_client -connect 127.0.0.1:8636 -servername localhost -brief </dev/null 2>&1)"
+            set -e
+            if grep -Eq 'Protocol (version:|:) TLSv1\.(2|3)' <<<"$handshake"; then
+              printf '%s\n' "$handshake" >"$RUNNER_TEMP/evidence/pappl-tls-handshake.txt"
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          test "$ready" -eq 1
+
+          getattr="$(find /usr/share/cups -type f -name get-printer-attributes.test -print -quit)"
+          test -n "$getattr"
+          timeout 20 ipptool -S -q ipps://localhost:8636/ipp/print "$getattr"
+
+          set +e
+          timeout 20 ipptool -q ipp://127.0.0.1:8636/ipp/print "$getattr" \
+            >"$RUNNER_TEMP/evidence/pappl-plaintext-on-tls-only.out" \
+            2>"$RUNNER_TEMP/evidence/pappl-plaintext-on-tls-only.err"
+          plaintext_rc=$?
+          set -e
+          echo "$plaintext_rc" >"$RUNNER_TEMP/evidence/pappl-plaintext-on-tls-only.rc"
+          if [ "$plaintext_rc" -eq 0 ]; then
+            echo "loopback_plaintext_accepted=true"               >"$RUNNER_TEMP/evidence/pappl-tls-loopback-policy.txt"
+          else
+            echo "loopback_plaintext_accepted=false"               >"$RUNNER_TEMP/evidence/pappl-tls-loopback-policy.txt"
+          fi
+
+          kill "$tls_pid"
+          wait "$tls_pid" 2>/dev/null || true
+          trap - EXIT
+
+      - name: Submit PDF and prove original-byte handoff
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat >"$RUNNER_TEMP/sample.pdf" <<'PDF'
+          %PDF-1.1
+          1 0 obj
+          << /Type /Catalog /Pages 2 0 R >>
+          endobj
+          2 0 obj
+          << /Type /Pages /Kids [3 0 R] /Count 1 >>
+          endobj
+          3 0 obj
+          << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>
+          endobj
+          trailer
+          << /Root 1 0 R >>
+          %%EOF
+          PDF
+
+          printtest="$(find /usr/share/cups -type f -name print-job.test -print -quit)"
+          test -n "$printtest"
+          ipptool -tv -f "$RUNNER_TEMP/sample.pdf" \
+            ipp://127.0.0.1:8633/ipp/print "$printtest" \
+            | tee "$RUNNER_TEMP/evidence/print-job.txt"
+
+          for i in $(seq 1 30); do
+            accepted="$(curl -fsS http://127.0.0.1:18080/v1/stats \
+              | python3 -c 'import json,sys; print(json.load(sys.stdin)["accepted"])')"
+            [ "$accepted" -ge 1 ] && break
+            sleep 1
+          done
+          test "$accepted" -ge 1
+
+          expected="$(sha256sum "$RUNNER_TEMP/sample.pdf" | awk '{print $1}')"
+          object="$RUNNER_TEMP/ingress/sha256/${expected:0:2}/$expected"
+          test -f "$object"
+          cmp "$RUNNER_TEMP/sample.pdf" "$object"
+          printf '{"substrate":"pappl","sha256":"%s","object":"%s"}\n' "$expected" "$object" \
+            >"$RUNNER_TEMP/evidence/artifact.json"
+
+      - name: Prove PAPPL queues concurrent jobs into FolioRelay
+        shell: bash
+        run: |
+          set -euo pipefail
+          printtest="$(find /usr/share/cups -type f -name print-job.test -print -quit)"
+          mkdir -p "$RUNNER_TEMP/concurrent"
+          export SAMPLE="$RUNNER_TEMP/sample.pdf"
+          export PRINTTEST="$printtest"
+          seq 1 25 | xargs -P 25 -I{} sh -c '
+            if ipptool -q -f "$SAMPLE" ipp://127.0.0.1:8633/ipp/print "$PRINTTEST"; then
+              echo 0 >"$0/{}.rc"
+            else
+              echo 1 >"$0/{}.rc"
+            fi
+          ' "$RUNNER_TEMP/concurrent"
+
+          failures="$(awk '$0 == "1" { n++ } END { print n + 0 }' "$RUNNER_TEMP"/concurrent/*.rc)"
+          test "$failures" -eq 0
+
+          for i in $(seq 1 60); do
+            stats="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+            accepted="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["accepted"])' <<<"$stats")"
+            [ "$accepted" -ge 26 ] && break
+            sleep 1
+          done
+          printf '%s\n' "$stats" | tee "$RUNNER_TEMP/evidence/concurrent-stats.json"
+          python3 -c 'import json,sys; s=json.load(sys.stdin); assert s["accepted"] >= 26 and s["conflicts"] == 0, s' <<<"$stats"
+
+      - name: Prove PAPPL cancellation and status projection
+        shell: bash
+        run: |
+          set -euo pipefail
+          before="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+          before_accepted="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["accepted"])' <<<"$before")"
+
+          cat >"$RUNNER_TEMP/pappl-projection.test" <<'IPP'
+          {
+            NAME "Create projection-only job"
+            OPERATION Create-Job
+            GROUP operation
+            ATTR charset attributes-charset utf-8
+            ATTR language attributes-natural-language en
+            ATTR uri printer-uri $uri
+            ATTR name requesting-user-name $user
+            STATUS successful-ok
+            EXPECT job-id
+            EXPECT job-uri
+          }
+          {
+            NAME "Read projection job status"
+            OPERATION Get-Job-Attributes
+            GROUP operation
+            ATTR charset attributes-charset utf-8
+            ATTR language attributes-natural-language en
+            ATTR uri printer-uri $uri
+            ATTR integer job-id $job-id
+            ATTR name requesting-user-name $user
+            STATUS successful-ok
+            EXPECT job-state
+          }
+          {
+            NAME "Cancel projection-only job"
+            OPERATION Cancel-Job
+            GROUP operation
+            ATTR charset attributes-charset utf-8
+            ATTR language attributes-natural-language en
+            ATTR uri printer-uri $uri
+            ATTR integer job-id $job-id
+            ATTR name requesting-user-name $user
+            STATUS successful-ok
+          }
+          {
+            NAME "Observe canceled projection state"
+            OPERATION Get-Job-Attributes
+            GROUP operation
+            ATTR charset attributes-charset utf-8
+            ATTR language attributes-natural-language en
+            ATTR uri printer-uri $uri
+            ATTR integer job-id $job-id
+            ATTR name requesting-user-name $user
+            STATUS successful-ok
+            EXPECT job-state WITH-VALUE 7
+            DISPLAY job-state
+            DISPLAY job-state-reasons
+          }
+          IPP
+
+          ipptool -tv ipp://127.0.0.1:8633/ipp/print "$RUNNER_TEMP/pappl-projection.test" \
+            | tee "$RUNNER_TEMP/evidence/pappl-projection.txt"
+
+          after="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+          after_accepted="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["accepted"])' <<<"$after")"
+          test "$after_accepted" -eq "$before_accepted"
+
+      - name: Phase 2 PAPPL malformed and abusive-request pressure
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Slow/truncated and malformed clients must not kill either the
+          # substrate control surface or FolioRelay's state authority.
+          python3 - <<'PY' >"$RUNNER_TEMP/evidence/pappl-malformed-clients.txt"
+          import socket, threading, time
+          errors=[]
+          def slow(i):
+              try:
+                  s=socket.create_connection(("127.0.0.1",8633), timeout=3)
+                  s.sendall(b"POST /ipp/print HTTP/1.1\r\nHost: localhost\r\nContent-Length: 999999999\r\nContent-Type: application/ipp\r\n")
+                  time.sleep(1.0)
+                  s.close()
+              except Exception as e:
+                  errors.append((i,repr(e)))
+          threads=[threading.Thread(target=slow,args=(i,)) for i in range(32)]
+          for t in threads: t.start()
+          time.sleep(.2)
+          for payload in [b"GARBAGE\r\n\r\n", b"POST /ipp/print HTTP/1.1\r\nContent-Length: nope\r\n\r\n"]:
+              try:
+                  s=socket.create_connection(("127.0.0.1",8633), timeout=3)
+                  s.sendall(payload); s.close()
+              except Exception as e:
+                  errors.append(("malformed",repr(e)))
+          for t in threads: t.join()
+          print(errors)
+          PY
+
+          getattr="$(find /usr/share/cups -type f -name get-printer-attributes.test -print -quit)"
+          test -n "$getattr"
+          ipptool -q ipp://127.0.0.1:8633/ipp/print "$getattr"
+          curl -fsS -o /dev/null http://127.0.0.1:18080/health
+
+          # Stabilize accepted-count observations before the abusive job so
+          # completions from the preceding concurrency tier cannot be mistaken
+          # for this request.
+          previous=""
+          stable=0
+          for i in $(seq 1 30); do
+            stats="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+            accepted="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["accepted"])' <<<"$stats")"
+            if [ "$accepted" = "$previous" ]; then
+              stable=$((stable+1))
+            else
+              stable=0
+            fi
+            previous="$accepted"
+            [ "$stable" -ge 2 ] && break
+            sleep 1
+          done
+          before="$accepted"
+
+          cat >"$RUNNER_TEMP/pappl-million-copies.test" <<'IPP'
+          {
+            NAME "Reject absurd copies"
+            OPERATION Print-Job
+            GROUP operation-attributes-tag
+            ATTR charset attributes-charset utf-8
+            ATTR language attributes-natural-language en
+            ATTR uri printer-uri $uri
+            ATTR name requesting-user-name $user
+            ATTR mimeMediaType document-format application/pdf
+            GROUP job-attributes-tag
+            ATTR integer copies 1000000
+            FILE $filename
+          }
+          IPP
+
+          set +e
+          ipptool -tv -f "$RUNNER_TEMP/sample.pdf" \
+            ipp://127.0.0.1:8633/ipp/print "$RUNNER_TEMP/pappl-million-copies.test" \
+            >"$RUNNER_TEMP/evidence/pappl-million-copies.out" \
+            2>"$RUNNER_TEMP/evidence/pappl-million-copies.err"
+          echo "$?" >"$RUNNER_TEMP/evidence/pappl-million-copies.rc"
+          set -e
+
+          # Whether the substrate rejects synchronously or its worker reports
+          # failure, the abusive request must never become accepted durable
+          # FolioRelay state.
+          sleep 3
+          stats="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+          printf '%s\n' "$stats" >"$RUNNER_TEMP/evidence/pappl-post-million-copy-stats.json"
+          after="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["accepted"])' <<<"$stats")"
+          test "$after" -eq "$before"
+
+          ipptool -q ipp://127.0.0.1:8633/ipp/print "$getattr"
+          curl -fsS -o /dev/null http://127.0.0.1:18080/health
+
+      - name: Prove PAPPL FolioRelay replay, conflict, and restart semantics
+        shell: bash
+        env:
+          FOLIORELAY_SUBSTRATE: pappl
+          FOLIORELAY_STATE_URL: http://127.0.0.1:18080
+          FOLIORELAY_INGRESS_STORE: ${{ runner.temp }}/ingress
+          FOLIORELAY_SUBSTRATE_INSTANCE: gha-${{ github.run_id }}-${{ github.run_attempt }}
+          FOLIORELAY_MEDIA_TYPE: application/pdf
+          FOLIORELAY_COPIES: "1"
+        run: |
+          set -euo pipefail
+          job_id="$(awk '$1 == "job-id" && $2 == "(integer)" { print $NF; exit }' "$RUNNER_TEMP/evidence/print-job.txt")"
+          [[ "$job_id" =~ ^[0-9]+$ ]]
+          export FOLIORELAY_SOURCE_JOB_ID="$job_id"
+
+          curl -fsS http://127.0.0.1:18080/v1/stats \
+            | tee "$RUNNER_TEMP/evidence/pappl-pre-parity-stats.json"
+          "$RUNNER_TEMP/bin/foliorelay-ipp-ingest" "$RUNNER_TEMP/sample.pdf" \
+            2>>"$RUNNER_TEMP/evidence/pappl-adapter.log"
+          curl -fsS http://127.0.0.1:18080/v1/stats \
+            | tee "$RUNNER_TEMP/evidence/pappl-replay-stats.json"
+
+          cp "$RUNNER_TEMP/sample.pdf" "$RUNNER_TEMP/pappl-conflict.pdf"
+          printf '\n%% conflicting bytes\n' >>"$RUNNER_TEMP/pappl-conflict.pdf"
+          if "$RUNNER_TEMP/bin/foliorelay-ipp-ingest" "$RUNNER_TEMP/pappl-conflict.pdf" \
+              2>>"$RUNNER_TEMP/evidence/pappl-adapter.log"; then
+            echo "conflicting PAPPL idempotency replay unexpectedly succeeded" >&2
+            exit 1
+          fi
+          curl -fsS http://127.0.0.1:18080/v1/stats \
+            | tee "$RUNNER_TEMP/evidence/pappl-conflict-stats.json"
+
+          python3 - \
+            "$RUNNER_TEMP/evidence/pappl-pre-parity-stats.json" \
+            "$RUNNER_TEMP/evidence/pappl-replay-stats.json" \
+            "$RUNNER_TEMP/evidence/pappl-conflict-stats.json" <<'PY'
+          import json, pathlib, sys
+          before, replay, conflict = [
+              json.loads(pathlib.Path(path).read_text()) for path in sys.argv[1:]
+          ]
+          assert replay["accepted"] == before["accepted"], (before, replay)
+          assert replay["replayed"] == before["replayed"] + 1, (before, replay)
+          assert replay["conflicts"] == before["conflicts"], (before, replay)
+          assert conflict["accepted"] == replay["accepted"], (replay, conflict)
+          assert conflict["replayed"] == replay["replayed"], (replay, conflict)
+          assert conflict["conflicts"] == replay["conflicts"] + 1, (replay, conflict)
+          PY
+
+          kill "$(cat "$RUNNER_TEMP/evidence/state.pid")"
+          wait "$(cat "$RUNNER_TEMP/evidence/state.pid")" 2>/dev/null || true
+          "$RUNNER_TEMP/bin/foliorelay-state-fixture" \
+            -listen 127.0.0.1:18080 \
+            -journal "$RUNNER_TEMP/state/journal.frj" \
+            >>"$RUNNER_TEMP/evidence/state.log" 2>&1 &
+          echo $! >"$RUNNER_TEMP/evidence/state.pid"
+          for i in $(seq 1 30); do
+            curl -fsS -o /dev/null http://127.0.0.1:18080/health && break
+            sleep 1
+          done
+          curl -fsS -o /dev/null http://127.0.0.1:18080/health
+
+          "$RUNNER_TEMP/bin/foliorelay-ipp-ingest" "$RUNNER_TEMP/sample.pdf" \
+            2>>"$RUNNER_TEMP/evidence/pappl-adapter.log"
+          curl -fsS http://127.0.0.1:18080/v1/stats \
+            | tee "$RUNNER_TEMP/evidence/pappl-post-restart-stats.json"
+          python3 - "$RUNNER_TEMP/evidence/pappl-post-restart-stats.json" <<'PY'
+          import json, pathlib, sys
+          stats = json.loads(pathlib.Path(sys.argv[1]).read_text())
+          assert stats["accepted"] == 0, stats
+          assert stats["replayed"] == 1, stats
+          assert stats["conflicts"] == 0, stats
+          PY
+
+      - name: Phase 2 PAPPL authority-outage fail-closed recovery
+        shell: bash
+        run: |
+          set -euo pipefail
+          journal="$RUNNER_TEMP/state/journal.frj"
+          printtest="$(find /usr/share/cups -type f -name print-job.test -print -quit)"
+          getattr="$(find /usr/share/cups -type f -name get-printer-attributes.test -print -quit)"
+          test -n "$printtest"
+          test -n "$getattr"
+
+          # Stop the sole durable authority, then prove a real substrate
+          # submission cannot mutate the journal behind its back.
+          kill "$(cat "$RUNNER_TEMP/evidence/state.pid")"
+          wait "$(cat "$RUNNER_TEMP/evidence/state.pid")" 2>/dev/null || true
+          before_size="$(stat -c %s "$journal")"
+
+          set +e
+          timeout 20 ipptool -q -f "$RUNNER_TEMP/sample.pdf" \
+            ipp://127.0.0.1:8633/ipp/print "$printtest" \
+            >"$RUNNER_TEMP/evidence/pappl-authority-down.out" \
+            2>"$RUNNER_TEMP/evidence/pappl-authority-down.err"
+          outage_rc=$?
+          set -e
+          echo "$outage_rc" >"$RUNNER_TEMP/evidence/pappl-authority-down.rc"
+          sleep 2
+
+          after_size="$(stat -c %s "$journal")"
+          if [ "$after_size" -ne "$before_size" ]; then
+            echo "durable journal changed while FolioRelay authority was down" >&2
+            exit 1
+          fi
+
+          "$RUNNER_TEMP/bin/foliorelay-state-fixture" \
+            -listen 127.0.0.1:18080 \
+            -journal "$journal" \
+            >>"$RUNNER_TEMP/evidence/state.log" 2>&1 &
+          echo $! >"$RUNNER_TEMP/evidence/state.pid"
+          for i in $(seq 1 30); do
+            curl -fsS -o /dev/null http://127.0.0.1:18080/health && break
+            sleep 1
+          done
+          curl -fsS -o /dev/null http://127.0.0.1:18080/health
+
+          # A substrate may retry its transient projection after authority
+          # recovery; that is allowed. It must remain usable and must not create
+          # idempotency conflicts.
+          ipptool -q ipp://127.0.0.1:8633/ipp/print "$getattr"
+          sleep 3
+          baseline="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+          printf '%s\n' "$baseline" >"$RUNNER_TEMP/evidence/pappl-post-authority-restart-stats.json"
+          base_accepted="$(python3 -c 'import json,sys; s=json.load(sys.stdin); assert s["conflicts"] == 0, s; print(s["accepted"])' <<<"$baseline")"
+
+          ipptool -q -f "$RUNNER_TEMP/sample.pdf" ipp://127.0.0.1:8633/ipp/print "$printtest"
+          final="$baseline"
+          for i in $(seq 1 30); do
+            final="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+            accepted="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["accepted"])' <<<"$final")"
+            [ "$accepted" -gt "$base_accepted" ] && break
+            sleep 1
+          done
+          printf '%s\n' "$final" >"$RUNNER_TEMP/evidence/pappl-post-recovery-submit-stats.json"
+          python3 - "$base_accepted" "$final" <<'PY'
+          import json, sys
+          baseline = int(sys.argv[1])
+          stats = json.loads(sys.argv[2])
+          assert stats["accepted"] > baseline, (baseline, stats)
+          assert stats["conflicts"] == 0, stats
+          PY
+
+      - name: Phase 3 PAPPL IPP Everywhere engineering conformance
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          suite_root="$RUNNER_TEMP/cups-conformance"
+          if [ ! -d "$suite_root/.git" ]; then
+            git clone --depth 1 --branch v2.4.19               https://github.com/OpenPrinting/cups.git "$suite_root"
+          fi
+          cd "$suite_root/examples"
+          timeout 180 ipptool -V 2.0 -tv             -f "$RUNNER_TEMP/sample.pdf"             ipp://127.0.0.1:8633/ipp/print             ./ipp-everywhere.test             | tee "$RUNNER_TEMP/evidence/pappl-ipp-everywhere.txt"
+
+      - name: Record PAPPL transient-state surface
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "spool files:"
+            find "$RUNNER_TEMP/pappl-spool" -maxdepth 3 -type f -printf '%p %s\n' | sort || true
+            echo "listeners:"
+            ss -lntup || true
+            echo "bridge dependencies:"
+            cat "$RUNNER_TEMP/pappl-bridge-ldd.txt"
+          } >"$RUNNER_TEMP/evidence/pappl-surface.txt"
+
+      - name: Phase 2 PAPPL bounded spool exhaustion remains local
+        shell: bash
+        run: |
+          set -euo pipefail
+          spool="$RUNNER_TEMP/pappl-spool"
+          before="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+          before_accepted="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["accepted"])' <<<"$before")"
+
+          kill "$(cat "$RUNNER_TEMP/evidence/pappl.pid")" 2>/dev/null || true
+          wait "$(cat "$RUNNER_TEMP/evidence/pappl.pid")" 2>/dev/null || true
+
+          uid="$(id -u)"; gid="$(id -g)"
+          sudo mount -t tmpfs -o "size=2m,uid=$uid,gid=$gid,mode=0700" tmpfs "$spool"
+          trap 'kill "$(cat "$RUNNER_TEMP/evidence/pappl.pid")" 2>/dev/null || true; wait "$(cat "$RUNNER_TEMP/evidence/pappl.pid")" 2>/dev/null || true; sudo umount "$spool" 2>/dev/null || true' EXIT
+
+          FOLIORELAY_INGEST_BIN="$RUNNER_TEMP/bin/foliorelay-ipp-ingest" \
+          FOLIORELAY_STATE_URL=http://127.0.0.1:18080 \
+          FOLIORELAY_INGRESS_STORE="$RUNNER_TEMP/ingress" \
+          FOLIORELAY_MAX_INGRESS_BYTES=104857600 \
+          FOLIORELAY_SUBSTRATE_INSTANCE="gha-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-spool" \
+          FOLIORELAY_PAPPL_SPOOL="$spool" \
+          FOLIORELAY_PAPPL_PORT=8633 \
+            setpriv --no-new-privs -- "$RUNNER_TEMP/bin/foliorelay-pappl-ingress" \
+            >>"$RUNNER_TEMP/evidence/pappl.log" 2>&1 &
+          echo $! >"$RUNNER_TEMP/evidence/pappl.pid"
+
+          getattr="$(find /usr/share/cups -type f -name get-printer-attributes.test -print -quit)"
+          printtest="$(find /usr/share/cups -type f -name print-job.test -print -quit)"
+          for i in $(seq 1 30); do
+            ipptool -q ipp://127.0.0.1:8633/ipp/print "$getattr" && break
+            sleep 1
+          done
+          ipptool -q ipp://127.0.0.1:8633/ipp/print "$getattr"
+
+          { printf '%%PDF-1.1\n'; dd if=/dev/zero bs=1M count=4 status=none; printf '\n%%%%EOF\n'; } \
+            >"$RUNNER_TEMP/pappl-spool-exhaustion.pdf"
+
+          set +e
+          timeout 30 ipptool -q -f "$RUNNER_TEMP/pappl-spool-exhaustion.pdf" \
+            ipp://127.0.0.1:8633/ipp/print "$printtest" \
+            >"$RUNNER_TEMP/evidence/pappl-spool-full.out" \
+            2>"$RUNNER_TEMP/evidence/pappl-spool-full.err"
+          echo "$?" >"$RUNNER_TEMP/evidence/pappl-spool-full.rc"
+          set -e
+          sleep 2
+
+          after="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+          printf '%s\n' "$after" >"$RUNNER_TEMP/evidence/pappl-post-spool-full-stats.json"
+          after_accepted="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["accepted"])' <<<"$after")"
+          test "$after_accepted" -eq "$before_accepted"
+          ipptool -q ipp://127.0.0.1:8633/ipp/print "$getattr"
+          curl -fsS -o /dev/null http://127.0.0.1:18080/health
+          df -h "$spool" >"$RUNNER_TEMP/evidence/pappl-tiny-spool-df.txt"
+
+          kill "$(cat "$RUNNER_TEMP/evidence/pappl.pid")" 2>/dev/null || true
+          wait "$(cat "$RUNNER_TEMP/evidence/pappl.pid")" 2>/dev/null || true
+          sudo umount "$spool"
+          trap - EXIT
+
+      - name: Stop PAPPL fixtures
+        if: always()
+        shell: bash
+        run: |
+          for name in pappl state; do
+            if [ -f "$RUNNER_TEMP/evidence/$name.pid" ]; then
+              kill "$(cat "$RUNNER_TEMP/evidence/$name.pid")" 2>/dev/null || true
+            fi
+          done
+
+      - name: Upload PAPPL evidence
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: ipp-ingress-phase1-pappl
+          path: ${{ runner.temp }}/evidence
+          if-no-files-found: error
+          retention-days: 14
+
+  cups:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout FolioRelay
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Setup Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: '1.27.1'
+          cache: false
+
+      - name: Build FolioRelay state and ingress binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./cmd/foliorelay-ipp-ingest ./internal/state
+          mkdir -p "$RUNNER_TEMP/bin"
+          CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' \
+            -o "$RUNNER_TEMP/bin/foliorelay-state-fixture" ./cmd/foliorelay-state-fixture
+          CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' \
+            -o "$RUNNER_TEMP/bin/foliorelay-ipp-ingest" ./cmd/foliorelay-ipp-ingest
+
+      - name: Build pinned minimal CUPS
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            autoconf build-essential pkg-config git ca-certificates curl \
+            libssl-dev zlib1g-dev libcups2-dev cups-client cups-ipp-utils
+
+          git clone --depth 1 --branch v2.4.19 \
+            https://github.com/OpenPrinting/cups.git "$RUNNER_TEMP/cups"
+          cd "$RUNNER_TEMP/cups"
+          ./configure \
+            --prefix=/usr \
+            --sysconfdir=/etc \
+            --localstatedir=/var \
+            --with-tls=openssl \
+            --with-dnssd=no \
+            --disable-pam \
+            --disable-gssapi \
+            --disable-libusb \
+            --disable-webif \
+            --disable-browsing \
+            --disable-default-shared \
+            --disable-raw-printing \
+            --with-languages=none \
+            --with-printcap=no \
+            --with-max-copies=1000
+          make -j"$(nproc)"
+          mkdir -p "$RUNNER_TEMP/cups-stage"
+          make BUILDROOT="$RUNNER_TEMP/cups-stage" install
+
+      - name: Create isolated PDF-only CUPS server
+        shell: bash
+        env:
+          FOLIORELAY_INGEST_BIN: ${{ runner.temp }}/bin/foliorelay-ipp-ingest
+          FOLIORELAY_STATE_URL: http://127.0.0.1:18080
+          FOLIORELAY_INGRESS_STORE: ${{ runner.temp }}/ingress
+          FOLIORELAY_MAX_INGRESS_BYTES: "104857600"
+          FOLIORELAY_SUBSTRATE_INSTANCE: gha-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          base="$RUNNER_TEMP/cups-runtime"
+          mkdir -p "$RUNNER_TEMP/evidence" "$RUNNER_TEMP/ingress" "$RUNNER_TEMP/state"
+          mkdir -p "$base"/{bin/backend,bin/daemon,bin/filter,spool/temp,log,ppd,cache,ssl}
+          chmod 0700 "$base/ssl"
+
+          # cupsd dispatches filters/backends through its upstream cups-exec
+          # helper under ServerBin/daemon, even when the scheduler runs unprivileged.
+          install -m 0755 "$RUNNER_TEMP/cups-stage/usr/lib/cups/daemon/cups-exec" "$base/bin/daemon/cups-exec"
+
+          # CUPS refuses to execute filters/backends that are not root-owned
+          # or are group/world writable. Keep the qualification backend immutable
+          # to the unprivileged scheduler user while executing it as that user.
+          sudo install -o root -g root -m 0555 experiments/print-substrate/cups-backend.sh "$base/bin/backend/foliorelay"
+          install -m 0644 experiments/print-substrate/cups-foliorelay.ppd "$base/ppd/FolioRelay.ppd"
+
+          user="$(id -un)"
+          group="$(id -gn)"
+          cat >"$base/cups-files.conf" <<EOF
+          User $user
+          Group $group
+          ServerRoot $base
+          StateDir $base
+          ServerBin $base/bin
+          ServerKeychain $base/ssl
+          CreateSelfSignedCerts Yes
+          CacheDir $base/cache
+          DataDir $RUNNER_TEMP/cups-stage/usr/share/cups
+          RequestRoot $base/spool
+          TempDir $base/spool/temp
+          AccessLog $base/log/access_log
+          ErrorLog $base/log/error_log
+          PageLog $base/log/page_log
+          FileDevice No
+          PassEnv FOLIORELAY_INGEST_BIN
+          PassEnv FOLIORELAY_STATE_URL
+          PassEnv FOLIORELAY_INGRESS_STORE
+          PassEnv FOLIORELAY_MAX_INGRESS_BYTES
+          PassEnv FOLIORELAY_SUBSTRATE_INSTANCE
+          EOF
+
+          cat >"$base/cupsd.conf" <<EOF
+          StrictConformance Yes
+          Browsing Off
+          WebInterface No
+          DefaultShared No
+          ServerName localhost
+          Listen 127.0.0.1:8634
+          SSLListen 127.0.0.1:8635
+          Listen $base/cups.sock
+          SSLOptions MinTLS1.2
+          MaxLogSize 0
+          LogLevel debug2
+          # Backend failure must fail closed without permanently stopping the
+          # virtual ingress queue. Use CUPS' upstream bounded retry policy so
+          # transient FolioRelay-authority outages recover autonomously.
+          ErrorPolicy retry-job
+          JobRetryInterval 1
+          JobRetryLimit 10
+          PreserveJobFiles Off
+          PreserveJobHistory 30
+          <Location />
+            Order allow,deny
+            Allow localhost
+          </Location>
+          <Location /printers>
+            Order allow,deny
+            Allow localhost
+          </Location>
+          <Policy default>
+            <Limit All>
+              Order allow,deny
+              Allow localhost
+            </Limit>
+          </Policy>
+          EOF
+
+          cat >"$base/printers.conf" <<'EOF'
+          <Printer FolioRelay>
+          Accepting Yes
+          DeviceURI foliorelay:/
+          Info FolioRelay PDF Ingress
+          JobSheets none none
+          State Idle
+          StateMessage Ready
+          Shared No
+          </Printer>
+          EOF
+          cp "$base/printers.conf" "$RUNNER_TEMP/evidence/printers.conf"
+
+          "$RUNNER_TEMP/bin/foliorelay-state-fixture" \
+            -listen 127.0.0.1:18080 \
+            -journal "$RUNNER_TEMP/state/journal.frj" \
+            >"$RUNNER_TEMP/evidence/state.log" 2>&1 &
+          echo $! >"$RUNNER_TEMP/evidence/state.pid"
+          for i in $(seq 1 30); do
+            curl -fsS -o /dev/null http://127.0.0.1:18080/health && break
+            sleep 1
+          done
+          curl -fsS -o /dev/null http://127.0.0.1:18080/health
+
+          export LD_LIBRARY_PATH="$RUNNER_TEMP/cups/cups"
+          export CUPS_SERVERROOT="$base"
+          export CUPS_STATEDIR="$base"
+          export CUPS_DATADIR="$RUNNER_TEMP/cups-stage/usr/share/cups"
+          setpriv --no-new-privs -- "$RUNNER_TEMP/cups/scheduler/cupsd" -c "$base/cupsd.conf" -f \
+            >"$RUNNER_TEMP/evidence/cupsd.log" 2>&1 &
+          echo $! >"$RUNNER_TEMP/evidence/cups.pid"
+
+          testfile="$(find /usr/share/cups -type f -name get-printer-attributes.test -print -quit)"
+          test -n "$testfile"
+          for i in $(seq 1 30); do
+            if ipptool -q ipp://127.0.0.1:8634/printers/FolioRelay "$testfile"; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/evidence/cupsd.log" >&2 || true
+          cat "$base/log/error_log" >&2 || true
+          exit 1
+
+      - name: Prove CUPS least-privilege runtime envelope
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v setpriv >/dev/null
+          pid="$(cat "$RUNNER_TEMP/evidence/cups.pid")"
+          status="/proc/$pid/status"
+          test -r "$status"
+          euid="$(awk '/^Uid:/ {print $3}' "$status")"
+          capeff="$(awk '/^CapEff:/ {print $2}' "$status")"
+          nnp="$(awk '/^NoNewPrivs:/ {print $2}' "$status")"
+          test "$euid" -ne 0
+          python3 - "$capeff" <<'PY'
+          import sys
+          assert int(sys.argv[1], 16) == 0, sys.argv[1]
+          PY
+          test "$nnp" -eq 1
+          {
+            echo "effective_uid=$euid"
+            echo "cap_eff=$capeff"
+            echo "no_new_privs=$nnp"
+          } | tee "$RUNNER_TEMP/evidence/cups-privilege-envelope.txt"
+
+      - name: Prove CUPS dedicated TLS IPP surface
+        shell: bash
+        run: |
+          set -euo pipefail
+          ready=0
+          for i in $(seq 1 30); do
+            set +e
+            handshake="$(timeout 4 openssl s_client -connect 127.0.0.1:8635 -servername localhost -brief </dev/null 2>&1)"
+            set -e
+            if grep -Eq 'Protocol (version:|:) TLSv1\.(2|3)' <<<"$handshake"; then
+              printf '%s\n' "$handshake" >"$RUNNER_TEMP/evidence/cups-tls-handshake.txt"
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          test "$ready" -eq 1
+
+          getattr="$(find /usr/share/cups -type f -name get-printer-attributes.test -print -quit)"
+          test -n "$getattr"
+          timeout 20 ipptool -S -q ipps://localhost:8635/printers/FolioRelay "$getattr"
+
+          set +e
+          timeout 20 ipptool -q ipp://127.0.0.1:8635/printers/FolioRelay "$getattr" \
+            >"$RUNNER_TEMP/evidence/cups-plaintext-on-tls-port.out" \
+            2>"$RUNNER_TEMP/evidence/cups-plaintext-on-tls-port.err"
+          plaintext_rc=$?
+          set -e
+          echo "$plaintext_rc" >"$RUNNER_TEMP/evidence/cups-plaintext-on-tls-port.rc"
+          test "$plaintext_rc" -ne 0
+
+      - name: Submit PDF and prove CUPS pass-through handoff
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat >"$RUNNER_TEMP/sample.pdf" <<'PDF'
+          %PDF-1.1
+          1 0 obj
+          << /Type /Catalog /Pages 2 0 R >>
+          endobj
+          2 0 obj
+          << /Type /Pages /Kids [3 0 R] /Count 1 >>
+          endobj
+          3 0 obj
+          << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>
+          endobj
+          trailer
+          << /Root 1 0 R >>
+          %%EOF
+          PDF
+
+          printtest="$(find /usr/share/cups -type f -name print-job.test -print -quit)"
+          test -n "$printtest"
+          ipptool -tv -f "$RUNNER_TEMP/sample.pdf" \
+            ipp://127.0.0.1:8634/printers/FolioRelay "$printtest" \
+            | tee "$RUNNER_TEMP/evidence/print-job.txt"
+
+          for i in $(seq 1 30); do
+            stats="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+            accepted="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["accepted"])' <<<"$stats")"
+            [ "$accepted" -ge 1 ] && break
+            sleep 1
+          done
+          if [ "$accepted" -lt 1 ]; then
+            echo "CUPS accepted the IPP job but FolioRelay observed no committed ingest" >&2
+            cp "$RUNNER_TEMP/cups-runtime/log/error_log" "$RUNNER_TEMP/evidence/cups-error.log" 2>/dev/null || true
+            cat "$RUNNER_TEMP/evidence/cups-error.log" >&2 2>/dev/null || true
+            lpstat -h 127.0.0.1:8634 -W all -o >"$RUNNER_TEMP/evidence/lpstat-jobs.txt" 2>&1 || true
+            cat "$RUNNER_TEMP/evidence/lpstat-jobs.txt" >&2 || true
+            exit 1
+          fi
+
+          expected="$(sha256sum "$RUNNER_TEMP/sample.pdf" | awk '{print $1}')"
+          prefix="$(printf %.2s "$expected")"
+          object="$RUNNER_TEMP/ingress/sha256/$prefix/$expected"
+          test -f "$object"
+          cmp "$RUNNER_TEMP/sample.pdf" "$object"
+          printf '{"substrate":"cups","sha256":"%s","object":"%s"}\n' "$expected" "$object" \
+            >"$RUNNER_TEMP/evidence/artifact.json"
+
+      - name: Prove CUPS queues concurrent jobs into FolioRelay
+        shell: bash
+        run: |
+          set -euo pipefail
+          printtest="$(find /usr/share/cups -type f -name print-job.test -print -quit)"
+          mkdir -p "$RUNNER_TEMP/concurrent"
+          export SAMPLE="$RUNNER_TEMP/sample.pdf"
+          export PRINTTEST="$printtest"
+          seq 1 25 | xargs -P 25 -I{} sh -c '
+            if ipptool -q -f "$SAMPLE" ipp://127.0.0.1:8634/printers/FolioRelay "$PRINTTEST"; then
+              echo 0 >"$0/{}.rc"
+            else
+              echo 1 >"$0/{}.rc"
+            fi
+          ' "$RUNNER_TEMP/concurrent"
+
+          failures="$(awk '$0 == "1" { n++ } END { print n + 0 }' "$RUNNER_TEMP"/concurrent/*.rc)"
+          test "$failures" -eq 0
+          for i in $(seq 1 60); do
+            stats="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+            accepted="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["accepted"])' <<<"$stats")"
+            [ "$accepted" -ge 26 ] && break
+            sleep 1
+          done
+          printf '%s\n' "$stats" | tee "$RUNNER_TEMP/evidence/concurrent-stats.json"
+          python3 -c 'import json,sys; s=json.load(sys.stdin); assert s["accepted"] >= 26 and s["conflicts"] == 0, s' <<<"$stats"
+
+      - name: Prove CUPS cancellation and status projection
+        shell: bash
+        run: |
+          set -euo pipefail
+          before="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+          before_accepted="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["accepted"])' <<<"$before")"
+
+          cat >"$RUNNER_TEMP/cups-projection.test" <<'IPP'
+          {
+            NAME "Create projection-only job"
+            OPERATION Create-Job
+            GROUP operation
+            ATTR charset attributes-charset utf-8
+            ATTR language attributes-natural-language en
+            ATTR uri printer-uri $uri
+            ATTR name requesting-user-name $user
+            STATUS successful-ok
+            EXPECT job-id
+            EXPECT job-uri
+          }
+          {
+            NAME "Read projection job status"
+            OPERATION Get-Job-Attributes
+            GROUP operation
+            ATTR charset attributes-charset utf-8
+            ATTR language attributes-natural-language en
+            ATTR uri printer-uri $uri
+            ATTR integer job-id $job-id
+            ATTR name requesting-user-name $user
+            STATUS successful-ok
+            EXPECT job-state
+          }
+          {
+            NAME "Cancel projection-only job"
+            OPERATION Cancel-Job
+            GROUP operation
+            ATTR charset attributes-charset utf-8
+            ATTR language attributes-natural-language en
+            ATTR uri printer-uri $uri
+            ATTR integer job-id $job-id
+            ATTR name requesting-user-name $user
+            STATUS successful-ok
+          }
+          {
+            NAME "Observe canceled projection state"
+            OPERATION Get-Job-Attributes
+            GROUP operation
+            ATTR charset attributes-charset utf-8
+            ATTR language attributes-natural-language en
+            ATTR uri printer-uri $uri
+            ATTR integer job-id $job-id
+            ATTR name requesting-user-name $user
+            STATUS successful-ok
+            EXPECT job-state WITH-VALUE 7
+            DISPLAY job-state
+            DISPLAY job-state-reasons
+          }
+          IPP
+
+          ipptool -tv ipp://127.0.0.1:8634/printers/FolioRelay "$RUNNER_TEMP/cups-projection.test" \
+            | tee "$RUNNER_TEMP/evidence/cups-projection.txt"
+
+          after="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+          after_accepted="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["accepted"])' <<<"$after")"
+          test "$after_accepted" -eq "$before_accepted"
+
+      - name: Phase 2 CUPS malformed and abusive-request pressure
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Slow/truncated and malformed clients must not kill either the
+          # substrate control surface or FolioRelay's state authority.
+          python3 - <<'PY' >"$RUNNER_TEMP/evidence/cups-malformed-clients.txt"
+          import socket, threading, time
+          errors=[]
+          def slow(i):
+              try:
+                  s=socket.create_connection(("127.0.0.1",8634), timeout=3)
+                  s.sendall(b"POST /ipp/print HTTP/1.1\r\nHost: localhost\r\nContent-Length: 999999999\r\nContent-Type: application/ipp\r\n")
+                  time.sleep(1.0)
+                  s.close()
+              except Exception as e:
+                  errors.append((i,repr(e)))
+          threads=[threading.Thread(target=slow,args=(i,)) for i in range(32)]
+          for t in threads: t.start()
+          time.sleep(.2)
+          for payload in [b"GARBAGE\r\n\r\n", b"POST /ipp/print HTTP/1.1\r\nContent-Length: nope\r\n\r\n"]:
+              try:
+                  s=socket.create_connection(("127.0.0.1",8634), timeout=3)
+                  s.sendall(payload); s.close()
+              except Exception as e:
+                  errors.append(("malformed",repr(e)))
+          for t in threads: t.join()
+          print(errors)
+          PY
+
+          getattr="$(find /usr/share/cups -type f -name get-printer-attributes.test -print -quit)"
+          test -n "$getattr"
+          ipptool -q ipp://127.0.0.1:8634/printers/FolioRelay "$getattr"
+          curl -fsS -o /dev/null http://127.0.0.1:18080/health
+
+          # Stabilize accepted-count observations before the abusive job so
+          # completions from the preceding concurrency tier cannot be mistaken
+          # for this request.
+          previous=""
+          stable=0
+          for i in $(seq 1 30); do
+            stats="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+            accepted="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["accepted"])' <<<"$stats")"
+            if [ "$accepted" = "$previous" ]; then
+              stable=$((stable+1))
+            else
+              stable=0
+            fi
+            previous="$accepted"
+            [ "$stable" -ge 2 ] && break
+            sleep 1
+          done
+          before="$accepted"
+
+          cat >"$RUNNER_TEMP/cups-million-copies.test" <<'IPP'
+          {
+            NAME "Reject absurd copies"
+            OPERATION Print-Job
+            GROUP operation-attributes-tag
+            ATTR charset attributes-charset utf-8
+            ATTR language attributes-natural-language en
+            ATTR uri printer-uri $uri
+            ATTR name requesting-user-name $user
+            ATTR mimeMediaType document-format application/pdf
+            GROUP job-attributes-tag
+            ATTR integer copies 1000000
+            FILE $filename
+          }
+          IPP
+
+          set +e
+          ipptool -tv -f "$RUNNER_TEMP/sample.pdf" \
+            ipp://127.0.0.1:8634/printers/FolioRelay "$RUNNER_TEMP/cups-million-copies.test" \
+            >"$RUNNER_TEMP/evidence/cups-million-copies.out" \
+            2>"$RUNNER_TEMP/evidence/cups-million-copies.err"
+          echo "$?" >"$RUNNER_TEMP/evidence/cups-million-copies.rc"
+          set -e
+
+          # Whether the substrate rejects synchronously or its worker reports
+          # failure, the abusive request must never become accepted durable
+          # FolioRelay state.
+          sleep 3
+          stats="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+          printf '%s\n' "$stats" >"$RUNNER_TEMP/evidence/cups-post-million-copy-stats.json"
+          after="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["accepted"])' <<<"$stats")"
+          test "$after" -eq "$before"
+
+          ipptool -q ipp://127.0.0.1:8634/printers/FolioRelay "$getattr"
+          curl -fsS -o /dev/null http://127.0.0.1:18080/health
+
+      - name: Prove CUPS FolioRelay replay, conflict, and restart semantics
+        shell: bash
+        env:
+          FOLIORELAY_SUBSTRATE: cups
+          FOLIORELAY_STATE_URL: http://127.0.0.1:18080
+          FOLIORELAY_INGRESS_STORE: ${{ runner.temp }}/ingress
+          FOLIORELAY_SUBSTRATE_INSTANCE: gha-${{ github.run_id }}-${{ github.run_attempt }}
+          FOLIORELAY_MEDIA_TYPE: application/pdf
+          FOLIORELAY_COPIES: "1"
+        run: |
+          set -euo pipefail
+          job_id="$(awk '$1 == "job-id" && $2 == "(integer)" { print $NF; exit }' "$RUNNER_TEMP/evidence/print-job.txt")"
+          [[ "$job_id" =~ ^[0-9]+$ ]]
+          export FOLIORELAY_SOURCE_JOB_ID="$job_id"
+
+          curl -fsS http://127.0.0.1:18080/v1/stats \
+            | tee "$RUNNER_TEMP/evidence/cups-pre-parity-stats.json"
+          "$RUNNER_TEMP/bin/foliorelay-ipp-ingest" "$RUNNER_TEMP/sample.pdf" \
+            2>>"$RUNNER_TEMP/evidence/cups-adapter.log"
+          curl -fsS http://127.0.0.1:18080/v1/stats \
+            | tee "$RUNNER_TEMP/evidence/cups-replay-stats.json"
+
+          cp "$RUNNER_TEMP/sample.pdf" "$RUNNER_TEMP/cups-conflict.pdf"
+          printf '\n%% conflicting bytes\n' >>"$RUNNER_TEMP/cups-conflict.pdf"
+          if "$RUNNER_TEMP/bin/foliorelay-ipp-ingest" "$RUNNER_TEMP/cups-conflict.pdf" \
+              2>>"$RUNNER_TEMP/evidence/cups-adapter.log"; then
+            echo "conflicting CUPS idempotency replay unexpectedly succeeded" >&2
+            exit 1
+          fi
+          curl -fsS http://127.0.0.1:18080/v1/stats \
+            | tee "$RUNNER_TEMP/evidence/cups-conflict-stats.json"
+
+          python3 - \
+            "$RUNNER_TEMP/evidence/cups-pre-parity-stats.json" \
+            "$RUNNER_TEMP/evidence/cups-replay-stats.json" \
+            "$RUNNER_TEMP/evidence/cups-conflict-stats.json" <<'PY'
+          import json, pathlib, sys
+          before, replay, conflict = [
+              json.loads(pathlib.Path(path).read_text()) for path in sys.argv[1:]
+          ]
+          assert replay["accepted"] == before["accepted"], (before, replay)
+          assert replay["replayed"] == before["replayed"] + 1, (before, replay)
+          assert replay["conflicts"] == before["conflicts"], (before, replay)
+          assert conflict["accepted"] == replay["accepted"], (replay, conflict)
+          assert conflict["replayed"] == replay["replayed"], (replay, conflict)
+          assert conflict["conflicts"] == replay["conflicts"] + 1, (replay, conflict)
+          PY
+
+          kill "$(cat "$RUNNER_TEMP/evidence/state.pid")"
+          wait "$(cat "$RUNNER_TEMP/evidence/state.pid")" 2>/dev/null || true
+          "$RUNNER_TEMP/bin/foliorelay-state-fixture" \
+            -listen 127.0.0.1:18080 \
+            -journal "$RUNNER_TEMP/state/journal.frj" \
+            >>"$RUNNER_TEMP/evidence/state.log" 2>&1 &
+          echo $! >"$RUNNER_TEMP/evidence/state.pid"
+          for i in $(seq 1 30); do
+            curl -fsS -o /dev/null http://127.0.0.1:18080/health && break
+            sleep 1
+          done
+          curl -fsS -o /dev/null http://127.0.0.1:18080/health
+
+          "$RUNNER_TEMP/bin/foliorelay-ipp-ingest" "$RUNNER_TEMP/sample.pdf" \
+            2>>"$RUNNER_TEMP/evidence/cups-adapter.log"
+          curl -fsS http://127.0.0.1:18080/v1/stats \
+            | tee "$RUNNER_TEMP/evidence/cups-post-restart-stats.json"
+          python3 - "$RUNNER_TEMP/evidence/cups-post-restart-stats.json" <<'PY'
+          import json, pathlib, sys
+          stats = json.loads(pathlib.Path(sys.argv[1]).read_text())
+          assert stats["accepted"] == 0, stats
+          assert stats["replayed"] == 1, stats
+          assert stats["conflicts"] == 0, stats
+          PY
+
+      - name: Phase 2 CUPS authority-outage fail-closed recovery
+        shell: bash
+        run: |
+          set -euo pipefail
+          journal="$RUNNER_TEMP/state/journal.frj"
+          printtest="$(find /usr/share/cups -type f -name print-job.test -print -quit)"
+          getattr="$(find /usr/share/cups -type f -name get-printer-attributes.test -print -quit)"
+          test -n "$printtest"
+          test -n "$getattr"
+
+          # Stop the sole durable authority, then prove a real substrate
+          # submission cannot mutate the journal behind its back.
+          kill "$(cat "$RUNNER_TEMP/evidence/state.pid")"
+          wait "$(cat "$RUNNER_TEMP/evidence/state.pid")" 2>/dev/null || true
+          before_size="$(stat -c %s "$journal")"
+
+          set +e
+          timeout 20 ipptool -q -f "$RUNNER_TEMP/sample.pdf" \
+            ipp://127.0.0.1:8634/printers/FolioRelay "$printtest" \
+            >"$RUNNER_TEMP/evidence/cups-authority-down.out" \
+            2>"$RUNNER_TEMP/evidence/cups-authority-down.err"
+          outage_rc=$?
+          set -e
+          echo "$outage_rc" >"$RUNNER_TEMP/evidence/cups-authority-down.rc"
+          sleep 2
+
+          after_size="$(stat -c %s "$journal")"
+          if [ "$after_size" -ne "$before_size" ]; then
+            echo "durable journal changed while FolioRelay authority was down" >&2
+            exit 1
+          fi
+
+          "$RUNNER_TEMP/bin/foliorelay-state-fixture" \
+            -listen 127.0.0.1:18080 \
+            -journal "$journal" \
+            >>"$RUNNER_TEMP/evidence/state.log" 2>&1 &
+          echo $! >"$RUNNER_TEMP/evidence/state.pid"
+          for i in $(seq 1 30); do
+            curl -fsS -o /dev/null http://127.0.0.1:18080/health && break
+            sleep 1
+          done
+          curl -fsS -o /dev/null http://127.0.0.1:18080/health
+
+          # A substrate may retry its transient projection after authority
+          # recovery; that is allowed. It must remain usable and must not create
+          # idempotency conflicts.
+          ipptool -q ipp://127.0.0.1:8634/printers/FolioRelay "$getattr"
+          sleep 3
+          baseline="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+          printf '%s\n' "$baseline" >"$RUNNER_TEMP/evidence/cups-post-authority-restart-stats.json"
+          base_accepted="$(python3 -c 'import json,sys; s=json.load(sys.stdin); assert s["conflicts"] == 0, s; print(s["accepted"])' <<<"$baseline")"
+
+          ipptool -q -f "$RUNNER_TEMP/sample.pdf" ipp://127.0.0.1:8634/printers/FolioRelay "$printtest"
+          final="$baseline"
+          for i in $(seq 1 30); do
+            final="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+            accepted="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["accepted"])' <<<"$final")"
+            [ "$accepted" -gt "$base_accepted" ] && break
+            sleep 1
+          done
+          printf '%s\n' "$final" >"$RUNNER_TEMP/evidence/cups-post-recovery-submit-stats.json"
+          python3 - "$base_accepted" "$final" <<'PY'
+          import json, sys
+          baseline = int(sys.argv[1])
+          stats = json.loads(sys.argv[2])
+          assert stats["accepted"] > baseline, (baseline, stats)
+          assert stats["conflicts"] == 0, stats
+          PY
+
+      - name: Phase 3 CUPS IPP Everywhere engineering conformance
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/cups/examples"
+          timeout 180 ipptool -V 2.0 -tv             -f "$RUNNER_TEMP/sample.pdf"             ipp://127.0.0.1:8634/printers/FolioRelay             ./ipp-everywhere.test             | tee "$RUNNER_TEMP/evidence/cups-ipp-everywhere.txt"
+
+      - name: Record CUPS transient-state surface
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="$RUNNER_TEMP/cups-runtime"
+          {
+            echo "runtime files:"
+            find "$base" -maxdepth 4 -type f -printf '%p %s\n' | sort
+            echo "listeners:"
+            ss -lntup || true
+            echo "scheduler dependencies:"
+            LD_LIBRARY_PATH="$RUNNER_TEMP/cups/cups" ldd "$RUNNER_TEMP/cups/scheduler/cupsd" || true
+          } >"$RUNNER_TEMP/evidence/cups-surface.txt"
+
+      - name: Phase 2 CUPS bounded spool exhaustion remains local
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="$RUNNER_TEMP/cups-runtime"
+          spool="$base/spool"
+          before="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+          before_accepted="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["accepted"])' <<<"$before")"
+
+          kill "$(cat "$RUNNER_TEMP/evidence/cups.pid")" 2>/dev/null || true
+          wait "$(cat "$RUNNER_TEMP/evidence/cups.pid")" 2>/dev/null || true
+
+          uid="$(id -u)"; gid="$(id -g)"
+          sudo mount -t tmpfs -o "size=2m,uid=$uid,gid=$gid,mode=0700" tmpfs "$spool"
+          mkdir -p "$spool/temp"
+          trap 'kill "$(cat "$RUNNER_TEMP/evidence/cups.pid")" 2>/dev/null || true; wait "$(cat "$RUNNER_TEMP/evidence/cups.pid")" 2>/dev/null || true; sudo umount "$spool" 2>/dev/null || true' EXIT
+
+          FOLIORELAY_INGEST_BIN="$RUNNER_TEMP/bin/foliorelay-ipp-ingest" \
+          FOLIORELAY_STATE_URL=http://127.0.0.1:18080 \
+          FOLIORELAY_INGRESS_STORE="$RUNNER_TEMP/ingress" \
+          FOLIORELAY_MAX_INGRESS_BYTES=104857600 \
+          FOLIORELAY_SUBSTRATE_INSTANCE="gha-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-spool" \
+          LD_LIBRARY_PATH="$RUNNER_TEMP/cups/cups" \
+          CUPS_SERVERROOT="$base" \
+          CUPS_STATEDIR="$base" \
+          CUPS_DATADIR="$RUNNER_TEMP/cups-stage/usr/share/cups" \
+            setpriv --no-new-privs -- "$RUNNER_TEMP/cups/scheduler/cupsd" -c "$base/cupsd.conf" -f \
+            >>"$RUNNER_TEMP/evidence/cupsd.log" 2>&1 &
+          echo $! >"$RUNNER_TEMP/evidence/cups.pid"
+
+          getattr="$(find /usr/share/cups -type f -name get-printer-attributes.test -print -quit)"
+          printtest="$(find /usr/share/cups -type f -name print-job.test -print -quit)"
+          for i in $(seq 1 30); do
+            ipptool -q ipp://127.0.0.1:8634/printers/FolioRelay "$getattr" && break
+            sleep 1
+          done
+          ipptool -q ipp://127.0.0.1:8634/printers/FolioRelay "$getattr"
+
+          { printf '%%PDF-1.1\n'; dd if=/dev/zero bs=1M count=4 status=none; printf '\n%%%%EOF\n'; } \
+            >"$RUNNER_TEMP/cups-spool-exhaustion.pdf"
+
+          set +e
+          timeout 30 ipptool -q -f "$RUNNER_TEMP/cups-spool-exhaustion.pdf" \
+            ipp://127.0.0.1:8634/printers/FolioRelay "$printtest" \
+            >"$RUNNER_TEMP/evidence/cups-spool-full.out" \
+            2>"$RUNNER_TEMP/evidence/cups-spool-full.err"
+          echo "$?" >"$RUNNER_TEMP/evidence/cups-spool-full.rc"
+          set -e
+          sleep 2
+
+          after="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+          printf '%s\n' "$after" >"$RUNNER_TEMP/evidence/cups-post-spool-full-stats.json"
+          after_accepted="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["accepted"])' <<<"$after")"
+          test "$after_accepted" -eq "$before_accepted"
+          ipptool -q ipp://127.0.0.1:8634/printers/FolioRelay "$getattr"
+          curl -fsS -o /dev/null http://127.0.0.1:18080/health
+          df -h "$spool" >"$RUNNER_TEMP/evidence/cups-tiny-spool-df.txt"
+
+          kill "$(cat "$RUNNER_TEMP/evidence/cups.pid")" 2>/dev/null || true
+          wait "$(cat "$RUNNER_TEMP/evidence/cups.pid")" 2>/dev/null || true
+          sudo umount "$spool"
+          trap - EXIT
+
+      - name: Stop CUPS fixtures
+        if: always()
+        shell: bash
+        run: |
+          for name in cups state; do
+            if [ -f "$RUNNER_TEMP/evidence/$name.pid" ]; then
+              kill "$(cat "$RUNNER_TEMP/evidence/$name.pid")" 2>/dev/null || true
+            fi
+          done
+
+      - name: Upload CUPS evidence
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: ipp-ingress-phase1-cups
+          path: ${{ runner.temp }}/evidence
+          if-no-files-found: error
+          retention-days: 14
+

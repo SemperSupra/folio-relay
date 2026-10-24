@@ -1,0 +1,40 @@
+diff --git a/cups/ipp-support.c b/cups/ipp-support.c
+index 19bde141..c52b700e 100644
+--- a/cups/ipp-support.c
++++ b/cups/ipp-support.c
+@@ -1759,6 +1759,7 @@ ippCreateRequestedArray(ipp_t *request)	/* I - IPP request */
+     "printer-organizational-unit",
+     "printer-output-tray",		/* IPP JPS3 */
+     "printer-service-type",		/* IPP System */
++    "printer-serial-number",
+     "printer-settable-attributes-supported",
+     "printer-state",
+     "printer-state-change-date-time",
+diff --git a/scheduler/ipp.c b/scheduler/ipp.c
+index 9a280e75..f594252f 100644
+--- a/scheduler/ipp.c
++++ b/scheduler/ipp.c
+@@ -4994,7 +4994,8 @@ copy_printer_attrs(
+ 
+   if (!ra || cupsArrayFind(ra, "printer-more-info"))
+   {
+-    httpAssembleURIf(HTTP_URI_CODING_ALL, uri, sizeof(uri), is_encrypted ? "https" : "http", NULL, con->clientname, con->clientport, (printer->type & CUPS_PRINTER_CLASS) ? "/classes/%s" : "/printers/%s", printer->name);
++    /* FolioRelay's product UI is the management surface, not the disabled CUPS CGI. */
++    httpAssembleURI(HTTP_URI_CODING_ALL, uri, sizeof(uri), "https", NULL, ServerName, 18443, "/");
+     ippAddString(con->response, IPP_TAG_PRINTER, IPP_TAG_URI, "printer-more-info", NULL, uri);
+   }
+ 
+diff --git a/scheduler/printers.c b/scheduler/printers.c
+index 50778b89..13565503 100644
+--- a/scheduler/printers.c
++++ b/scheduler/printers.c
+@@ -2275,6 +2275,9 @@ cupsdSetPrinterAttrs(cupsd_printer_t *p)/* I - Printer to setup */
+   ippAddString(p->attrs, IPP_TAG_PRINTER, IPP_TAG_TEXT, "printer-organization", NULL, p->organization ? p->organization : "");
+   ippAddString(p->attrs, IPP_TAG_PRINTER, IPP_TAG_TEXT, "printer-organizational-unit", NULL, p->organizational_unit ? p->organizational_unit : "");
+   ippAddString(p->attrs, IPP_TAG_PRINTER, IPP_TAG_URI, "printer-uuid", NULL, p->uuid);
++  /* This software printer's durable UUID is its virtual serial identity. */
++  if (p->uuid && !strncmp(p->uuid, "urn:uuid:", 9))
++    ippAddString(p->attrs, IPP_TAG_PRINTER, IPP_TAG_TEXT, "printer-serial-number", NULL, p->uuid + 9);
+ 
+   if (cupsArrayCount(p->users) > 0)
+   {

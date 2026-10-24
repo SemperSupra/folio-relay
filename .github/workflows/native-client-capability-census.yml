@@ -1,0 +1,222 @@
+name: Native Client Capability Census
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/native-client-capability-census.yml'
+      - 'contracts/print-substrate-evaluation.yaml'
+      - 'docs/NATIVE_CLIENT_MATRIX.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos-capability:
+    name: macOS 15 native print capability interview
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - name: Checkout FolioRelay
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Inventory native printing surface
+        shell: bash
+        run: |
+          set -u
+          out="$RUNNER_TEMP/native-client-census"
+          mkdir -p "$out"
+
+          {
+            echo "=== OS ==="
+            sw_vers || true
+            uname -a || true
+            echo
+            echo "=== commands ==="
+            for cmd in lp lpstat lpadmin ippfind ipptool cups-config dns-sd; do
+              printf '%s=' "$cmd"
+              command -v "$cmd" || true
+            done
+            echo
+            echo "=== scheduler ==="
+            lpstat -r || true
+            lpstat -v || true
+            launchctl print system/org.cups.cupsd 2>&1 || true
+            echo
+            echo "=== SDK/framework ==="
+            sdk="$(xcrun --show-sdk-path 2>/dev/null || true)"
+            printf 'sdk=%s\n' "$sdk"
+            if [ -n "$sdk" ]; then
+              find "$sdk/usr/include" -path '*/cups/cups.h' -print 2>/dev/null || true
+            fi
+            ls -ld /System/Library/Frameworks/ApplicationServices.framework 2>/dev/null || true
+            find /System/Library/Frameworks -maxdepth 4 -iname '*PrintCore*' -print 2>/dev/null || true
+          } | tee "$out/macos-inventory.txt"
+
+          cat >"$out/cups-header-probe.c" <<'C'
+          #include <cups/cups.h>
+          int main(void) { return cupsLastError() == IPP_STATUS_OK ? 0 : 0; }
+          C
+
+          set +e
+          clang "$out/cups-header-probe.c" -lcups -o "$out/cups-header-probe"             >"$out/cups-compile.stdout" 2>"$out/cups-compile.stderr"
+          compile_rc=$?
+          set -e
+          printf '%s\n' "$compile_rc" >"$out/cups-compile.rc"
+
+          python3 - "$out" <<'PY'
+          import json, pathlib, shutil, subprocess, sys
+          out = pathlib.Path(sys.argv[1])
+          def command(name):
+              return shutil.which(name)
+          def run(args):
+              try:
+                  p=subprocess.run(args, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=10)
+                  return {"rc":p.returncode,"output":p.stdout[-4000:]}
+              except Exception as exc:
+                  return {"rc":None,"output":repr(exc)}
+          result={
+              "platform":"macos-15",
+              "commands":{name:command(name) for name in ["lp","lpstat","lpadmin","ippfind","ipptool","cups-config","dns-sd"]},
+              "lpstat_scheduler":run(["lpstat","-r"]) if command("lpstat") else None,
+              "native_cups_header_link_probe_rc":int((out/"cups-compile.rc").read_text().strip()),
+              "application_services_framework":pathlib.Path("/System/Library/Frameworks/ApplicationServices.framework").exists(),
+          }
+          (out/"macos-capabilities.json").write_text(json.dumps(result,indent=2,sort_keys=True)+"\n")
+          print(json.dumps(result,sort_keys=True))
+          PY
+
+      - name: Upload macOS capability evidence
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: native-client-census-macos-15
+          path: ${{ runner.temp }}/native-client-census
+          if-no-files-found: error
+          retention-days: 14
+
+  windows-capability:
+    name: Windows 2025 native print capability interview
+    runs-on: windows-2025
+    timeout-minutes: 10
+    steps:
+      - name: Checkout FolioRelay
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Inventory native printing surface
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $out = Join-Path $env:RUNNER_TEMP 'native-client-census'
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+
+          $spooler = Get-Service Spooler -ErrorAction SilentlyContinue
+          $module = Get-Module -ListAvailable PrintManagement | Select-Object -First 1
+          $commandNames = @('Add-Printer','Get-Printer','Get-PrinterDriver','Get-PrinterPort','Out-Printer','wsl','docker','podman','cloudflared','ssh','curl')
+          $commands = @{}
+          foreach ($name in $commandNames) {
+            $cmd = Get-Command $name -ErrorAction SilentlyContinue
+            $commands[$name] = if ($cmd) { $cmd.Source + ':' + $cmd.CommandType } else { $null }
+          }
+
+          $drivers = @()
+          try {
+            $drivers = @(Get-PrinterDriver -ErrorAction Stop | Select-Object Name, Manufacturer, MajorVersion, InfPath)
+          } catch {
+            $_ | Out-String | Set-Content (Join-Path $out 'get-printer-driver-error.txt')
+          }
+
+          $ports = @()
+          try {
+            $ports = @(Get-PrinterPort -ErrorAction Stop | Select-Object Name, Description, PrinterHostAddress, PortNumber)
+          } catch {
+            $_ | Out-String | Set-Content (Join-Path $out 'get-printer-port-error.txt')
+          }
+
+          $cimPrinterClass = $null
+          try {
+            $cimPrinterClass = Get-CimClass -Namespace root/StandardCimv2 -ClassName MSFT_Printer -ErrorAction Stop
+          } catch {}
+
+          $hostStrategy = [ordered]@{}
+          $wsl = Get-Command wsl.exe -ErrorAction SilentlyContinue
+          if ($wsl) {
+            $hostStrategy.wsl_present = $true
+            foreach ($probe in @(
+              @{name='status'; args=@('--status')},
+              @{name='version'; args=@('--version')},
+              @{name='list'; args=@('--list','--verbose')}
+            )) {
+              $stdout = Join-Path $out ("wsl-" + $probe.name + ".stdout.txt")
+              $stderr = Join-Path $out ("wsl-" + $probe.name + ".stderr.txt")
+              $p = Start-Process -FilePath $wsl.Source -ArgumentList $probe.args -Wait -PassThru -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+              $hostStrategy[("wsl_" + $probe.name + "_rc")] = $p.ExitCode
+            }
+          } else {
+            $hostStrategy.wsl_present = $false
+          }
+
+          $features = @{}
+          foreach ($feature in @('Microsoft-Windows-Subsystem-Linux','VirtualMachinePlatform','Microsoft-Hyper-V-All')) {
+            try {
+              $f = Get-WindowsOptionalFeature -Online -FeatureName $feature -ErrorAction Stop
+              $features[$feature] = $f.State.ToString()
+            } catch {
+              $features[$feature] = 'query-failed'
+            }
+          }
+          $hostStrategy.optional_features = $features
+
+          $serviceStates = @{}
+          foreach ($serviceName in @('vmcompute','hns','docker')) {
+            $svc = Get-Service $serviceName -ErrorAction SilentlyContinue
+            $serviceStates[$serviceName] = if ($svc) { $svc.Status.ToString() } else { $null }
+          }
+          $hostStrategy.services = $serviceStates
+
+          $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
+          $hostStrategy.virtualization = [ordered]@{
+            firmware_enabled = $cpu.VirtualizationFirmwareEnabled
+            second_level_address_translation = $cpu.SecondLevelAddressTranslationExtensions
+          }
+
+          $addPrinter = Get-Command Add-Printer -ErrorAction SilentlyContinue
+          $hostStrategy.add_printer_parameters = if ($addPrinter) { @($addPrinter.Parameters.Keys | Sort-Object) } else { @() }
+          $hostStrategy.add_printer_has_ipp_url = if ($addPrinter) { $addPrinter.Parameters.ContainsKey('IppURL') } else { $false }
+
+          $result = [ordered]@{
+            platform = 'windows-2025'
+            os = [ordered]@{
+              caption = (Get-CimInstance Win32_OperatingSystem).Caption
+              version = [Environment]::OSVersion.VersionString
+              architecture = $env:PROCESSOR_ARCHITECTURE
+            }
+            spooler = if ($spooler) { [ordered]@{ present=$true; status=$spooler.Status.ToString(); start_type=$spooler.StartType.ToString() } } else { [ordered]@{ present=$false } }
+            print_management_module = if ($module) { [ordered]@{ present=$true; version=$module.Version.ToString(); path=$module.Path } } else { [ordered]@{ present=$false } }
+            commands = $commands
+            msft_printer_cim_class = ($null -ne $cimPrinterClass)
+            driver_count = $drivers.Count
+            ipp_named_drivers = @($drivers | Where-Object { $_.Name -match 'IPP|Mopria' } | Select-Object -ExpandProperty Name)
+            port_count = $ports.Count
+            host_strategy = $hostStrategy
+          }
+
+          $result | ConvertTo-Json -Depth 8 | Tee-Object -FilePath (Join-Path $out 'windows-capabilities.json')
+          $drivers | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $out 'windows-printer-drivers.json')
+          $ports | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $out 'windows-printer-ports.json')
+          Get-Service Spooler | Format-List * | Out-String | Set-Content (Join-Path $out 'spooler-service.txt')
+          Get-Module -ListAvailable PrintManagement | Format-List * | Out-String | Set-Content (Join-Path $out 'printmanagement-module.txt')
+          $hostStrategy | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $out 'windows-host-strategy.txt')
+
+      - name: Upload Windows capability evidence
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: native-client-census-windows-2025
+          path: ${{ runner.temp }}\native-client-census
+          if-no-files-found: error
+          retention-days: 14

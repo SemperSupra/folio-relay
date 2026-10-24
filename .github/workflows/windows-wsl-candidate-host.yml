@@ -1,0 +1,652 @@
+name: Windows Native Client Qualification
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/windows-wsl-candidate-host.yml'
+      - 'cmd/foliorelay-state-fixture/**'
+      - 'cmd/foliorelay-ipp-ingest/**'
+      - 'experiments/print-substrate/pappl-ingress.c'
+      - 'experiments/print-substrate/cups-*'
+      - 'deploy/engineering-pappl/**'
+      - 'deploy/engineering-cups/**'
+      - 'internal/state/**'
+      - 'internal/security/**'
+      - 'go.mod'
+      - 'go.sum'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  prepare-pappl-rootfs:
+    name: Prepare pinned PAPPL WSL rootfs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout FolioRelay
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set up Go 1.27
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.1'
+          cache: false
+
+      - name: Build real packaged PAPPL candidate rootfs
+        shell: bash
+        run: |
+          set -euo pipefail
+          image=foliorelay-pappl-wsl:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}
+
+          docker build \
+            -f deploy/engineering-pappl/Dockerfile \
+            --target pappl \
+            -t "$image" \
+            .
+
+          CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' \
+            -o "$RUNNER_TEMP/foliorelay-state-fixture" \
+            ./cmd/foliorelay-state-fixture
+
+          cid="$(docker create "$image")"
+          trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+          docker cp "$RUNNER_TEMP/foliorelay-state-fixture" \
+            "$cid:/usr/local/bin/foliorelay-state-fixture"
+
+          docker export "$cid" -o "$RUNNER_TEMP/foliorelay-pappl-wsl-rootfs.tar"
+          sha256sum "$RUNNER_TEMP/foliorelay-pappl-wsl-rootfs.tar" \
+            | tee "$RUNNER_TEMP/foliorelay-pappl-wsl-rootfs.sha256"
+          docker image inspect "$image" >"$RUNNER_TEMP/pappl-image-inspect.json"
+
+      - name: Upload PAPPL WSL rootfs
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: foliorelay-pappl-wsl-rootfs
+          path: |
+            ${{ runner.temp }}/foliorelay-pappl-wsl-rootfs.tar
+            ${{ runner.temp }}/foliorelay-pappl-wsl-rootfs.sha256
+            ${{ runner.temp }}/pappl-image-inspect.json
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0
+
+  windows-native-pappl:
+    name: Windows native IPP client -> PAPPL in WSL2
+    needs: prepare-pappl-rootfs
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - name: Checkout FolioRelay
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Download PAPPL WSL rootfs
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: foliorelay-pappl-wsl-rootfs
+          path: ${{ runner.temp }}\foliorelay-pappl-wsl-rootfs
+
+      - name: Run PAPPL candidate and print through native Windows spooler
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $distro = "FolioRelayPAPPL-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          $install = Join-Path $env:RUNNER_TEMP 'foliorelay-pappl-wsl-install'
+          $artifact = Join-Path $env:RUNNER_TEMP 'foliorelay-pappl-wsl-rootfs'
+          $rootfs = Join-Path $artifact 'foliorelay-pappl-wsl-rootfs.tar'
+          $evidence = Join-Path $env:RUNNER_TEMP 'windows-native-pappl-evidence'
+          $queue = "FolioRelayPAPPL-$env:GITHUB_RUN_ID"
+          New-Item -ItemType Directory -Force -Path $install,$evidence | Out-Null
+
+          function Test-DirectTcp([string]$HostName, [int]$Port, [int]$TimeoutMs = 2000) {
+            $client = [System.Net.Sockets.TcpClient]::new()
+            try {
+              $task = $client.ConnectAsync($HostName, $Port)
+              if (-not $task.Wait($TimeoutMs)) { return $false }
+              return $client.Connected
+            } catch {
+              return $false
+            } finally {
+              $client.Dispose()
+            }
+          }
+
+          function Get-ProxylessText([string]$Uri) {
+            $handler = [System.Net.Http.HttpClientHandler]::new()
+            $handler.UseProxy = $false
+            $client = [System.Net.Http.HttpClient]::new($handler)
+            $client.Timeout = [TimeSpan]::FromSeconds(4)
+            try {
+              return $client.GetStringAsync($Uri).GetAwaiter().GetResult()
+            } finally {
+              $client.Dispose()
+              $handler.Dispose()
+            }
+          }
+
+          $wslConfig = Join-Path $env:USERPROFILE '.wslconfig'
+          @"
+          [wsl2]
+          networkingMode=nat
+          localhostForwarding=true
+          "@ | Set-Content -Encoding ascii $wslConfig
+          & wsl.exe --shutdown
+          Start-Sleep -Seconds 2
+
+          $wslVmCreatorId = '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}'
+          $rulePrefix = "FolioRelay-Native-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          $hyperVSetting = Get-NetFirewallHyperVVMSetting -Name $wslVmCreatorId -ErrorAction SilentlyContinue
+          if ($hyperVSetting) {
+            Set-NetFirewallHyperVVMSetting -Name $wslVmCreatorId -LoopbackEnabled True
+          } else {
+            New-NetFirewallHyperVVMSetting -Name $wslVmCreatorId -LoopbackEnabled True | Out-Null
+          }
+          foreach ($port in @(18080,8633)) {
+            $ruleName = "$rulePrefix-$port"
+            Remove-NetFirewallHyperVRule -Name $ruleName -ErrorAction SilentlyContinue
+            New-NetFirewallHyperVRule `
+              -Name $ruleName `
+              -DisplayName "FolioRelay native qualification TCP $port" `
+              -Direction Inbound `
+              -Action Allow `
+              -VMCreatorId $wslVmCreatorId `
+              -Protocol TCP `
+              -LocalPorts $port | Out-Null
+          }
+
+          $stateProcess = $null
+          $papplProcess = $null
+          try {
+            Remove-Printer -Name $queue -ErrorAction SilentlyContinue
+            & wsl.exe --unregister $distro 2>$null | Out-Null
+            & wsl.exe --import $distro $install $rootfs --version 2
+            if ($LASTEXITCODE -ne 0) { throw "wsl --import failed rc=$LASTEXITCODE" }
+
+            & wsl.exe -d $distro -- sh -c 'mkdir -p /var/lib/pappl /var/lib/foliorelay-artifacts /tmp/foliorelay-state; chown -R 10001:10001 /var/lib/pappl /var/lib/foliorelay-artifacts /tmp/foliorelay-state'
+            if ($LASTEXITCODE -ne 0) { throw "unable to prepare PAPPL writable paths" }
+
+            & wsl.exe -d $distro -- uname -a |
+              Tee-Object -FilePath (Join-Path $evidence 'uname.txt')
+            & wsl.exe -d $distro -- env 'LD_LIBRARY_PATH=/usr/lib/foliorelay-cups:/usr/lib'               ldd /usr/local/bin/foliorelay-pappl-ingress 2>&1 |
+              Out-String | Set-Content (Join-Path $evidence 'pappl-binary-probe.txt')
+            if ($LASTEXITCODE -ne 0) { throw "PAPPL runtime library closure probe failed rc=$LASTEXITCODE" }
+            & wsl.exe -d $distro -- /usr/bin/setpriv --version 2>&1 |
+              Out-String | Set-Content (Join-Path $evidence 'setpriv-version.txt')
+            if ($LASTEXITCODE -ne 0) { throw "setpriv is unavailable in PAPPL rootfs" }
+
+            $wslIpRaw = (& wsl.exe -d $distro -- hostname -I | Out-String).Trim()
+            $validIpv4 = @()
+            foreach ($token in @($wslIpRaw -split '\s+' | Where-Object { $_ })) {
+              $parsed = $null
+              if ([System.Net.IPAddress]::TryParse($token, [ref]$parsed) -and
+                  $parsed.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork -and
+                  -not $parsed.IPAddressToString.StartsWith('127.')) {
+                $validIpv4 += $parsed.IPAddressToString
+              }
+            }
+            $wslIp = @($validIpv4)[0]
+            if (-not $wslIp) { throw "no usable WSL IPv4 address" }
+            "wsl_ip=$wslIp" | Set-Content (Join-Path $evidence 'network.txt')
+
+            $stateStdout = Join-Path $evidence 'state.stdout.log'
+            $stateStderr = Join-Path $evidence 'state.stderr.log'
+            $stateProcess = Start-Process -FilePath wsl.exe `
+              -ArgumentList @('-d',$distro,'--',
+                '/usr/bin/setpriv',
+                '--reuid=10001','--regid=10001','--clear-groups','--no-new-privs',
+                '/usr/local/bin/foliorelay-state-fixture',
+                '-listen','0.0.0.0:18080',
+                '-journal','/tmp/foliorelay-state/journal.frj') `
+              -PassThru -NoNewWindow `
+              -RedirectStandardOutput $stateStdout `
+              -RedirectStandardError $stateStderr
+
+            $stateUri = "http://" + $wslIp + ":18080"
+            $stateReady = $false
+            for ($i=0; $i -lt 60; $i++) {
+              try {
+                $health = Get-ProxylessText ($stateUri + '/health')
+                if ($health -ne $null) { $stateReady = $true; break }
+              } catch {}
+              Start-Sleep -Seconds 1
+            }
+            if (-not $stateReady) { throw "Windows host could not reach WSL FolioRelay authority" }
+
+            $papplStdout = Join-Path $evidence 'pappl.stdout.log'
+            $papplStderr = Join-Path $evidence 'pappl.stderr.log'
+            $papplProcess = Start-Process -FilePath wsl.exe `
+              -ArgumentList @('-d',$distro,'--','env',
+                'LD_LIBRARY_PATH=/usr/lib/foliorelay-cups:/usr/lib',
+                'FOLIORELAY_INGEST_BIN=/usr/local/bin/foliorelay-ipp-ingest',
+                'FOLIORELAY_STATE_URL=http://127.0.0.1:18080',
+                'FOLIORELAY_INGRESS_STORE=/var/lib/foliorelay-artifacts',
+                'FOLIORELAY_MAX_INGRESS_BYTES=104857600',
+                'FOLIORELAY_PAPPL_SPOOL=/var/lib/pappl',
+                'FOLIORELAY_PAPPL_PORT=8633',
+                'HOME=/var/lib/pappl',
+                'TMPDIR=/tmp',
+                '/usr/bin/setpriv',
+                '--reuid=10001','--regid=10001','--clear-groups','--no-new-privs',
+                '/usr/local/bin/start-foliorelay-pappl') `
+              -PassThru -NoNewWindow `
+              -RedirectStandardOutput $papplStdout `
+              -RedirectStandardError $papplStderr
+
+            $ippReady = $false
+            for ($i=0; $i -lt 60; $i++) {
+              if (Test-DirectTcp $wslIp 8633) { $ippReady = $true; break }
+              Start-Sleep -Seconds 1
+            }
+            if (-not $ippReady) { throw "Windows host could not reach WSL PAPPL candidate" }
+
+            $ippUrl = "http://" + $wslIp + ":8633/ipp/print"
+            "ipp_url=$ippUrl" | Add-Content (Join-Path $evidence 'network.txt')
+            Add-Printer -Name $queue -IppURL $ippUrl
+
+            $printer = Get-Printer -Name $queue
+            $printer | Format-List * | Out-String |
+              Set-Content (Join-Path $evidence 'printer.txt')
+            Get-PrinterDriver -Name $printer.DriverName |
+              Format-List * | Out-String |
+              Set-Content (Join-Path $evidence 'driver.txt')
+            Get-PrinterPort -Name $printer.PortName |
+              Format-List * | Out-String |
+              Set-Content (Join-Path $evidence 'port.txt')
+
+            if ($printer.DriverName -notmatch 'IPP') {
+              throw "Windows did not bind an IPP class driver: $($printer.DriverName)"
+            }
+
+            $before = Get-ProxylessText ($stateUri + '/v1/stats')
+            "FolioRelay Windows native IPP probe $env:GITHUB_RUN_ID" |
+              Out-Printer -Name $queue
+
+            $advanced = $false
+            for ($i=0; $i -lt 90; $i++) {
+              $after = Get-ProxylessText ($stateUri + '/v1/stats')
+              $beforeObj = $before | ConvertFrom-Json
+              $afterObj = $after | ConvertFrom-Json
+              if ($afterObj.accepted -gt $beforeObj.accepted) {
+                $advanced = $true
+                break
+              }
+              Start-Sleep -Seconds 1
+            }
+
+            $after = Get-ProxylessText ($stateUri + '/v1/stats')
+            $before | Set-Content (Join-Path $evidence 'before-stats.json')
+            $after | Set-Content (Join-Path $evidence 'after-stats.json')
+            Get-PrintJob -PrinterName $queue -ErrorAction SilentlyContinue |
+              Format-List * | Out-String |
+              Set-Content (Join-Path $evidence 'print-jobs.txt')
+            Get-WinEvent -LogName 'Microsoft-Windows-PrintService/Admin' -MaxEvents 100 -ErrorAction SilentlyContinue |
+              Format-List * | Out-String |
+              Set-Content (Join-Path $evidence 'printservice-admin.txt')
+            Get-WinEvent -LogName 'Microsoft-Windows-PrintService/Operational' -MaxEvents 100 -ErrorAction SilentlyContinue |
+              Format-List * | Out-String |
+              Set-Content (Join-Path $evidence 'printservice-operational.txt')
+
+            if (-not $advanced) {
+              throw "Windows native spooler job did not advance FolioRelay durable acceptance"
+            }
+
+            $beforeObj = $before | ConvertFrom-Json
+            $afterObj = $after | ConvertFrom-Json
+            if ($afterObj.conflicts -ne $beforeObj.conflicts) {
+              throw "Windows native spooler job created an idempotency conflict"
+            }
+
+            @{
+              platform = 'windows-2025'
+              native_print_subsystem = 'PrintManagement/Spooler'
+              add_printer_parameter = 'IppURL'
+              driver = $printer.DriverName
+              ipp_url = $ippUrl
+              wsl_networking = 'nat-direct-ip'
+              candidate = 'pappl-v1.4.12'
+              durable_acceptance = 'pass'
+              idempotency_conflicts = 0
+            } | ConvertTo-Json -Depth 5 |
+              Set-Content (Join-Path $evidence 'result.json')
+          }
+          finally {
+            Get-Printer -Name $queue -ErrorAction SilentlyContinue |
+              Remove-Printer -ErrorAction SilentlyContinue
+            if ($null -ne $papplProcess -and -not $papplProcess.HasExited) {
+              Stop-Process -Id $papplProcess.Id -Force -ErrorAction SilentlyContinue
+            }
+            if ($null -ne $stateProcess -and -not $stateProcess.HasExited) {
+              Stop-Process -Id $stateProcess.Id -Force -ErrorAction SilentlyContinue
+            }
+            & wsl.exe --terminate $distro 2>$null | Out-Null
+            & wsl.exe --unregister $distro 2>$null | Out-Null
+            foreach ($port in @(18080,8633)) {
+              Remove-NetFirewallHyperVRule -Name "$rulePrefix-$port" -ErrorAction SilentlyContinue
+            }
+          }
+
+      - name: Upload Windows native PAPPL evidence
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: windows-native-pappl
+          path: ${{ runner.temp }}\windows-native-pappl-evidence
+          if-no-files-found: warn
+          retention-days: 14
+
+
+  prepare-cups-rootfs:
+    name: Prepare pinned CUPS WSL rootfs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout FolioRelay
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set up Go 1.27
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.1'
+          cache: false
+
+      - name: Build real packaged CUPS candidate rootfs
+        shell: bash
+        run: |
+          set -euo pipefail
+          image=foliorelay-cups-wsl:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}
+
+          docker build \
+            -f deploy/engineering-cups/Dockerfile \
+            --target cups \
+            -t "$image" \
+            .
+
+          CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' \
+            -o "$RUNNER_TEMP/foliorelay-state-fixture" \
+            ./cmd/foliorelay-state-fixture
+
+          cid="$(docker create "$image")"
+          trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+          docker cp "$RUNNER_TEMP/foliorelay-state-fixture" \
+            "$cid:/usr/local/bin/foliorelay-state-fixture"
+
+          docker export "$cid" -o "$RUNNER_TEMP/foliorelay-cups-wsl-rootfs.tar"
+          sha256sum "$RUNNER_TEMP/foliorelay-cups-wsl-rootfs.tar" \
+            | tee "$RUNNER_TEMP/foliorelay-cups-wsl-rootfs.sha256"
+          docker image inspect "$image" >"$RUNNER_TEMP/cups-image-inspect.json"
+
+      - name: Upload CUPS WSL rootfs
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: foliorelay-cups-wsl-rootfs
+          path: |
+            ${{ runner.temp }}/foliorelay-cups-wsl-rootfs.tar
+            ${{ runner.temp }}/foliorelay-cups-wsl-rootfs.sha256
+            ${{ runner.temp }}/cups-image-inspect.json
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0
+
+  windows-native-cups:
+    name: Windows native IPP client -> CUPS in WSL2
+    needs: prepare-cups-rootfs
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - name: Checkout FolioRelay
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Download CUPS WSL rootfs
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: foliorelay-cups-wsl-rootfs
+          path: ${{ runner.temp }}\foliorelay-cups-wsl-rootfs
+
+      - name: Run CUPS candidate and print through native Windows spooler
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $distro = "FolioRelayCUPS-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          $install = Join-Path $env:RUNNER_TEMP 'foliorelay-cups-wsl-install'
+          $artifact = Join-Path $env:RUNNER_TEMP 'foliorelay-cups-wsl-rootfs'
+          $rootfs = Join-Path $artifact 'foliorelay-cups-wsl-rootfs.tar'
+          $evidence = Join-Path $env:RUNNER_TEMP 'windows-native-cups-evidence'
+          $queue = "FolioRelayCUPS-$env:GITHUB_RUN_ID"
+          New-Item -ItemType Directory -Force -Path $install,$evidence | Out-Null
+
+          function Test-DirectTcp([string]$HostName, [int]$Port, [int]$TimeoutMs = 2000) {
+            $client = [System.Net.Sockets.TcpClient]::new()
+            try {
+              $task = $client.ConnectAsync($HostName, $Port)
+              if (-not $task.Wait($TimeoutMs)) { return $false }
+              return $client.Connected
+            } catch {
+              return $false
+            } finally {
+              $client.Dispose()
+            }
+          }
+
+          function Get-ProxylessText([string]$Uri) {
+            $handler = [System.Net.Http.HttpClientHandler]::new()
+            $handler.UseProxy = $false
+            $client = [System.Net.Http.HttpClient]::new($handler)
+            $client.Timeout = [TimeSpan]::FromSeconds(4)
+            try {
+              return $client.GetStringAsync($Uri).GetAwaiter().GetResult()
+            } finally {
+              $client.Dispose()
+              $handler.Dispose()
+            }
+          }
+
+          $wslConfig = Join-Path $env:USERPROFILE '.wslconfig'
+          @"
+          [wsl2]
+          networkingMode=nat
+          localhostForwarding=true
+          "@ | Set-Content -Encoding ascii $wslConfig
+          & wsl.exe --shutdown
+          Start-Sleep -Seconds 2
+
+          $wslVmCreatorId = '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}'
+          $rulePrefix = "FolioRelay-CUPS-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          $hyperVSetting = Get-NetFirewallHyperVVMSetting -Name $wslVmCreatorId -ErrorAction SilentlyContinue
+          if ($hyperVSetting) {
+            Set-NetFirewallHyperVVMSetting -Name $wslVmCreatorId -LoopbackEnabled True
+          } else {
+            New-NetFirewallHyperVVMSetting -Name $wslVmCreatorId -LoopbackEnabled True | Out-Null
+          }
+          foreach ($port in @(18080,8634,8635)) {
+            $ruleName = "$rulePrefix-$port"
+            Remove-NetFirewallHyperVRule -Name $ruleName -ErrorAction SilentlyContinue
+            New-NetFirewallHyperVRule `
+              -Name $ruleName `
+              -DisplayName "FolioRelay CUPS native qualification TCP $port" `
+              -Direction Inbound `
+              -Action Allow `
+              -VMCreatorId $wslVmCreatorId `
+              -Protocol TCP `
+              -LocalPorts $port | Out-Null
+          }
+
+          $stateProcess = $null
+          $cupsProcess = $null
+          try {
+            Remove-Printer -Name $queue -ErrorAction SilentlyContinue
+            & wsl.exe --unregister $distro 2>$null | Out-Null
+            & wsl.exe --import $distro $install $rootfs --version 2
+            if ($LASTEXITCODE -ne 0) { throw "wsl --import failed rc=$LASTEXITCODE" }
+
+            & wsl.exe -d $distro -- sh -c 'mkdir -p /etc/cups /var/lib/cups/ssl /var/cache/cups /var/spool/cups/tmp /var/log/cups /var/lib/foliorelay-artifacts /tmp/foliorelay-state; chown -R 10001:10001 /etc/cups /var/lib/cups /var/cache/cups /var/spool/cups /var/log/cups /var/lib/foliorelay-artifacts /tmp/foliorelay-state'
+            if ($LASTEXITCODE -ne 0) { throw "unable to prepare CUPS writable paths" }
+
+            & wsl.exe -d $distro -- uname -a |
+              Tee-Object -FilePath (Join-Path $evidence 'uname.txt')
+            $cupsProbe = & wsl.exe -d $distro -- sh -lc 'LD_LIBRARY_PATH=/usr/lib/foliorelay-cups:/usr/lib ldd /usr/sbin/cupsd' 2>&1
+            $cupsProbe | Out-String | Set-Content (Join-Path $evidence 'cups-binary-probe.txt')
+            if ($LASTEXITCODE -ne 0) { throw "CUPS runtime library closure probe failed rc=$LASTEXITCODE" }
+            if (($cupsProbe | Out-String) -match 'not found') { throw "CUPS runtime library closure contains unresolved dependency" }
+
+            $wslIpRaw = (& wsl.exe -d $distro -- hostname -I | Out-String).Trim()
+            $validIpv4 = @()
+            foreach ($token in @($wslIpRaw -split '\s+' | Where-Object { $_ })) {
+              $parsed = $null
+              if ([System.Net.IPAddress]::TryParse($token, [ref]$parsed) -and
+                  $parsed.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork -and
+                  -not $parsed.IPAddressToString.StartsWith('127.')) {
+                $validIpv4 += $parsed.IPAddressToString
+              }
+            }
+            $wslIp = @($validIpv4)[0]
+            if (-not $wslIp) { throw "no usable WSL IPv4 address" }
+            "wsl_ip=$wslIp" | Set-Content (Join-Path $evidence 'network.txt')
+
+            $stateStdout = Join-Path $evidence 'state.stdout.log'
+            $stateStderr = Join-Path $evidence 'state.stderr.log'
+            $stateProcess = Start-Process -FilePath wsl.exe `
+              -ArgumentList @('-d',$distro,'--',
+                '/usr/bin/setpriv',
+                '--reuid=10001','--regid=10001','--clear-groups','--no-new-privs',
+                '/usr/local/bin/foliorelay-state-fixture',
+                '-listen','0.0.0.0:18080',
+                '-journal','/tmp/foliorelay-state/journal.frj') `
+              -PassThru -NoNewWindow `
+              -RedirectStandardOutput $stateStdout `
+              -RedirectStandardError $stateStderr
+
+            $stateUri = "http://" + $wslIp + ":18080"
+            $stateReady = $false
+            for ($i=0; $i -lt 60; $i++) {
+              try {
+                $health = Get-ProxylessText ($stateUri + '/health')
+                if ($health -ne $null) { $stateReady = $true; break }
+              } catch {}
+              Start-Sleep -Seconds 1
+            }
+            if (-not $stateReady) { throw "Windows host could not reach WSL FolioRelay authority" }
+
+            $cupsStdout = Join-Path $evidence 'cups.stdout.log'
+            $cupsStderr = Join-Path $evidence 'cups.stderr.log'
+            $cupsProcess = Start-Process -FilePath wsl.exe `
+              -ArgumentList @('-d',$distro,'--','env',
+                'LD_LIBRARY_PATH=/usr/lib/foliorelay-cups:/usr/lib',
+                'FOLIORELAY_INGEST_BIN=/usr/local/bin/foliorelay-ipp-ingest',
+                'FOLIORELAY_STATE_URL=http://127.0.0.1:18080',
+                'FOLIORELAY_INGRESS_STORE=/var/lib/foliorelay-artifacts',
+                'FOLIORELAY_MAX_INGRESS_BYTES=104857600',
+                '/usr/bin/setpriv',
+                '--reuid=10001','--regid=10001','--clear-groups','--no-new-privs',
+                '/usr/local/bin/start-foliorelay-cups') `
+              -PassThru -NoNewWindow `
+              -RedirectStandardOutput $cupsStdout `
+              -RedirectStandardError $cupsStderr
+
+            $ippReady = $false
+            for ($i=0; $i -lt 60; $i++) {
+              if (Test-DirectTcp $wslIp 8634) { $ippReady = $true; break }
+              Start-Sleep -Seconds 1
+            }
+            if (-not $ippReady) { throw "Windows host could not reach WSL CUPS candidate" }
+
+            $ippUrl = "http://" + $wslIp + ":8634/printers/FolioRelay"
+            "ipp_url=$ippUrl" | Add-Content (Join-Path $evidence 'network.txt')
+            Add-Printer -Name $queue -IppURL $ippUrl
+
+            $printer = Get-Printer -Name $queue
+            $printer | Format-List * | Out-String |
+              Set-Content (Join-Path $evidence 'printer.txt')
+            Get-PrinterDriver -Name $printer.DriverName |
+              Format-List * | Out-String |
+              Set-Content (Join-Path $evidence 'driver.txt')
+            Get-PrinterPort -Name $printer.PortName |
+              Format-List * | Out-String |
+              Set-Content (Join-Path $evidence 'port.txt')
+
+            if ($printer.DriverName -notmatch 'IPP') {
+              throw "Windows did not bind an IPP class driver: $($printer.DriverName)"
+            }
+
+            $before = Get-ProxylessText ($stateUri + '/v1/stats')
+            "FolioRelay Windows native CUPS probe $env:GITHUB_RUN_ID" |
+              Out-Printer -Name $queue
+
+            $advanced = $false
+            for ($i=0; $i -lt 90; $i++) {
+              $after = Get-ProxylessText ($stateUri + '/v1/stats')
+              $beforeObj = $before | ConvertFrom-Json
+              $afterObj = $after | ConvertFrom-Json
+              if ($afterObj.accepted -gt $beforeObj.accepted) {
+                $advanced = $true
+                break
+              }
+              Start-Sleep -Seconds 1
+            }
+
+            $after = Get-ProxylessText ($stateUri + '/v1/stats')
+            $before | Set-Content (Join-Path $evidence 'before-stats.json')
+            $after | Set-Content (Join-Path $evidence 'after-stats.json')
+            Get-PrintJob -PrinterName $queue -ErrorAction SilentlyContinue |
+              Format-List * | Out-String |
+              Set-Content (Join-Path $evidence 'print-jobs.txt')
+            Get-WinEvent -LogName 'Microsoft-Windows-PrintService/Admin' -MaxEvents 100 -ErrorAction SilentlyContinue |
+              Format-List * | Out-String |
+              Set-Content (Join-Path $evidence 'printservice-admin.txt')
+            Get-WinEvent -LogName 'Microsoft-Windows-PrintService/Operational' -MaxEvents 100 -ErrorAction SilentlyContinue |
+              Format-List * | Out-String |
+              Set-Content (Join-Path $evidence 'printservice-operational.txt')
+
+            if (-not $advanced) {
+              throw "Windows native spooler job did not advance FolioRelay durable acceptance"
+            }
+
+            $beforeObj = $before | ConvertFrom-Json
+            $afterObj = $after | ConvertFrom-Json
+            if ($afterObj.conflicts -ne $beforeObj.conflicts) {
+              throw "Windows native spooler job created an idempotency conflict"
+            }
+
+            @{
+              platform = 'windows-2025'
+              native_print_subsystem = 'PrintManagement/Spooler'
+              add_printer_parameter = 'IppURL'
+              driver = $printer.DriverName
+              ipp_url = $ippUrl
+              wsl_networking = 'nat-direct-ip'
+              candidate = 'cups-v2.4.19'
+              durable_acceptance = 'pass'
+              idempotency_conflicts = 0
+            } | ConvertTo-Json -Depth 5 |
+              Set-Content (Join-Path $evidence 'result.json')
+          }
+          finally {
+            & wsl.exe -d $distro -- sh -c 'cat /var/log/cups/error_log 2>/dev/null || true' 2>$null |
+              Out-String | Set-Content (Join-Path $evidence 'cups-error.log')
+            Get-Printer -Name $queue -ErrorAction SilentlyContinue |
+              Remove-Printer -ErrorAction SilentlyContinue
+            if ($null -ne $cupsProcess -and -not $cupsProcess.HasExited) {
+              Stop-Process -Id $cupsProcess.Id -Force -ErrorAction SilentlyContinue
+            }
+            if ($null -ne $stateProcess -and -not $stateProcess.HasExited) {
+              Stop-Process -Id $stateProcess.Id -Force -ErrorAction SilentlyContinue
+            }
+            & wsl.exe --terminate $distro 2>$null | Out-Null
+            & wsl.exe --unregister $distro 2>$null | Out-Null
+            foreach ($port in @(18080,8634,8635)) {
+              Remove-NetFirewallHyperVRule -Name "$rulePrefix-$port" -ErrorAction SilentlyContinue
+            }
+          }
+
+      - name: Upload Windows native CUPS evidence
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: windows-native-cups
+          path: ${{ runner.temp }}\windows-native-cups-evidence
+          if-no-files-found: warn
+          retention-days: 14

@@ -1,0 +1,160 @@
+name: CUPS AirPrint URF Production Gate
+
+on:
+  pull_request:
+    paths:
+      - 'deploy/engineering-cups/**'
+      - 'experiments/print-substrate/cups-backend.sh'
+      - 'experiments/print-substrate/cups-foliorelay.ppd'
+      - 'experiments/airprint/**'
+      - '.github/workflows/cups-airprint-urf.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cups-airprint-urf:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout FolioRelay
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Install IPP and DNS-SD tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends             avahi-daemon avahi-utils dbus cups-ipp-utils libcups2-dev build-essential jq
+          sudo mkdir -p /run/dbus
+          pgrep -x dbus-daemon >/dev/null 2>&1 || sudo dbus-daemon --system --fork
+          sudo systemctl restart avahi-daemon || true
+
+      - name: Prepare canonical public identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          public_host="$(hostname).local"
+          echo "PUBLIC_HOST=$public_host" >>"$GITHUB_ENV"
+          cat >"$RUNNER_TEMP/airprint-override.yml" <<'YAML'
+          services:
+            cups:
+              environment:
+                FOLIORELAY_PUBLIC_HOST: ${PUBLIC_HOST}
+          YAML
+
+      - name: Start selected packaged CUPS runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose             -f deploy/engineering-cups/compose.yaml             -f "$RUNNER_TEMP/airprint-override.yml"             up -d --build
+          for i in $(seq 1 60); do
+            curl -fsS -o /dev/null http://127.0.0.1:18080/health && break
+            sleep 1
+          done
+          curl -fsS -o /dev/null http://127.0.0.1:18080/health
+
+      - name: Prove public URI and truthful URF capability
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/cups-airprint-evidence"
+          mkdir -p "$evidence"
+
+          for i in $(seq 1 20); do
+            avahi-resolve-host-name "$PUBLIC_HOST" >"$evidence/public-host.txt" 2>&1 && break
+            sleep 1
+          done
+          avahi-resolve-host-name "$PUBLIC_HOST" >>"$evidence/public-host.txt"
+
+          uri="ipp://$PUBLIC_HOST:8634/printers/FolioRelay"
+          printf '%s\n' "$uri" >"$evidence/public-printer-uri.txt"
+          ipptool -tv "$uri" /usr/share/cups/ipptool/get-printer-attributes.test             >"$evidence/get-printer-attributes.txt"
+
+          grep -Fq "$uri" "$evidence/get-printer-attributes.txt"
+          grep -Eq 'document-format-supported.*image/urf' "$evidence/get-printer-attributes.txt"
+          grep -q 'urf-supported' "$evidence/get-printer-attributes.txt"
+
+          printer_uuid="$(awk '/printer-uuid .* = urn:uuid:/ {print $NF; exit}' "$evidence/get-printer-attributes.txt")"
+          urf="$(sed -n 's/.*urf-supported[^=]*= //p' "$evidence/get-printer-attributes.txt" | head -1 | tr -d '\r')"
+          test -n "$printer_uuid"
+          test -n "$urf"
+
+          avahi-publish-service             --host="$PUBLIC_HOST"             --subtype="_universal._sub._ipp._tcp"             "FolioRelay CUPS AirPrint" _ipp._tcp 8634             'rp=printers/FolioRelay'             'pdl=application/pdf,image/urf'             "URF=$urf"             'product=(FolioRelay Virtual Printer)'             'ty=FolioRelay Virtual Printer'             'txtvers=1' 'qtotal=1'             "UUID=${printer_uuid#urn:uuid:}"             >"$evidence/avahi-publish.log" 2>&1 &
+          echo $! >"$evidence/avahi-publish.pid"
+
+          for i in $(seq 1 20); do
+            timeout 3 avahi-browse -rt _universal._sub._ipp._tcp               >"$evidence/avahi-universal.txt" 2>&1 || true
+            grep -q "FolioRelay CUPS AirPrint" "$evidence/avahi-universal.txt" && exit 0
+            sleep 1
+          done
+          exit 1
+
+      - name: Submit Apple Raster and prove exact source preservation
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/cups-airprint-evidence"
+          curl -fsS http://127.0.0.1:18080/v1/stats >"$evidence/stats-before.json"
+
+          cc -O2 -Wall -Wextra -Werror             -o "$RUNNER_TEMP/generate-urf" experiments/airprint/generate-urf.c -lcups
+          urf_file="$RUNNER_TEMP/foliorelay.urf"
+          "$RUNNER_TEMP/generate-urf" "$urf_file"
+          test "$(head -c 7 "$urf_file")" = "UNIRAST"
+          sha256sum "$urf_file" >"$evidence/generated-urf.sha256"
+
+          cat >"$RUNNER_TEMP/print-urf.test" <<TEST
+          {
+            NAME "FolioRelay generated Apple Raster"
+            OPERATION Print-Job
+            GROUP operation-attributes-tag
+            ATTR charset attributes-charset utf-8
+            ATTR language attributes-natural-language en
+            ATTR uri printer-uri \$uri
+            ATTR name requesting-user-name \$user
+            ATTR name job-name "FolioRelay AirPrint URF"
+            ATTR mimeMediaType document-format image/urf
+            FILE "$urf_file"
+            STATUS successful-ok
+          }
+          TEST
+
+          uri="ipp://$PUBLIC_HOST:8634/printers/FolioRelay"
+          ipptool -tv "$uri" "$RUNNER_TEMP/print-urf.test" >"$evidence/print-urf.txt"
+
+          for i in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:18080/v1/stats >"$evidence/stats-after.json"
+            [ "$(jq -r .accepted "$evidence/stats-after.json")" = "1" ] && break
+            sleep 1
+          done
+          test "$(jq -r .accepted "$evidence/stats-after.json")" = "1"
+          test "$(jq -r .conflicts "$evidence/stats-after.json")" = "0"
+
+          generated_sha="$(awk '{print $1}' "$evidence/generated-urf.sha256")"
+          stored_sha="$(docker compose             -f deploy/engineering-cups/compose.yaml             -f "$RUNNER_TEMP/airprint-override.yml"             exec -T cups sh -ec 'f="$(find /var/lib/foliorelay-artifacts/sha256 -type f | head -1)"; sha256sum "$f"'             | awk '{print $1}')"
+          test "$stored_sha" = "$generated_sha"
+          printf '%s\n' "$stored_sha" >"$evidence/stored-urf.sha256"
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: cups-airprint-urf-production
+          path: ${{ runner.temp }}/cups-airprint-evidence
+          if-no-files-found: warn
+          retention-days: 14
+          compression-level: 0
+
+      - name: Stop runtime
+        if: always()
+        shell: bash
+        run: |
+          if [ -f "$RUNNER_TEMP/cups-airprint-evidence/avahi-publish.pid" ]; then
+            kill "$(cat "$RUNNER_TEMP/cups-airprint-evidence/avahi-publish.pid")" 2>/dev/null || true
+          fi
+          docker compose             -f deploy/engineering-cups/compose.yaml             -f "$RUNNER_TEMP/airprint-override.yml"             down -v || true

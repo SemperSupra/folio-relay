@@ -1,0 +1,186 @@
+schema_version: 2
+product: FolioRelay
+status: candidate
+
+principles:
+  stateless_disposable_runtime: required
+  persistent_state_external: required
+  multi_stage_builds: required
+  immutable_release_inputs: required
+  sbom_attestation: required
+  provenance_attestation: required
+  read_only_rootfs: required
+  no_new_privileges: required
+  drop_all_capabilities_by_default: required
+  build_secrets_in_layers: prohibited
+  floating_source_inputs: prohibited
+  mixed_stable_and_edge_repositories: prohibited
+  multicall_all_roles_binary: prohibited
+  file_capabilities_on_application_binary: prohibited
+  least_mount_visibility: required
+  least_network_reachability: required
+
+shared_build:
+  language: go
+  version_family: "1.27"
+  cgo_default: false
+  application_runtime: static-go-role-binary
+  preferred_core_base: distroless-static-debian13-nonroot
+
+roles:
+  control:
+    image_class: core
+    root_allowed: false
+    network:
+      inbound:
+        - management-api
+      outbound: []
+    capabilities: []
+    devices: []
+    credentials:
+      - scoped-control-plane-auth
+    persistent_mounts:
+      - desired-state
+      - status-metadata
+    forbidden_mounts:
+      - raw-printer-device
+      - sender-secrets
+      - renderer-scratch
+    read_only_rootfs: true
+
+  normalizer:
+    image_class: core
+    root_allowed: false
+    network: none
+    capabilities: []
+    devices: []
+    credentials: []
+    persistent_mounts:
+      - ingress-spool
+      - artifact-store
+      - normalization-ledger
+    read_only_rootfs: true
+
+  fax_null:
+    image_class: core
+    root_allowed: false
+    network: none
+    capabilities: []
+    devices: []
+    credentials: []
+    persistent_mounts:
+      - fax-outbox
+      - fax-status
+    read_only_rootfs: true
+
+  email_null:
+    image_class: core
+    root_allowed: false
+    network: none
+    capabilities: []
+    devices: []
+    credentials: []
+    persistent_mounts:
+      - email-outbox
+      - email-status
+    read_only_rootfs: true
+
+  cups:
+    image_class: cups
+    root_allowed: exception-documented-and-minimized
+    network:
+      inbound:
+        - ipp
+        - qualified-dnssd-when-enabled
+      outbound:
+        - approved-printer-destinations-only
+    capabilities: experimentally-minimized
+    devices:
+      - usb-printer-only-when-explicitly-enabled
+    credentials:
+      - cups-bootstrap-secret-only-if-still-required
+    persistent_mounts:
+      - cups-config
+      - accepted-job-spool
+    cups_request_root_must_be_external: true
+    legacy_driver_bundles_default: false
+
+  cups_agent:
+    image_class: core
+    root_allowed: false
+    network: local-cups-boundary-only
+    capabilities: []
+    devices: []
+    credentials: []
+    persistent_mounts:
+      - desired-printer-state
+      - cups-runtime-socket
+    read_only_rootfs: true
+
+  renderer:
+    image_class: renderer
+    root_allowed: false
+    network: none-by-default
+    capabilities: []
+    devices: []
+    credentials: []
+    persistent_mounts:
+      - read-only-input-artifact
+      - bounded-output
+    ephemeral_mounts:
+      - per-job-scratch
+    read_only_rootfs: true
+
+  inspector_local:
+    image_class: inspector
+    root_allowed: false
+    network: none-or-local-unix-socket
+    capabilities: []
+    devices: []
+    credentials: []
+    persistent_mounts:
+      - read-only-input-artifact-or-stream
+      - inspector-definition-store
+    read_only_rootfs: true
+
+  inspector_external:
+    image_class: inspector
+    root_allowed: false
+    network: explicit-inspector-endpoint-only
+    capabilities: []
+    devices: []
+    credentials:
+      - only-that-inspector-secret
+    persistent_mounts:
+      - inspector-result-cache
+    external_content_egress_default: deny
+    read_only_rootfs: true
+
+  sender:
+    image_class: sender
+    root_allowed: false
+    network: plugin-specific-egress-only
+    capabilities: []
+    devices: []
+    credentials:
+      - only-that-sender-secret
+    persistent_mounts:
+      - channel-outbox
+      - channel-result-state
+    read_only_rootfs: true
+
+release_evidence:
+  - oci_digest
+  - multiarch_manifest
+  - sbom
+  - provenance
+  - vulnerability_scan
+  - package_inventory
+  - executable_inventory
+  - runtime_security_inspection
+  - mount_visibility_matrix
+  - network_reachability_matrix
+  - disposable_runtime_recovery
+  - chaos_stress_results
+  - hostile_document_results
+  - fuzz_results

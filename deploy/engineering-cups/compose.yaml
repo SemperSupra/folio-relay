@@ -1,0 +1,47 @@
+services:
+  state:
+    build:
+      context: ../..
+      dockerfile: deploy/engineering-cups/Dockerfile
+      target: state
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - state-data:/state
+    ports:
+      - "127.0.0.1:18080:18080"
+
+  cups:
+    build:
+      context: ../..
+      dockerfile: deploy/engineering-cups/Dockerfile
+      target: cups
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      - state
+    ports:
+      - "8634:8634"
+      - "8635:8635"
+    volumes:
+      - cups-state:/var/lib/cups
+      - cups-spool:/var/spool/cups
+      - artifacts:/var/lib/foliorelay-artifacts
+    tmpfs:
+      - /etc/cups:rw,noexec,nosuid,nodev,size=4m,uid=10001,gid=10001,mode=0750
+      - /var/cache/cups:rw,noexec,nosuid,nodev,size=16m,uid=10001,gid=10001,mode=0750
+      - /var/log/cups:rw,noexec,nosuid,nodev,size=16m,uid=10001,gid=10001,mode=0750
+
+volumes:
+  state-data:
+  cups-state:
+  cups-spool:
+  artifacts:

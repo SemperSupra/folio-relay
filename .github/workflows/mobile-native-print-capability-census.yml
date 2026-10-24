@@ -1,0 +1,514 @@
+name: Mobile Native Print Capability Census
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/mobile-native-print-capability-census.yml'
+      - 'experiments/mobile/ios-print-capability/**'
+      - 'scripts/mobile/**'
+      - 'docs/NATIVE_CLIENT_MATRIX.md'
+      - 'contracts/print-substrate-evaluation.yaml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ios-simulator:
+    name: iOS Simulator native print framework
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - name: Checkout FolioRelay
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Census Xcode and simulator print surfaces
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/ios-print-capability"
+          mkdir -p "$evidence"
+
+          xcodebuild -version | tee "$evidence/xcode-version.txt"
+          xcrun simctl list runtimes -j >"$evidence/runtimes.json"
+          xcrun simctl list devicetypes -j >"$evidence/device-types.json"
+          xcrun simctl list devices -j >"$evidence/devices.json"
+          xcrun --sdk iphonesimulator --show-sdk-path >"$evidence/sdk-path.txt"
+          xcrun --sdk iphonesimulator --show-sdk-version >"$evidence/sdk-version.txt"
+
+          sdk="$(cat "$evidence/sdk-path.txt")"
+          test -f "$sdk/System/Library/Frameworks/UIKit.framework/Headers/UIPrintInteractionController.h"
+          grep -q 'printToPrinter\|print(to:'             "$sdk/System/Library/Frameworks/UIKit.framework/Headers/UIPrintInteractionController.h" || true
+
+          find /Applications -path '*PrinterSimulator.app' -print             >"$evidence/printer-simulator-paths.txt" 2>/dev/null || true
+
+      - name: Build and run UIKit printing capability probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/ios-print-capability"
+          app="$RUNNER_TEMP/FolioRelayPrintProbe.app"
+          mkdir -p "$app"
+
+          read -r runtime udid device_name < <(python3 - "$evidence/runtimes.json" "$evidence/devices.json" <<'PY'
+          import json, sys
+
+          runtimes = json.load(open(sys.argv[1])).get("runtimes", [])
+          devices = json.load(open(sys.argv[2])).get("devices", {})
+          available = {
+              r["identifier"]: r
+              for r in runtimes
+              if r.get("isAvailable") and r.get("platform") == "iOS"
+          }
+
+          def version(identifier):
+              runtime = available.get(identifier, {})
+              return tuple(int(x) for x in runtime.get("version", "0").split("."))
+
+          candidates = []
+          for runtime_id, items in devices.items():
+              if runtime_id not in available:
+                  continue
+              for device in items:
+                  if (
+                      device.get("isAvailable")
+                      and "iPhone" in device.get("name", "")
+                      and device.get("udid")
+                  ):
+                      candidates.append((version(runtime_id), runtime_id, device))
+
+          if not candidates:
+              raise SystemExit("no compatible available iPhone simulator device/runtime pair")
+
+          _, runtime_id, device = max(candidates, key=lambda item: item[0])
+          print(runtime_id, device["udid"], device["name"].replace(" ", "_"))
+          PY
+          )
+
+          printf '%s\n' "$runtime" >"$evidence/selected-runtime.txt"
+          printf '%s\n' "$device_name" >"$evidence/selected-device-name.txt"
+          printf '%s\n' "$udid" >"$evidence/udid.txt"
+
+          cleanup() {
+            xcrun simctl shutdown "$udid" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          xcrun simctl boot "$udid" >/dev/null 2>&1 || true
+          xcrun simctl bootstatus "$udid" -b
+
+          sdk="$(xcrun --sdk iphonesimulator --show-sdk-path)"
+          sdk_version="$(xcrun --sdk iphonesimulator --show-sdk-version)"
+          arch="$(uname -m)"
+          case "$arch" in
+            arm64) target="arm64-apple-ios${sdk_version}-simulator" ;;
+            x86_64) target="x86_64-apple-ios${sdk_version}-simulator" ;;
+            *) echo "unsupported macOS runner architecture: $arch" >&2; exit 1 ;;
+          esac
+
+          cp experiments/mobile/ios-print-capability/Info.plist "$app/Info.plist"
+          python3 scripts/make-probe-pdf.py "$app/probe.pdf"
+          xcrun --sdk iphonesimulator clang             -fobjc-arc -target "$target" -isysroot "$sdk"             -framework UIKit -framework Foundation             experiments/mobile/ios-print-capability/main.m             -o "$app/FolioRelayPrintProbe"
+          codesign --force --sign - "$app"
+
+          xcrun simctl install "$udid" "$app"
+          xcrun simctl launch "$udid" org.sempersupra.foliorelay.printprobe             | tee "$evidence/launch.txt"
+
+          for i in $(seq 1 30); do
+            data_container="$(xcrun simctl get_app_container "$udid" org.sempersupra.foliorelay.printprobe data 2>/dev/null || true)"
+            if [ -n "$data_container" ] && [ -f "$data_container/Documents/result.json" ]; then
+              cp "$data_container/Documents/result.json" "$evidence/result.json"
+              break
+            fi
+            sleep 1
+          done
+          test -s "$evidence/result.json"
+          cat "$evidence/result.json"
+
+      - name: Upload iOS evidence
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: ios-simulator-print-capability
+          path: ${{ runner.temp }}/ios-print-capability
+          if-no-files-found: error
+          retention-days: 14
+
+  android-emulator:
+    name: Android emulator native print framework
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout FolioRelay
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Enable KVM access
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"'             | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm || true
+          ls -l /dev/kvm || true
+
+      - name: Boot Android emulator and census real print framework
+        uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_7
+          cores: 2
+          ram-size: 2048M
+          emulator-boot-timeout: 900
+          script: bash scripts/mobile/android-print-capability.sh "$RUNNER_TEMP/android-print-capability"
+
+      - name: Upload Android evidence
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: android-emulator-print-capability
+          path: ${{ runner.temp }}/android-print-capability
+          if-no-files-found: warn
+          retention-days: 14
+
+
+  ios-pappl-native-print:
+    name: iOS Simulator native UIKit -> PAPPL
+    needs: ios-simulator
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - name: Checkout FolioRelay
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set up Go 1.27
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.1'
+          cache: false
+
+      - name: Install PAPPL build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew install openssl@3 jpeg-turbo libpng zlib
+
+      - name: Build exact PAPPL and FolioRelay bridge
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/bin"
+          go build -trimpath -o "$RUNNER_TEMP/bin/foliorelay-state-fixture" ./cmd/foliorelay-state-fixture
+          go build -trimpath -o "$RUNNER_TEMP/bin/foliorelay-ipp-ingest" ./cmd/foliorelay-ipp-ingest
+
+          pappl="$RUNNER_TEMP/pappl"
+          prefix="$RUNNER_TEMP/pappl-prefix"
+          arch="$(uname -m)"
+          git init "$pappl"
+          cd "$pappl"
+          git remote add origin https://github.com/michaelrsweet/pappl.git
+          git fetch --depth 1 origin 6db8e137557ad84662e78d24fdb2a591c621f4ac
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "6db8e137557ad84662e78d24fdb2a591c621f4ac"
+
+          export PKG_CONFIG_PATH="$(brew --prefix openssl@3)/lib/pkgconfig:$(brew --prefix jpeg-turbo)/lib/pkgconfig:$(brew --prefix libpng)/lib/pkgconfig:$(brew --prefix zlib)/lib/pkgconfig"
+          export CPPFLAGS="-I$(brew --prefix openssl@3)/include -I$(brew --prefix jpeg-turbo)/include -I$(brew --prefix libpng)/include -I$(brew --prefix zlib)/include"
+          export CFLAGS="-O2 -arch $arch"
+          export LDFLAGS="-arch $arch -L$(brew --prefix openssl@3)/lib -L$(brew --prefix jpeg-turbo)/lib -L$(brew --prefix libpng)/lib -L$(brew --prefix zlib)/lib"
+
+          ./configure \
+            --prefix="$prefix" \
+            --with-dnssd=no \
+            --with-tls=openssl \
+            --disable-libpam \
+            --disable-libusb \
+            --disable-shared
+          make -j"$(sysctl -n hw.ncpu)"
+          make install
+
+          export PKG_CONFIG_PATH="$prefix/lib/pkgconfig:$PKG_CONFIG_PATH"
+          cd "$GITHUB_WORKSPACE"
+          cc -D_DARWIN_C_SOURCE \
+            $(pkg-config --cflags pappl) \
+            -o "$RUNNER_TEMP/bin/foliorelay-pappl-ingress" \
+            experiments/print-substrate/pappl-ingress.c \
+            $(pkg-config --static --libs pappl)
+
+      - name: Start real PAPPL candidate
+        shell: bash
+        env:
+          FOLIORELAY_INGEST_BIN: ${{ runner.temp }}/bin/foliorelay-ipp-ingest
+          FOLIORELAY_STATE_URL: http://127.0.0.1:18080
+          FOLIORELAY_INGRESS_STORE: ${{ runner.temp }}/ios-pappl-ingress
+          FOLIORELAY_MAX_INGRESS_BYTES: '104857600'
+          FOLIORELAY_SUBSTRATE_INSTANCE: ios-pappl-${{ github.run_id }}-${{ github.run_attempt }}
+          FOLIORELAY_PAPPL_SPOOL: ${{ runner.temp }}/ios-pappl-spool
+          FOLIORELAY_PAPPL_PORT: '8633'
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/ios-pappl-evidence"
+          mkdir -p "$evidence" "$RUNNER_TEMP/ios-pappl-state" "$FOLIORELAY_INGRESS_STORE" "$FOLIORELAY_PAPPL_SPOOL"
+
+          "$RUNNER_TEMP/bin/foliorelay-state-fixture" \
+            -listen 127.0.0.1:18080 \
+            -journal "$RUNNER_TEMP/ios-pappl-state/journal.frj" \
+            >"$evidence/state.log" 2>&1 &
+          echo $! >"$evidence/state.pid"
+
+          for i in $(seq 1 30); do
+            curl -fsS -o /dev/null http://127.0.0.1:18080/health && break
+            sleep 1
+          done
+          curl -fsS -o /dev/null http://127.0.0.1:18080/health
+
+          "$RUNNER_TEMP/bin/foliorelay-pappl-ingress" >"$evidence/pappl.log" 2>&1 &
+          echo $! >"$evidence/pappl.pid"
+
+          testfile="$(find /usr/share/cups -type f -name get-printer-attributes.test -print -quit)"
+          test -n "$testfile"
+          for i in $(seq 1 45); do
+            ipptool -q ipp://127.0.0.1:8633/ipp/print "$testfile" && break
+            sleep 1
+          done
+          ipptool -q ipp://127.0.0.1:8633/ipp/print "$testfile"
+
+      - name: Print through UIKit UIPrinter
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/ios-pappl-evidence"
+          app="$RUNNER_TEMP/FolioRelayPrintProbe.app"
+          mkdir -p "$app"
+
+          xcrun simctl list runtimes -j >"$evidence/runtimes.json"
+          xcrun simctl list devices -j >"$evidence/devices.json"
+
+          read -r runtime udid device_name < <(python3 - "$evidence/runtimes.json" "$evidence/devices.json" <<'PY'
+          import json, sys
+          runtimes=json.load(open(sys.argv[1])).get("runtimes", [])
+          devices=json.load(open(sys.argv[2])).get("devices", {})
+          available={r["identifier"]: r for r in runtimes if r.get("isAvailable") and r.get("platform") == "iOS"}
+          def version(identifier):
+              return tuple(int(x) for x in available.get(identifier, {}).get("version","0").split("."))
+          candidates=[]
+          for runtime_id, items in devices.items():
+              if runtime_id not in available:
+                  continue
+              for device in items:
+                  if device.get("isAvailable") and "iPhone" in device.get("name","") and device.get("udid"):
+                      candidates.append((version(runtime_id), runtime_id, device))
+          if not candidates:
+              raise SystemExit("no compatible available iPhone simulator device/runtime pair")
+          _, runtime_id, device=max(candidates, key=lambda item: item[0])
+          print(runtime_id, device["udid"], device["name"].replace(" ", "_"))
+          PY
+          )
+
+          printf '%s\n' "$runtime" >"$evidence/selected-runtime.txt"
+          printf '%s\n' "$device_name" >"$evidence/selected-device-name.txt"
+          printf '%s\n' "$udid" >"$evidence/udid.txt"
+
+          xcrun simctl boot "$udid" >/dev/null 2>&1 || true
+          xcrun simctl bootstatus "$udid" -b
+
+          sdk="$(xcrun --sdk iphonesimulator --show-sdk-path)"
+          sdk_version="$(xcrun --sdk iphonesimulator --show-sdk-version)"
+          arch="$(uname -m)"
+          case "$arch" in
+            arm64) target="arm64-apple-ios${sdk_version}-simulator" ;;
+            x86_64) target="x86_64-apple-ios${sdk_version}-simulator" ;;
+            *) echo "unsupported macOS runner architecture: $arch" >&2; exit 1 ;;
+          esac
+
+          cp experiments/mobile/ios-print-capability/Info.plist "$app/Info.plist"
+          python3 scripts/make-probe-pdf.py "$app/probe.pdf"
+          xcrun --sdk iphonesimulator clang \
+            -fobjc-arc -target "$target" -isysroot "$sdk" \
+            -framework UIKit -framework Foundation \
+            experiments/mobile/ios-print-capability/main.m \
+            -o "$app/FolioRelayPrintProbe"
+          codesign --force --sign - "$app"
+          xcrun simctl install "$udid" "$app"
+
+          before="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+          printf '%s\n' "$before" >"$evidence/stats-before.json"
+
+          SIMCTL_CHILD_FOLIORELAY_PRINTER_URI=ipp://127.0.0.1:8633/ipp/print \
+            xcrun simctl launch "$udid" org.sempersupra.foliorelay.printprobe \
+            | tee "$evidence/launch.txt"
+
+          data_container=""
+          for i in $(seq 1 90); do
+            data_container="$(xcrun simctl get_app_container "$udid" org.sempersupra.foliorelay.printprobe data 2>/dev/null || true)"
+            if [ -n "$data_container" ] && [ -f "$data_container/Documents/result.json" ]; then
+              cp "$data_container/Documents/result.json" "$evidence/result.json"
+              break
+            fi
+            sleep 1
+          done
+          test -s "$evidence/result.json"
+          cat "$evidence/result.json"
+
+          after="$(curl -fsS http://127.0.0.1:18080/v1/stats)"
+          printf '%s\n' "$after" >"$evidence/stats-after.json"
+
+          python3 - "$evidence/result.json" "$before" "$after" "$evidence/delivery-classification.json" <<'PY'
+          import json, pathlib, sys
+          result=json.load(open(sys.argv[1]))
+          before=json.loads(sys.argv[2])
+          after=json.loads(sys.argv[3])
+
+          api_surface = (
+              result.get("printing_available") is True
+              and result.get("printer_contact_available") is True
+              and result.get("print_completed") is True
+          )
+          durable_delivery = (
+              after["accepted"] > before["accepted"]
+              and after["conflicts"] == before["conflicts"]
+          )
+          classification = {
+              "api_surface_available": api_surface,
+              "durable_delivery_observed": durable_delivery,
+              "hosted_simulator_faithful_for_admission": api_surface and durable_delivery,
+              "candidate_qualification": "pass" if api_surface and durable_delivery else "unqualified",
+              "reason": (
+                  "UIKit success callback and FolioRelay durable acceptance agree"
+                  if api_surface and durable_delivery
+                  else "hosted iOS Simulator API success did not prove delivery to real printer endpoint"
+              ),
+          }
+          pathlib.Path(sys.argv[4]).write_text(json.dumps(classification, indent=2, sort_keys=True)+"\n")
+          print(json.dumps(classification, sort_keys=True))
+
+          # This workflow is a capability/faithfulness experiment. API absence is
+          # a harness/platform failure; an API-success/no-delivery result is a
+          # valid negative finding and leaves iOS unqualified rather than red.
+          assert result.get("printing_available") is True, result
+          assert result.get("printer_contact_available") is True, result
+          assert result.get("print_completed") is True, result
+          assert after["conflicts"] == before["conflicts"], (before, after, result)
+          PY
+
+          xcrun simctl shutdown "$udid" >/dev/null 2>&1 || true
+
+      - name: Capture iOS PAPPL evidence
+        if: always()
+        shell: bash
+        run: |
+          evidence="$RUNNER_TEMP/ios-pappl-evidence"
+          mkdir -p "$evidence"
+          curl -fsS http://127.0.0.1:18080/v1/stats >"$evidence/stats-final.json" || true
+          if [ -f "$evidence/pappl.pid" ]; then kill "$(cat "$evidence/pappl.pid")" 2>/dev/null || true; fi
+          if [ -f "$evidence/state.pid" ]; then kill "$(cat "$evidence/state.pid")" 2>/dev/null || true; fi
+
+      - name: Upload iOS PAPPL evidence
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: ios-native-pappl
+          path: ${{ runner.temp }}/ios-pappl-evidence
+          if-no-files-found: error
+          retention-days: 14
+
+  android-pappl-native-print:
+    name: Android 15 PrintManager/BIPS -> PAPPL (archived reference)
+    needs: android-emulator
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Checkout FolioRelay
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Start real PAPPL candidate on Android-reachable IPP port
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat >"$RUNNER_TEMP/android-pappl-override.yml" <<'YAML'
+          services:
+            pappl:
+              ports:
+                - "631:8633"
+          YAML
+          docker compose \
+            -f deploy/engineering-pappl/compose.yaml \
+            -f "$RUNNER_TEMP/android-pappl-override.yml" \
+            up -d --build
+
+          for i in $(seq 1 60); do
+            curl -fsS -o /dev/null http://127.0.0.1:18081/health && break
+            sleep 1
+          done
+          curl -fsS -o /dev/null http://127.0.0.1:18081/health
+
+          python3 - <<'PY'
+          import socket, time
+          deadline = time.time() + 60
+          last = None
+          while time.time() < deadline:
+              try:
+                  with socket.create_connection(("127.0.0.1", 631), timeout=1):
+                      break
+              except OSError as error:
+                  last = error
+                  time.sleep(1)
+          else:
+              raise SystemExit(f"PAPPL candidate never listened on host port 631: {last}")
+          PY
+
+      - name: Enable KVM access
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm || true
+
+      - name: Print through Android PrintManager and stock BIPS
+        uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_7
+          cores: 2
+          ram-size: 2048M
+          emulator-boot-timeout: 900
+          script: bash scripts/mobile/build-android-print-probe.sh "$RUNNER_TEMP/android-pappl-build" && bash scripts/mobile/android-pappl-print.sh "$RUNNER_TEMP/android-pappl-evidence" "$RUNNER_TEMP/android-pappl-build/FolioRelayPrintProbe.apk"
+
+      - name: Capture Android PAPPL evidence
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/android-pappl-evidence"
+          curl -fsS http://127.0.0.1:18081/v1/stats >"$RUNNER_TEMP/android-pappl-evidence/stats-final.json" || true
+          docker compose \
+            -f deploy/engineering-pappl/compose.yaml \
+            -f "$RUNNER_TEMP/android-pappl-override.yml" \
+            logs --no-color >"$RUNNER_TEMP/android-pappl-evidence/candidate.log" 2>&1 || true
+
+      - name: Upload Android PAPPL evidence
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: android-native-pappl
+          path: ${{ runner.temp }}/android-pappl-evidence
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Stop Android PAPPL runtime
+        if: always()
+        shell: bash
+        run: |
+          docker compose \
+            -f deploy/engineering-pappl/compose.yaml \
+            -f "$RUNNER_TEMP/android-pappl-override.yml" \
+            down -v || true
