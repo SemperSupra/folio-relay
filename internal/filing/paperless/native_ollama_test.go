@@ -10,7 +10,6 @@ import (
  "fmt"
  "net/http"
  "os"
- "strings"
  "testing"
  "time"
 )
@@ -79,7 +78,6 @@ func TestNativeLocalOllamaSmoke(t *testing.T){
    }
    // Do not log raw document content, raw model response or arbitrary
    // model-selected path strings. All proposed paths remain untrusted.
-   _=strings.ToLower
  }
  report:=map[string]any{
    "source":"paperless-native-ollama",
