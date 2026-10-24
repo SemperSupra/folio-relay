@@ -1,6 +1,9 @@
 name: Paperless native filing disposable qualification
 
 on:
+  push:
+    branches:
+      - test/paperless-native-classifier-20261024
   pull_request:
     paths:
       - "internal/filing/paperless/**"
