@@ -37,7 +37,17 @@ test "$(stat -c '%a' "$exports")" = "2770" || {
   echo "fixture setgid/group inheritance failed" >&2; exit 1;
 }
 chmod 0700 -- "$canon"
-export_name="$(go run ./tools/qualify-smb-output -canonical "$canon" -export "$exports")"
+# The FolioRelay exporter must have an admitted primary share group.
+# Exercise that exact synthetic identity without broadening host membership.
+go build -trimpath -o "$work/qualify-smb-output" ./tools/qualify-smb-output
+export_name="$(sudo -u "$(id -un)" -g folio_ci_smb "$work/qualify-smb-output" -canonical "$canon" -export "$exports")"
+for p in "$exports/Prints" "$exports/Prints/2026"; do
+  test "$(stat -c '%a' "$p")" = "2770" || {
+    echo "nested export folder lacks admitted setgid/group access" >&2
+    stat -c '%a %U %G %n' "$p" >&2
+    exit 1
+  }
+done
 test -f "$exports/$export_name"
 file_mode="$(stat -c '%a' "$exports/$export_name")"
 test "$file_mode" = "660" || { echo "wrong exported mode $file_mode" >&2; exit 1; }
@@ -132,9 +142,9 @@ echo "SMB two named-user reads passed"
 # must never expose the canonical artifact directory or attached credentials.
 printf 'synthetic SMB client write\n' > "$work/user-upload.txt"
 smbclient //127.0.0.1/foliorelay-fixture -A "$work/folio_ci_rw1.auth" \
-  -c "put $work/user-upload.txt user-upload.txt" >/dev/null
+  -c "put $work/user-upload.txt Prints/2026/user-upload.txt" >/dev/null
 smbclient //127.0.0.1/foliorelay-fixture -A "$work/folio_ci_rw2.auth" \
-  -c 'del user-upload.txt' >/dev/null
+  -c 'del Prints/2026/user-upload.txt' >/dev/null
 echo "SMB two named-user writes passed"
 
 if smbclient //127.0.0.1/foliorelay-fixture -A "$work/folio_ci_denied.auth" \
@@ -144,7 +154,7 @@ if smbclient //127.0.0.1/foliorelay-fixture -A "$work/folio_ci_denied.auth" \
 fi
 
 smbclient //127.0.0.1/foliorelay-fixture -A "$work/folio_ci_rw1.auth" \
-  -c "rename $export_name renamed-by-client.pdf; del renamed-by-client.pdf" >/dev/null
+  -c "rename $export_name Prints/2026/renamed-by-client.pdf; del Prints/2026/renamed-by-client.pdf" >/dev/null
 test ! -e "$exports/$export_name"
 canonical_after="$(sha256sum "$source_path" | cut -d' ' -f1)"
 test "$canonical_before" = "$canonical_after" || {

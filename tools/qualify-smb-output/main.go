@@ -30,6 +30,7 @@ func main() {
 	if err!=nil {panic(err)}
 	defer worker.Close()
 	p,err:=frExport.MakePlan(frExport.Defaults{
+		Folder:"Prints/2026",
 		FilenameTemplate:"smb-smoke-{job_id}",
 	},frExport.Overrides{},frExport.Job{
 		JobID:"job-"+strings.Repeat("a",64),
