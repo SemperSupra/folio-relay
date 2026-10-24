@@ -14,7 +14,6 @@ import (
  "testing"
  "errors"
 
- "github.com/SemperSupra/folio-relay/internal/state"
  "time"
 )
 
@@ -106,8 +105,9 @@ func TestDisposableRealPaperless313(t *testing.T){
  // POST of identical bytes can create a SECOND archive ID. Prevent that
  // POST at our durable adapter boundary, including after journal restart.
  filing.ApprovalID="approved-fixture-2"
- if _,err:=recovery.Enqueue(filing);!errors.Is(err,state.ErrIdempotencyConflict){
-   t.Fatalf("fresh approval incorrectly authorized duplicate upload: %v",err)
+ repeated,err:=recovery.Enqueue(filing)
+ if err!=nil||repeated.ID!=ticket.ID||repeated.Intent.ApprovalID!="approved-fixture-1"{
+   t.Fatalf("repeated approval must retain original effect/authorization: %#v %v",repeated,err)
  }
  if _,err:=recovery.Begin(ticket.ID);!errors.Is(err,ErrHold){
    t.Fatalf("recovered archived effect must not be sent again: %v",err)
