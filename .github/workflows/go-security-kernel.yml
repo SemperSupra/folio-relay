@@ -164,3 +164,104 @@ jobs:
         run: |
           docker rm -f folio_ci_paperless folio_ci_valkey >/dev/null 2>&1 || true
           docker network rm folio_paperless_ci >/dev/null 2>&1 || true
+
+  # CPU-only, synthetic local inference; active on this bounded draft PR only.
+  paperless_ollama:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'test/paperless-native-ollama-20261024'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Pin and start isolated Paperless catalog-version fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          # No TrueNAS, production document, provider token, shared volume or
+          # private network resource is used. Both containers are disposable.
+          docker network create folio_paperless_ci
+          docker run -d --name folio_ci_valkey --network folio_paperless_ci \
+            docker.io/valkey/valkey:9-alpine
+          # Local CPU model is fetched before testing, no user data/credentials.
+          docker run -d --name folio_ci_ollama --network folio_paperless_ci \
+            ollama/ollama:0.34.0
+          docker exec folio_ci_ollama ollama pull qwen2.5:0.5b-instruct
+          docker exec folio_ci_ollama ollama list
+          pass="$(openssl rand -hex 28)"
+          secret="$(openssl rand -hex 42)"
+          echo "::add-mask::$pass"
+          echo "::add-mask::$secret"
+          envfile="$(mktemp)"
+          chmod 0600 "$envfile"
+          printf '%s\n' \
+            "PAPERLESS_REDIS=redis://folio_ci_valkey:6379" \
+            "PAPERLESS_AI_ENABLED=true" \
+            "PAPERLESS_AI_LLM_BACKEND=ollama" \
+            "PAPERLESS_AI_LLM_ENDPOINT=http://folio_ci_ollama:11434" \
+            "PAPERLESS_AI_LLM_MODEL=qwen2.5:0.5b-instruct" \
+            "PAPERLESS_AI_LLM_REQUEST_TIMEOUT=180" \
+            "PAPERLESS_AI_LLM_ALLOW_INTERNAL_ENDPOINTS=true" \
+            "PAPERLESS_DBENGINE=sqlite" \
+            "PAPERLESS_SECRET_KEY=$secret" \
+            "PAPERLESS_URL=http://127.0.0.1:18080" \
+            "PAPERLESS_ADMIN_USER=fixture_admin" \
+            "PAPERLESS_ADMIN_PASSWORD=$pass" \
+            "PAPERLESS_ADMIN_MAIL=fixture@example.invalid" \
+            "PAPERLESS_OCR_LANGUAGE=eng" \
+            "PAPERLESS_TASK_WORKERS=1" \
+            "PAPERLESS_THREADS_PER_WORKER=2" >"$envfile"
+          docker run -d --name folio_ci_paperless --network folio_paperless_ci \
+            -p 127.0.0.1:18080:8000 --env-file "$envfile" \
+            ghcr.io/paperless-ngx/paperless-ngx:3.1.3
+          rm -f "$envfile"
+          unset pass secret
+          docker inspect --format '{{index .RepoDigests 0}}' ghcr.io/paperless-ngx/paperless-ngx:3.1.3 \
+            | tee /tmp/folio-paperless-image.txt
+      - name: Qualify local model native-AI suggestions on synthetic records
+        shell: bash
+        timeout-minutes: 30
+        run: |
+          set -euo pipefail
+          ready=0
+          for i in $(seq 1 120); do
+            if curl -fsS --max-time 3 http://127.0.0.1:18080/api/ >/dev/null 2>&1; then
+              ready=1
+              break
+            fi
+            sleep 2
+          done
+          if [ "$ready" -ne 1 ]; then
+            echo "Paperless fixture API did not become healthy" >&2
+            docker logs --tail 80 folio_ci_paperless | sed -E 's/(password|token|secret)([=: ])[^ ]+/\1\2[REDACTED]/Ig' >&2
+            exit 1
+          fi
+          echo "Paperless API health passed"
+          # Only read an ephemeral fixture credential from its own container.
+          # API token is never printed, persisted to Git or passed in argv.
+          export FOLIO_FIXTURE_PAPERLESS_PASSWORD="$(docker exec folio_ci_paperless printenv PAPERLESS_ADMIN_PASSWORD)"
+          export FOLIO_FIXTURE_PAPERLESS_URL="http://127.0.0.1:18080"
+          export FOLIO_FIXTURE_PAPERLESS_TOKEN="$(python3 - <<'PY'
+          import json,os,urllib.request
+          url=os.environ["FOLIO_FIXTURE_PAPERLESS_URL"]+"/api/token/"
+          payload=json.dumps({"username":"fixture_admin","password":os.environ["FOLIO_FIXTURE_PAPERLESS_PASSWORD"]}).encode()
+          req=urllib.request.Request(url,data=payload,headers={"Content-Type":"application/json"})
+          with urllib.request.urlopen(req,timeout=10) as result:
+              body=json.load(result)
+          token=body.get("token","")
+          if len(token)<8:
+              raise SystemExit("No Paperless API token")
+          print(token,end="")
+          PY
+          )"
+          echo "::add-mask::$FOLIO_FIXTURE_PAPERLESS_TOKEN"
+          unset FOLIO_FIXTURE_PAPERLESS_PASSWORD
+          go test -tags=paperless_integration ./internal/filing/paperless -run '^TestNativeLocalOllamaSmoke$' -count=1 -v
+      - name: Fixture cleanup
+        if: always()
+        shell: bash
+        run: |
+          docker rm -f folio_ci_paperless folio_ci_valkey folio_ci_ollama >/dev/null 2>&1 || true
+          docker network rm folio_paperless_ci >/dev/null 2>&1 || true
