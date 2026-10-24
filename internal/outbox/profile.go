@@ -55,6 +55,9 @@ func (p Profile) Validate() error {
 		if !strings.EqualFold(p.Host,"smtp.mail.me.com") || p.Port!=587 || p.TLS!="starttls_required" || p.Auth!="app_password" { return ErrInvalidProfile }
 	case "microsoft":
 		if !strings.EqualFold(p.Host,"smtp.office365.com") || p.Port!=587 || p.TLS!="starttls_required" || p.Auth!="xoauth2" { return ErrInvalidProfile }
+	case "outlook_com":
+		// Consumer Outlook.com has a distinct SMTP endpoint from Microsoft 365.
+		if !strings.EqualFold(p.Host,"smtp-mail.outlook.com") || p.Port!=587 || p.TLS!="starttls_required" || p.Auth!="xoauth2" { return ErrInvalidProfile }
 	case "custom":
 		// Custom DNS/IP resolution, peer validation and authorized egress
 		// require a separate runtime security gate before network access.
