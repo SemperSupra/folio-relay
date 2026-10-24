@@ -109,12 +109,19 @@ if [[ "$ready" -ne 1 ]]; then
   sed -n '1,60p' "$work/smbd-launch.log" >&2 || true
   exit 1
 fi
+echo "SMB authenticated fixture listing passed"
 
 for user in folio_ci_rw1 folio_ci_rw2; do
-  smbclient //127.0.0.1/foliorelay-fixture -A "$work/$user.auth" \
-    -c "get $export_name $work/$user.download" >/dev/null
+  if ! smbclient //127.0.0.1/foliorelay-fixture -A "$work/$user.auth" \
+    -c "get $export_name $work/$user.download" >"$work/smb-download-result.log" 2>&1; then
+    echo "SMB named-user read failed: $user" >&2
+    sed -n '1,50p' "$work/smb-download-result.log" >&2 || true
+    stat -c '%a %U %G %n' "$exports" "$exports/$export_name" >&2 || true
+    exit 1
+  fi
   cmp "$source_path" "$work/$user.download"
 done
+echo "SMB two named-user reads passed"
 
 # Both allowed users have genuine SMB write/delete capability; shared output
 # must never expose the canonical artifact directory or attached credentials.
@@ -123,6 +130,7 @@ smbclient //127.0.0.1/foliorelay-fixture -A "$work/folio_ci_rw1.auth" \
   -c "put $work/user-upload.txt user-upload.txt" >/dev/null
 smbclient //127.0.0.1/foliorelay-fixture -A "$work/folio_ci_rw2.auth" \
   -c 'del user-upload.txt' >/dev/null
+echo "SMB two named-user writes passed"
 
 if smbclient //127.0.0.1/foliorelay-fixture -A "$work/folio_ci_denied.auth" \
   -c 'ls' >/dev/null 2>&1; then
