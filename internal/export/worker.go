@@ -187,13 +187,11 @@ func (w *Worker) ensureFolder(folder string) error {
 		if err != nil || !stat.IsDir() || stat.Mode() & os.ModeSymlink != 0 {
 			return errors.New("export path contains an unsafe directory")
 		}
-		// mkdir is masked by process umask. On newly owned directories,
-		// enforce the selected share mode before exposing the folder.
-		// Preserve inherited setgid so descendants keep the named SMB group.
+		// mkdir is masked by process umask. Change mode through the created
+		// directory's descriptor: a share writer can replace its pathname
+		// after Lstat with a symlink to protected staging.
 		if created {
-			mode := w.directoryMode
-			if stat.Mode()&os.ModeSetgid != 0 { mode |= os.ModeSetgid }
-			if err := w.exports.Chmod(name, mode); err != nil { return err }
+			if err := chmodCreatedDirectory(w.exports, name, stat, w.directoryMode); err != nil { return err }
 			stat, err = w.exports.Lstat(name)
 			if err != nil { return err }
 		}
@@ -201,6 +199,23 @@ func (w *Worker) ensureFolder(folder string) error {
 			return errors.New("managed share folder lacks required group permissions")
 		}
 	}
+	return nil
+}
+
+// chmodCreatedDirectory checks the created inode before changing its mode.
+// A pathname swap cannot redirect a chmod through a symlink into private data.
+func chmodCreatedDirectory(root *os.Root, name string, expected os.FileInfo, mode os.FileMode) error {
+	dir, err := root.Open(name)
+	if err != nil { return err }
+	defer dir.Close()
+	opened, err := dir.Stat()
+	if err != nil { return err }
+	if !opened.IsDir() || !os.SameFile(expected, opened) { return ErrUnsafeShare }
+	if opened.Mode()&os.ModeSetgid != 0 { mode |= os.ModeSetgid }
+	if err := dir.Chmod(mode); err != nil { return err }
+	current, err := root.Lstat(name)
+	if err != nil { return err }
+	if !current.IsDir() || !os.SameFile(opened, current) { return ErrUnsafeShare }
 	return nil
 }
 
