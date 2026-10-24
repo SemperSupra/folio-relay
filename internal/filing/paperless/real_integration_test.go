@@ -159,6 +159,57 @@ func TestDisposableRealPaperless313(t *testing.T){
    t.Fatalf("revoked native Paperless browser record still accessible: %d",revokedResult.Code)
  }
  t.Log("archived_paperless_to_browser_scoped_session=true revoked_before_dms_read=true auto_apply=false")
+
+ // Replay the SAME synthetic document through an encrypted, durable and
+ // revoked grant instead of a throwaway memory lookup. Token issuance is
+ // explicitly admitted only by this disposable fixture policy.
+ grantDir:=filepath.Join(t.TempDir(),"private-grant-state")
+ if err:=os.Mkdir(grantDir,0o700);err!=nil{t.Fatal(err)}
+ grantFile:=filepath.Join(grantDir,"encrypted-review-grants.frj")
+ ledgerKey:=[]byte("0123456789abcdef0123456789abcdef")
+ admit:=func(_ context.Context,action ReviewGrantAction,actor,effect,operator string)error{
+   if (action!=GrantIssue&&action!=GrantRevoke)||actor!="synthetic-human"||
+      effect!=ticket.ID||operator!="synthetic-policy" {return ErrReviewGrantLedger}
+   return nil
+ }
+ durableGrants,err:=OpenEncryptedReviewGrantLedger(grantFile,ledgerKey,admit,time.Now)
+ if err!=nil{t.Fatal(err)}
+ issued,err:=durableGrants.Issue(ctx,"synthetic-human",ticket.ID,"synthetic-policy",30*time.Minute)
+ if err!=nil{t.Fatal(err)}
+ issuedHash:=digestGrant(t,issued)
+ if err:=durableGrants.Close();err!=nil{t.Fatal(err)}
+ recoveredGrants,err:=OpenEncryptedReviewGrantLedger(grantFile,ledgerKey,admit,time.Now)
+ if err!=nil{t.Fatal(err)}
+ defer recoveredGrants.Close()
+ durableBrowser,err:=NewReviewBrowserHandler(recoveredGrants.Lookup,sourceLoader,
+   "https://reviews.example.test",[]byte(strings.Repeat("k",32)),time.Now)
+ if err!=nil{t.Fatal(err)}
+ durablePOST:=httptest.NewRequest("POST","https://reviews.example.test/filing/review-sessions",
+   strings.NewReader(fmt.Sprintf("{\"effect_id\":%q}",ticket.ID)))
+ durablePOST.Header.Set("Authorization","Bearer "+issued)
+ durablePOST.Header.Set("Origin","https://reviews.example.test")
+ durablePOST.Header.Set("X-FolioRelay-Review-Session","1")
+ durablePOST.Header.Set("Content-Type","application/json")
+ sessionReply:=httptest.NewRecorder()
+ durableBrowser.ServeHTTP(sessionReply,durablePOST)
+ if sessionReply.Code!=201||len(sessionReply.Result().Cookies())!=1{
+   t.Fatalf("restarted encrypted grant unable to open synthetic browser session: HTTP %d",sessionReply.Code)
+ }
+ durableGET:=httptest.NewRequest("GET","https://reviews.example.test/filing/reviews/"+ticket.ID,nil)
+ durableGET.AddCookie(sessionReply.Result().Cookies()[0])
+ validReply:=httptest.NewRecorder()
+ durableBrowser.ServeHTTP(validReply,durableGET)
+ if validReply.Code!=200||!strings.Contains(validReply.Body.String(),record.Title){
+   t.Fatalf("real Paperless read via durable encrypted grant failed: HTTP %d",validReply.Code)
+ }
+ if err:=recoveredGrants.Revoke(ctx,issuedHash,"synthetic-policy");err!=nil{t.Fatal(err)}
+ deniedReply:=httptest.NewRecorder()
+ durableBrowser.ServeHTTP(deniedReply,durableGET)
+ if deniedReply.Code!=401{
+   t.Fatalf("revoked durable browser session exposed native Paperless: HTTP %d",deniedReply.Code)
+ }
+ t.Log("durable_encrypted_grants_paperless_real=true restart=true revoke=true no_remote_metadata_patch=true")
+
  // End-to-end, the REAL disposable Paperless metadata feeds our inert
  // reviewer API and a preview, without registering runtime routes or PATCH.
  packet,err:=BuildReviewEnvelope(recovered,record,classic,ReviewEnglish)
