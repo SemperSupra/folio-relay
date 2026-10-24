@@ -135,7 +135,7 @@ func TestDisposableRealPaperless313(t *testing.T){
    func()time.Time{return browserNow})
  if err!=nil{t.Fatal(err)}
  sessionRequest:=httptest.NewRequest("POST","https://reviews.example.test/filing/review-sessions",
-   strings.NewReader(fmt.Sprintf("{\\"effect_id\\":%q}",ticket.ID)))
+   strings.NewReader(fmt.Sprintf("{\"effect_id\":%q}",ticket.ID)))
  sessionRequest.Header.Set("Authorization","Bearer "+browserToken)
  sessionRequest.Header.Set("Origin","https://reviews.example.test")
  sessionRequest.Header.Set("X-FolioRelay-Review-Session","1")
