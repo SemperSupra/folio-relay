@@ -69,6 +69,7 @@ cat >"$config" <<EOF
     force group = folio_ci_smb
 EOF
 testparm -s "$config" >/dev/null
+echo "Samba fixture configuration validated"
 # Use the same isolated passdb/config as smbd; no account password in argv.
 secret="$(openssl rand -hex 20)"
 for user in folio_ci_rw1 folio_ci_rw2 folio_ci_denied; do
@@ -81,11 +82,17 @@ for user in folio_ci_rw1 folio_ci_rw2 folio_ci_denied; do
   chmod 0600 "$auth"
 done
 unset secret
+echo "Samba synthetic passdb enrollment complete"
 
 # Launch in Samba's own daemon process group. Foreground/no-process-group
 # can terminate the hosted Actions step if smbd tears down its inherited group.
 # Store service diagnostics only in this disposable root.
-sudo smbd --configfile="$config" --daemon >"$work/smbd-launch.log" 2>&1
+if ! sudo smbd --configfile="$config" --daemon >"$work/smbd-launch.log" 2>&1; then
+  echo "Samba fixture daemon launch failed" >&2
+  sed -n '1,60p' "$work/smbd-launch.log" >&2 || true
+  exit 1
+fi
+echo "Samba fixture daemon launched"
 server_pid="$(cat "$work/smbd.pid" 2>/dev/null || true)"
 # Bounded local readiness polling; never reach a LAN or external host.
 ready=0
