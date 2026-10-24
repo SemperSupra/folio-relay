@@ -40,7 +40,11 @@ chmod 0700 -- "$canon"
 # The FolioRelay exporter must have an admitted primary share group.
 # Exercise that exact synthetic identity without broadening host membership.
 go build -trimpath -o "$work/qualify-smb-output" ./tools/qualify-smb-output
-export_name="$(sudo -u "$(id -un)" -g folio_ci_smb "$work/qualify-smb-output" -canonical "$canon" -export "$exports")"
+sudo usermod -a -G folio_ci_smb "$(id -un)"
+# Launch a new, unprivileged process with the explicit synthetic group.
+# Ubuntu runner sudoers grants root but not arbitrary -u/-g; sg consults the
+# newly admitted /etc/group membership and does not require escalation.
+export_name="$(sg folio_ci_smb -c "$work/qualify-smb-output -canonical $canon -export $exports")"
 for p in "$exports/Prints" "$exports/Prints/2026"; do
   test "$(stat -c '%a' "$p")" = "2770" || {
     echo "nested export folder lacks admitted setgid/group access" >&2
