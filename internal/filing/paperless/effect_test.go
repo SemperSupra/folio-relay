@@ -6,7 +6,6 @@ import (
  "strings"
  "testing"
 
- "github.com/SemperSupra/folio-relay/internal/state"
 
 )
 func testIntent() Intent {
@@ -26,8 +25,9 @@ func TestExplicitApprovalAndStableEnqueue(t *testing.T){
  b,err:=o.Enqueue(i)
  if err!=nil||a!=b{t.Fatalf("non-idempotent enqueue %#v %#v %v",a,b,err)}
  i.ApprovalID="user-approved-002"
- if _,err:=o.Enqueue(i);!errors.Is(err,state.ErrIdempotencyConflict){
-   t.Fatalf("second approval must NOT duplicate identical content: %v",err)
+ reapproved,err:=o.Enqueue(i)
+ if err!=nil||reapproved.ID!=a.ID||reapproved.Intent.ApprovalID!="user-approved-001"{
+   t.Fatalf("repeat approval must return original single durable effect: %#v %v",reapproved,err)
  }
  i.TargetID="paperless-alternate"
  changed,err:=o.Enqueue(i)
