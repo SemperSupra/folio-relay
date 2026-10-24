@@ -37,9 +37,20 @@ type Receipt struct {
 type Worker struct {
 	canonical *os.Root
 	exports *os.Root
+	fileMode os.FileMode
 }
 
 func NewWorker(canonicalDir, exportDir string) (*Worker, error) {
+	return NewWorkerWithMode(canonicalDir, exportDir, 0o600)
+}
+
+// NewWorkerWithMode permits only private or group-readable/writable exports.
+// The TrueNAS share, filesystem ACL and group membership are still separate
+// post-install operator controls and must be independently qualified.
+func NewWorkerWithMode(canonicalDir, exportDir string, mode os.FileMode) (*Worker, error) {
+	if mode != 0o600 && mode != 0o640 && mode != 0o660 {
+		return nil, errors.New("unsupported export file mode")
+	}
 	canon, err := checkedRoot(canonicalDir)
 	if err != nil { return nil, fmt.Errorf("canonical root: %w", err) }
 	out, err := checkedRoot(exportDir)
@@ -51,7 +62,7 @@ func NewWorker(canonicalDir, exportDir string) (*Worker, error) {
 	if err != nil { return nil, err }
 	target, err := os.OpenRoot(out)
 	if err != nil { source.Close(); return nil, err }
-	return &Worker{canonical: source, exports: target}, nil
+	return &Worker{canonical: source, exports: target, fileMode:mode}, nil
 }
 
 func checkedRoot(dir string) (string, error) {
@@ -161,6 +172,7 @@ func (w *Worker) Publish(p Plan, a Artifact) (Receipt, error) {
 	defer w.exports.Remove(temp)
 	hash := sha256.New()
 	n, copyErr := io.Copy(io.MultiWriter(output, hash), io.LimitReader(source, a.Bytes+1))
+	if copyErr == nil { copyErr = output.Chmod(w.fileMode) }
 	if copyErr == nil { copyErr = output.Sync() }
 	if closeErr := output.Close(); copyErr == nil { copyErr = closeErr }
 	if copyErr != nil { return Receipt{}, copyErr }
