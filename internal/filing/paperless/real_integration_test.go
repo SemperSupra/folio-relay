@@ -9,6 +9,7 @@ import (
  "encoding/hex"
  "fmt"
  "os"
+ "path/filepath"
  "strings"
  "testing"
  "time"
@@ -52,8 +53,22 @@ func TestDisposableRealPaperless313(t *testing.T){
  ctx,cancel:=context.WithTimeout(context.Background(),3*time.Minute)
  defer cancel()
  t0:=time.Now()
+ journalPath:=filepath.Join(t.TempDir(),"filing.frj")
+ outbox,err:=OpenOutbox(journalPath)
+ if err!=nil{t.Fatal(err)}
+ defer outbox.Close()
+ filing:=Intent{
+   CanonicalSHA256:doc.SHA256,
+   TargetID:"paperless-fixture",
+   PolicyVersion:"v1",
+   ApprovalID:"approved-fixture-1",
+ }
+ ticket,err:=outbox.Enqueue(filing)
+ if err!=nil{t.Fatal(err)}
+ if _,err:=outbox.Begin(ticket.ID);err!=nil{t.Fatal(err)}
  taskID,err:=c.Upload(ctx,doc)
  if err!=nil{t.Fatalf("upload into pinned fixture: %v",err)}
+ if _,err:=outbox.Accept(ticket.ID,taskID);err!=nil{t.Fatalf("durable task receipt: %v",err)}
  t.Logf("synthetic bytes=%d task accepted=true",len(doc.Content))
  var observed Task
  for {
@@ -66,20 +81,41 @@ func TestDisposableRealPaperless313(t *testing.T){
  if observed.Outcome!="archived"||observed.DocumentID<=0 {
     t.Fatalf("Paperless did not archive valid generated PDF, status=%s outcome=%s",observed.Status,observed.Outcome)
  }
+ if final,err:=outbox.MarkTask(ticket.ID,observed);err!=nil||final.State!="archived"{
+   t.Fatalf("durable archive receipt %#v: %v",final,err)
+ }
  record,err:=c.ReadRecord(ctx,observed.DocumentID)
  if err!=nil{t.Fatalf("native metadata readback: %v",err)}
  if record.ID!=observed.DocumentID||record.Title=="" {t.Fatalf("invalid native record: %#v",record)}
- t.Logf("archived=true native_title_present=true tags=%d seconds=%.2f",len(record.Tags),time.Since(t0).Seconds())
+ classic,err:=c.ReadClassicSuggestions(ctx,observed.DocumentID)
+ if err!=nil {t.Fatalf("native classic suggestions contract: %v",err)}
+ t.Logf("archived=true native_title_present=true tags=%d classic_type_candidates=%d seconds=%.2f",len(record.Tags),len(classic.DocumentTypes),time.Since(t0).Seconds())
+ // Confirm that a restarted actor sees the previously committed result.
+ if err:=outbox.Close();err!=nil{t.Fatal(err)}
+ recovery,err:=OpenOutbox(journalPath)
+ if err!=nil{t.Fatal(err)}
+ defer recovery.Close()
+ recovered,err:=recovery.Get(ticket.ID)
+ if err!=nil||recovered.State!="archived"||recovered.DocumentID!=record.ID{
+   t.Fatalf("durable end-to-end recovery %#v %v",recovered,err)
+ }
  // Repeat the identical bytes as a brand-new explicitly authorized intent
  // to establish the DMS' duplicate handling without damaging its original.
+ filing.ApprovalID="approved-fixture-2"
+ secondEffect,err:=recovery.Enqueue(filing)
+ if err!=nil{t.Fatal(err)}
+ if _,err:=recovery.Begin(secondEffect.ID);err!=nil{t.Fatal(err)}
  task2,err:=c.Upload(ctx,doc)
- if err!=nil {t.Logf("Paperless rejected duplicate at upload level: %v",err);return}
+ if err!=nil {t.Fatalf("duplicate attempt did not yield a verifiable Paperless task: %v",err)}
+ if _,err:=recovery.Accept(secondEffect.ID,task2);err!=nil{t.Fatal(err)}
  for {
   if err:=ctx.Err();err!=nil{t.Fatalf("duplicate outcome timeout: %v",err)}
   second,err:=c.Observe(ctx,task2)
   if err!=nil{t.Fatal(err)}
   if second.Outcome=="duplicate" || second.Outcome=="rejected" {
-    t.Logf("duplicate candidate no archive outcome=%s",second.Outcome)
+    final,err:=recovery.MarkTask(secondEffect.ID,second)
+    if err!=nil{t.Fatalf("durable duplicate/rejection: %v",err)}
+    t.Logf("duplicate candidate no archive outcome=%s durable=%s",second.Outcome,final.State)
     break
   }
   if second.Outcome=="archived" {
