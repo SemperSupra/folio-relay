@@ -77,7 +77,7 @@ jobs:
 
   # Disposable benchmark restricted to the draft 24-case source-only PR.
   paperless_benchmark:
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'test/paperless-native-classifier-20261024'
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'test/paperless-multilingual-rules-20261024'
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     steps:
@@ -157,7 +157,7 @@ jobs:
           )"
           echo "::add-mask::$FOLIO_FIXTURE_PAPERLESS_TOKEN"
           unset FOLIO_FIXTURE_PAPERLESS_PASSWORD
-          go test -tags=paperless_integration ./internal/filing/paperless -run '^TestNativeClassifierBenchmark$' -count=1 -v
+          go test -tags=paperless_integration ./internal/filing/paperless -run '^TestNativeMultilingualRulesBenchmark$' -count=1 -v
       - name: Fixture cleanup
         if: always()
         shell: bash
