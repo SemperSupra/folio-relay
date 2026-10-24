@@ -24,7 +24,7 @@ func browserReviewFixture(t *testing.T)(http.Handler,*ReviewGrant,*time.Time,*in
   EffectID:ticket.ID,ValidFrom:now.Add(-time.Minute),
   ExpiresAt:now.Add(time.Hour),CanRead:true}
  getCalls:=0
- key:=[]byte("separate-browser-review-key-32b!!")
+ key:=[]byte("0123456789abcdef0123456789abcdef")
  if len(key)!=32 {t.Fatalf("bad fixture AES key size: %d",len(key))}
  handler,err:=NewReviewBrowserHandler(func(got [32]byte)(ReviewGrant,error){
    if got!=hash{return ReviewGrant{},ErrReviewGrant}
@@ -192,7 +192,7 @@ func TestBrowserSessionIndependentKeysAndHostBinding(t *testing.T){
 func TestBrowserSessionRequiresTrustedOriginSecretAndGrantStore(t *testing.T){
  grant:=func([32]byte)(ReviewGrant,error){return ReviewGrant{},ErrReviewGrant}
  load:=func(context.Context,string)(ReviewEnvelope,error){return ReviewEnvelope{},ErrReviewUnavailable}
- valid:=[]byte("separate-browser-review-key-32b!!")
+ valid:=[]byte("0123456789abcdef0123456789abcdef")
  for _,failure:=range []struct{origin string;key []byte;lookup ReviewGrantLookup;loader ReviewLoader}{
   {"http://reviews.example.test",valid,grant,load},
   {"https://reviews.example.test/path",valid,grant,load},
