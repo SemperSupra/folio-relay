@@ -3,6 +3,7 @@ package export
 import (
 	"errors"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -35,6 +36,32 @@ func TestDurableExportEffectAndNoImplicitReplay(t *testing.T) {
 	resolved,err:=restarted.ReconcileAfterRestart(first.ID,w)
 	if err!=nil || resolved.State!="published" {t.Fatalf("reconcile %#v %v",resolved,err)}
 	if _,err:=restarted.Begin(first.ID);!errors.Is(err,ErrReconcile) {t.Fatalf("reused effect: %v",err)}
+}
+
+func TestConcurrentBeginHasOneExportOwner(t *testing.T) {
+	_,p,a,_,_,_:=fixture(t)
+	l,err:=OpenLedger(filepath.Join(t.TempDir(),"ledger.frj"))
+	if err!=nil {t.Fatal(err)}
+	defer l.Close()
+	e,err:=l.Enqueue(testIntent(p,a))
+	if err!=nil {t.Fatal(err)}
+	const callers=64
+	start:=make(chan struct{})
+	results:=make(chan error,callers)
+	var group sync.WaitGroup
+	for i:=0;i<callers;i++ {
+		group.Add(1)
+		go func(){defer group.Done();<-start;_,err:=l.Begin(e.ID);results<-err}()
+	}
+	close(start)
+	group.Wait()
+	close(results)
+	owners:=0
+	for err:=range results {
+		if err==nil {owners++;continue}
+		if !errors.Is(err,ErrReconcile) {t.Fatalf("unexpected begin error: %v",err)}
+	}
+	if owners!=1 {t.Fatalf("export owners=%d, want exactly one",owners)}
 }
 
 func TestAbsentAfterCrashRequiresNewAction(t *testing.T) {

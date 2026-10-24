@@ -104,7 +104,7 @@ func (l *Ledger) Begin(id string) (ExportEffect,error) {
 	agg:="export/"+id
 	snap:=l.durable.Snapshot(agg)
 	if snap.State!="pending" {return ExportEffect{},ErrReconcile}
-	_,err:=l.durable.Apply(state.Command{
+	result,err:=l.durable.Apply(state.Command{
 		Type:"export-dispatch",AggregateID:agg,IdempotencyKey:"dispatch-v1",
 		SemanticFingerprint:id,ExpectedGeneration:&snap.Generation,
 	},func(old state.Snapshot,_ state.Command)(state.TransitionResult,error){
@@ -112,6 +112,9 @@ func (l *Ledger) Begin(id string) (ExportEffect,error) {
 		return state.TransitionResult{State:"dispatching",Changed:true},nil
 	})
 	if err!=nil{return ExportEffect{},err}
+	// Concurrent callers can both observe pending; an idempotent replay is
+	// evidence of the first dispatch, not permission for a second publisher.
+	if result.Replayed {return ExportEffect{},ErrReconcile}
 	l.active.Store(id,true)
 	return l.Get(id)
 }
