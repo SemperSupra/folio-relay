@@ -31,6 +31,9 @@ func TestAirPrintTXTIsSharedAcrossDiscoveryBackends(t *testing.T) {
 		"pdl=application/pdf,image/urf",
 		"URF=V1.4,CP1,W8,PQ4,RS300,FN3",
 		"UUID=01234567-89ab-4def-8123-456789abcdef",
+		"adminurl=https://foliorelay.local:18443/",
+		"usb_MFG=FolioRelay",
+		"usb_MDL=Virtual Printer",
 		"note=RDTE",
 	} {
 		found := false

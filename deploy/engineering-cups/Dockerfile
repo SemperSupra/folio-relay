@@ -46,7 +46,10 @@ RUN git init cups \
  && git fetch --depth 1 origin "${CUPS_COMMIT}" \
  && git checkout --detach FETCH_HEAD \
  && test "$(git rev-parse HEAD)" = "${CUPS_COMMIT}"
+COPY deploy/engineering-cups/patches/foliorelay-ipp-identity.patch /src/cups/foliorelay-ipp-identity.patch
 WORKDIR /src/cups
+RUN git apply --check foliorelay-ipp-identity.patch \
+ && git apply foliorelay-ipp-identity.patch
 RUN ./configure \
       --prefix=/usr \
       --sysconfdir=/etc \

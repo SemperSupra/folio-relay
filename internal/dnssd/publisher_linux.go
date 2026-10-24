@@ -388,6 +388,9 @@ func airPrintTXT(identity frprinter.Identity) []string {
 		"txtvers=1",
 		"qtotal=1",
 		"UUID=" + uuid,
+		"adminurl=https://" + identity.Host + ":18443/",
+		"usb_MFG=FolioRelay",
+		"usb_MDL=Virtual Printer",
 	}
 	if identity.Location != "" {
 		txt = append(txt, "note="+identity.Location)

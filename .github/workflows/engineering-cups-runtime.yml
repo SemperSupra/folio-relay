@@ -166,9 +166,17 @@ jobs:
             "$(find /usr/share/cups -type f -name get-printer-attributes.test -print -quit)" \
             | tee "$RUNNER_TEMP/engineering-runtime/live-printer-attributes.txt"
           grep -Eq 'printer-type .* = 4100' "$RUNNER_TEMP/engineering-runtime/live-printer-attributes.txt"
+          grep -Fq 'printer-more-info (uri) = https://localhost:18443/' \
+            "$RUNNER_TEMP/engineering-runtime/live-printer-attributes.txt"
+          grep -Eq 'printer-serial-number .* = [0-9a-f]{8}-[0-9a-f-]{27}' \
+            "$RUNNER_TEMP/engineering-runtime/live-printer-attributes.txt"
+          grep -Fq 'printer-device-id (textWithoutLanguage) = MFG:FolioRelay;MDL:Virtual Printer;CMD:PDF,URF;' \
+            "$RUNNER_TEMP/engineering-runtime/live-printer-attributes.txt"
 
           docker compose -f "$compose" exec -T cups \
             grep -Fq 'cupsFilter2: "application/pdf application/pdf 0 -"' /usr/share/foliorelay/cups/FolioRelay.ppd
+          docker compose -f "$compose" exec -T cups \
+            grep -Fq '1284DeviceId: "MFG:FolioRelay;MDL:Virtual Printer;CMD:PDF,URF;"' /usr/share/foliorelay/cups/FolioRelay.ppd
 
           if docker compose -f "$compose" exec -T cups \
               grep -Eq 'CUPS-Add-Modify-Printer|CUPS-Create-Local-Printer|Create-Printer-Subscription|Create-Job-Subscriptions' \
