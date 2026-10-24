@@ -46,3 +46,12 @@ The installed catalog configuration is **not validated** merely by an HTTP mock.
 6. Only then: separately authorized physical lifecycle. Existing H0 HOLD remains live throughout.
 
 **Negative spaces**: native Paperless AI is not a guarantee of accurate metadata. API v10/3.1.3 compatibility must be proven, not extrapolated from current docs. Document submissions after network interruption must not be replayed based solely on missing task readback. Do not assign arbitrary tags/storage paths from LLM strings or share canonical artifacts directly as a Paperless consume directory.
+
+
+## Qualification finding — repeated identical upload
+
+The initial real Paperless-ngx 3.1.3 CI run accepted, processed and archived the first synthetic PDF, but a second explicit raw POST of identical bytes produced a **different archived document ID**, not a `duplicate` verdict. This is an observed contract result; the exact product-side cause (version handling versus dedup configuration) remains to be investigated independently. Do not rely on a DMS duplicate flag to enforce at-most-once filing.
+
+FolioRelay now keys its durable filing effect by immutable canonical content SHA-256, approved Paperless destination and policy version, **excluding the ApprovalID** from the effect identity. A repeated approval with the same content/destination/policy is an idempotency conflict, and an archived effect cannot be re-sent after restart. The original approval ID is preserved in durable metadata for evidence. A genuinely new destination or policy revision creates another effect only through a separate admitted action; its remote document correlation requires independent qualification.
+
+The first real post-upload test is no longer a destructive/raw duplicate probe; it now verifies pre-network duplicate suppression through the journal across restart. The original observed second document on the disposable runner is recorded as an unresolved DMS dedup limitation, not silently reinterpreted as a PASS.
