@@ -3,6 +3,7 @@ package paperless
 import (
  "embed"
  "net/http"
+ "net/url"
 )
 
 // These bundled, static, auditable assets have no third-party scripts,
@@ -24,7 +25,22 @@ func serveReviewLoginAsset(w http.ResponseWriter,r *http.Request)bool {
    http.Error(w,"method not allowed",http.StatusMethodNotAllowed)
    return true
   }
-  language:=r.URL.Query().Get("lang")
+  values,err:=url.ParseQuery(r.URL.RawQuery)
+  if err!=nil||len(values)>2 {
+    http.Error(w,"invalid review login query",http.StatusBadRequest)
+    return true
+  }
+  for key,list:=range values{
+    if (key!="lang"&&key!="effect")||len(list)!=1 {
+      http.Error(w,"invalid review login query",http.StatusBadRequest)
+      return true
+    }
+  }
+  if effect,exists:=values["effect"];exists&&!shaRe.MatchString(effect[0]){
+    http.Error(w,"invalid review record reference",http.StatusBadRequest)
+    return true
+  }
+  language:=values.Get("lang")
   filename:="review_login_en.html"
   switch language{
   case "","en":filename="review_login_en.html"

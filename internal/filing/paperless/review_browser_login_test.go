@@ -34,6 +34,17 @@ func TestBrowserLoginPagesAreLocalizedAndRequireHTTPS(t *testing.T){
    t.Fatalf("login page CSP allowed external code or form submission: %s",policy)
   }
  }
+ for _,attack:=range []string{
+  "/filing/review-login?token=secret",
+  "/filing/review-login?effect=../../etc",
+  "/filing/review-login?lang=en&lang=th",
+  "/filing/review-login?effect=" + strings.Repeat("Z",64),
+ }{
+  rec:=browserRequest(h,"GET",attack,"",nil)
+  if rec.Code!=http.StatusBadRequest{
+    t.Fatalf("credential-like or ambiguous login query admitted: %s => %d",attack,rec.Code)
+  }
+ }
  if *reads!=0{t.Fatal("unauthenticated login page loaded real record content")}
  bad:=browserRequest(h,"GET","/filing/review-login?lang=../../../secrets","",nil)
  if bad.Code!=400{t.Fatal("unsupported locale was accepted")}
