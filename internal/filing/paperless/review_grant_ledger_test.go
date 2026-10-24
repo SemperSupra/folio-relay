@@ -53,6 +53,12 @@ func TestEncryptedReviewGrantsSurviveRestartAndRevocation(t *testing.T){
  grant,err:=l.Lookup(hash)
  if err!=nil||grant.EffectID!=effect||grant.ActorID!="reviewer-thai"||
    !grant.CanRead||grant.Revoked {t.Fatalf("bad issued review scope: %#v %v",grant,err)}
+ if runtime.GOOS!="windows" {
+  st,err:=os.Stat(path)
+  if err!=nil{t.Fatal(err)}
+  if st.Mode().Perm()!=0o600{t.Fatalf("grant journal permissions not private: %o",st.Mode().Perm())}
+ }
+ if err:=l.Close();err!=nil{t.Fatal(err)}
  disk,err:=os.ReadFile(path)
  if err!=nil{t.Fatal(err)}
  for _,secret:=range []string{token,"reviewer-thai",effect,"trusted-review-authority"}{
@@ -60,12 +66,7 @@ func TestEncryptedReviewGrantsSurviveRestartAndRevocation(t *testing.T){
     t.Fatal("journal leaked raw token or even unencrypted metadata")
   }
  }
- if runtime.GOOS!="windows" {
-  st,err:=os.Stat(path)
-  if err!=nil{t.Fatal(err)}
-  if st.Mode().Perm()!=0o600{t.Fatalf("grant journal permissions not private: %o",st.Mode().Perm())}
- }
- if err:=l.Close();err!=nil{t.Fatal(err)}
+
  if _,err:=l.Lookup(hash);!errors.Is(err,ErrReviewGrantLedger){
   t.Fatal("closed ledger continued handing out review permissions")
  }
@@ -95,6 +96,7 @@ func TestEncryptedReviewGrantsSurviveRestartAndRevocation(t *testing.T){
   t.Fatal("revoked grant was reactivated or accepted again")
  }
  if *calls!=1{t.Fatalf("unexpected original issuer authorization decisions: %d",*calls)}
+ if err:=afterReboot.Close();err!=nil{t.Fatal(err)}
  disk,err=os.ReadFile(path)
  if err!=nil{t.Fatal(err)}
  if bytes.Contains(disk,[]byte("reviewer-thai"))||bytes.Contains(disk,[]byte(token)){
