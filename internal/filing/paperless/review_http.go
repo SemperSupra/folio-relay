@@ -61,6 +61,7 @@ const reviewPage = `<!doctype html>
 <ul>{{range .Review.Risks}}<li dir="auto">{{.}}</li>{{end}}</ul>
 </section>
 <p>{{.Labels.NoAction}}</p>
+{{if .NativeURL}}<p><a href="{{.NativeURL}}" rel="noreferrer noopener">{{.Labels.OpenNative}}</a></p>{{end}}
 </main>
 </body></html>`
 
@@ -82,6 +83,7 @@ type reviewLabels struct {
  SuggestedCorrespondents string
  Warnings string
  NoAction string
+ OpenNative string
 }
 
 func labelsForReview(l ReviewLanguage)(string,reviewLabels) {
@@ -96,6 +98,7 @@ func labelsForReview(l ReviewLanguage)(string,reviewLabels) {
    "Vorgeschlagene Schlagwörter (IDs)","Aktueller Korrespondent (ID)",
    "Vorgeschlagene Korrespondenten (IDs)","Prüfhinweise",
    "Diese Ansicht kann keine Metadaten speichern oder Dateien verschieben.",
+   "Dokument im Paperless-ngx öffnen",
   }
  case ReviewThai:
   return "th",reviewLabels{
@@ -107,6 +110,7 @@ func labelsForReview(l ReviewLanguage)(string,reviewLabels) {
    "รหัสแท็กที่แนะนำ","รหัสผู้ส่งเอกสารปัจจุบัน",
    "รหัสผู้ส่งเอกสารที่แนะนำ","ข้อควรตรวจสอบ",
    "หน้านี้ไม่สามารถบันทึกข้อมูลหรือย้ายไฟล์ได้",
+   "เปิดเอกสารใน Paperless-ngx",
   }
  default:
   return "en",reviewLabels{
@@ -117,6 +121,7 @@ func labelsForReview(l ReviewLanguage)(string,reviewLabels) {
    "Suggested storage path IDs","Current tag IDs","Suggested tag IDs",
    "Current correspondent ID","Suggested correspondent IDs",
    "Review warnings","This view cannot save metadata or move files.",
+   "Open document in Paperless-ngx",
   }
  }
 }
@@ -134,6 +139,7 @@ type reviewHTML struct {
  Language string
  Labels reviewLabels
  Review ReviewEnvelope
+ NativeURL string
  Type string
  Path string
  Correspondent string
@@ -164,8 +170,13 @@ func allowedEnvelope(effectID string,p ReviewEnvelope)bool {
 // and data lookup MUST be injected by the trusted future FolioRelay runtime.
 // This is intentionally NOT registered on cmd/foliorelayd or control.Server;
 // there is no implicit listener, cookie, token or production endpoint.
-func NewReviewHandler(authorize ReviewAuthorizer,load ReviewLoader)(http.Handler,error){
- if authorize==nil||load==nil{return nil,ErrReviewEndpoint}
+func NewReviewHandler(authorize ReviewAuthorizer,load ReviewLoader,nativeClient ...*Client)(http.Handler,error){
+ if authorize==nil||load==nil||len(nativeClient)>1{return nil,ErrReviewEndpoint}
+ var approvedOrigin *Client
+ if len(nativeClient)==1 {
+   if nativeClient[0]==nil{return nil,ErrReviewEndpoint}
+   approvedOrigin=nativeClient[0]
+ }
  htmlTemplate,err:=template.New("review").Parse(reviewPage)
  if err!=nil{return nil,err}
  return http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){
@@ -212,9 +223,17 @@ func NewReviewHandler(authorize ReviewAuthorizer,load ReviewLoader)(http.Handler
     if err:=json.NewEncoder(w).Encode(packet);err!=nil {return}
     return
   }
+  var nativeURL string
+  if approvedOrigin!=nil {
+    nativeURL,err=NativeReviewURL(approvedOrigin,packet)
+    if err!=nil{
+       http.Error(w,"native review destination unavailable",http.StatusServiceUnavailable)
+       return
+    }
+  }
   language,labels:=labelsForReview(packet.Language)
   data:=reviewHTML{
-    Language:language, Labels:labels, Review:packet,
+    Language:language, Labels:labels, Review:packet, NativeURL:nativeURL,
     Type:optionalPositiveID(packet.NativeDocumentType),
     Path:optionalPositiveID(packet.NativeStoragePath),
     Correspondent:optionalPositiveID(packet.NativeCorrespondent),
