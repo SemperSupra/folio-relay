@@ -30,7 +30,12 @@ sudo usermod -a -G folio_ci_smb folio_ci_rw2
 # grants. The denied account is explicitly excluded from both layers.
 chmod 0711 -- "$work"
 sudo chgrp folio_ci_smb "$exports"
-chmod 2770 -- "$exports"
+# The CI runner is not itself in the permitted group. Only a privileged
+# chmod can retain setgid on this group-owned fixture directory.
+sudo chmod 2770 -- "$exports"
+test "$(stat -c '%a' "$exports")" = "2770" || {
+  echo "fixture setgid/group inheritance failed" >&2; exit 1;
+}
 chmod 0700 -- "$canon"
 export_name="$(go run ./tools/qualify-smb-output -canonical "$canon" -export "$exports")"
 test -f "$exports/$export_name"
