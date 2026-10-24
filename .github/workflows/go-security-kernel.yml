@@ -619,3 +619,61 @@ jobs:
         run: |
           docker rm -f folio_ci_paperless folio_ci_valkey >/dev/null 2>&1 || true
           docker network rm folio_paperless_ci >/dev/null 2>&1 || true
+
+  # Controlled OCR model comparison; all blobs are Git-blob pinned and checksummed.
+  thai_traineddata_ab:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'test/paperless-thai-traineddata-ab-20261024'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Prepare verified language-model alternatives
+        shell: bash
+        timeout-minutes: 8
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+            tesseract-ocr tesseract-ocr-eng tesseract-ocr-deu tesseract-ocr-tha \
+            fonts-noto-core python3-pil fontconfig
+          tesseract --version
+          sysdir="$(dirname "$(find /usr/share/tesseract-ocr -name eng.traineddata -print -quit)")"
+          test -s "$sysdir/deu.traineddata" && test -s "$sysdir/tha.traineddata"
+          for mode in ubuntu_packaged tessdata_best tessdata_fast; do
+            mkdir -p "$RUNNER_TEMP/folio-thai-models/$mode"
+            cp "$sysdir/eng.traineddata" "$sysdir/deu.traineddata" \
+               "$RUNNER_TEMP/folio-thai-models/$mode/"
+          done
+          cp "$sysdir/tha.traineddata" "$RUNNER_TEMP/folio-thai-models/ubuntu_packaged/"
+          # Immutable upstream commits plus exact Git blob identity, not a
+          # mutable 'main' tag or unverified model-provider response.
+          curl --fail --silent --show-error --location --retry 2 \
+            https://raw.githubusercontent.com/tesseract-ocr/tessdata_best/e12c65a915945e4c28e237a9b52bc4a8f39a0cec/tha.traineddata \
+            -o "$RUNNER_TEMP/folio-thai-models/tessdata_best/tha.traineddata"
+          curl --fail --silent --show-error --location --retry 2 \
+            https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/87416418657359cb625c412a48b6e1d6d41c29bd/tha.traineddata \
+            -o "$RUNNER_TEMP/folio-thai-models/tessdata_fast/tha.traineddata"
+          test "$(git hash-object "$RUNNER_TEMP/folio-thai-models/tessdata_best/tha.traineddata")" = \
+            "b975c85f60f82febe6f8c5a52a3eb74f3ceb01b9"
+          test "$(git hash-object "$RUNNER_TEMP/folio-thai-models/tessdata_fast/tha.traineddata")" = \
+            "ea28de3985668cac00d261c5b91f023ea66e19cd"
+          for mode in ubuntu_packaged tessdata_best tessdata_fast; do
+            langs="$(tesseract --list-langs --tessdata-dir "$RUNNER_TEMP/folio-thai-models/$mode" 2>/dev/null)"
+            for lang in eng deu tha; do
+              grep -qx "$lang" <<<"$langs" || { echo "missing $lang in $mode" >&2; exit 1; }
+            done
+          done
+          /usr/bin/python3 -m py_compile scripts/ci/generate-paperless-en-de-th.py scripts/ci/qualify-thai-tesseract-sweep.py scripts/ci/compare-thai-traineddata.py
+      - name: Compare pinned best fast and packaged Thai OCR on nine synthetic scans
+        shell: bash
+        timeout-minutes: 16
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/folio-thai-corpus"
+          /usr/bin/python3 scripts/ci/generate-paperless-en-de-th.py "$root"
+          /usr/bin/python3 scripts/ci/compare-thai-traineddata.py "$root" \
+            "$RUNNER_TEMP/folio-thai-models/ubuntu_packaged" \
+            "$RUNNER_TEMP/folio-thai-models/tessdata_best" \
+            "$RUNNER_TEMP/folio-thai-models/tessdata_fast"
