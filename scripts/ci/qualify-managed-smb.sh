@@ -18,8 +18,12 @@ cleanup() {
 }
 trap cleanup EXIT
 canon="$work/canonical"
-exports="$work/exports"
+export_base="$work/export-base"
+exports="$export_base/shared"
 mkdir -p -- "$canon" "$exports"
+# Protected staging stays in the non-group-writable parent, outside the
+# actual Samba-exported shared/ subtree.
+chmod 0711 "$export_base"
 sudo groupadd folio_ci_smb
 for user in folio_ci_rw1 folio_ci_rw2 folio_ci_denied; do
   sudo useradd -M -s /usr/sbin/nologin "$user"
@@ -44,7 +48,14 @@ sudo usermod -a -G folio_ci_smb "$(id -un)"
 # Launch a new, unprivileged process with the explicit synthetic group.
 # Ubuntu runner sudoers grants root but not arbitrary -u/-g; sg consults the
 # newly admitted /etc/group membership and does not require escalation.
-export_name="$(sg folio_ci_smb -c "$work/qualify-smb-output -canonical $canon -export $exports")"
+export_name="$(sg folio_ci_smb -c "$work/qualify-smb-output -canonical $canon -export $export_base")"
+case "$export_name" in
+  shared/Prints/2026/*.pdf) ;;
+  *) echo "unexpected managed export destination" >&2; exit 1 ;;
+esac
+smb_name="${export_name#shared/}"
+test -d "$export_base/.foliorelay-private-stage"
+test "$(stat -c '%a' "$export_base/.foliorelay-private-stage")" = "700"
 for p in "$exports/Prints" "$exports/Prints/2026"; do
   test "$(stat -c '%a' "$p")" = "2770" || {
     echo "nested export folder lacks admitted setgid/group access" >&2
@@ -52,8 +63,8 @@ for p in "$exports/Prints" "$exports/Prints/2026"; do
     exit 1
   }
 done
-test -f "$exports/$export_name"
-file_mode="$(stat -c '%a' "$exports/$export_name")"
+test -f "$export_base/$export_name"
+file_mode="$(stat -c '%a' "$export_base/$export_name")"
 test "$file_mode" = "660" || { echo "wrong exported mode $file_mode" >&2; exit 1; }
 source_path="$(find "$canon/sha256" -type f -print -quit)"
 canonical_before="$(sha256sum "$source_path" | cut -d' ' -f1)"
@@ -132,10 +143,10 @@ echo "SMB authenticated fixture listing passed"
 
 for user in folio_ci_rw1 folio_ci_rw2; do
   if ! smbclient //127.0.0.1/foliorelay-fixture -A "$work/$user.auth" \
-    -c "get $export_name $work/$user.download" >"$work/smb-download-result.log" 2>&1; then
+    -c "get $smb_name $work/$user.download" >"$work/smb-download-result.log" 2>&1; then
     echo "SMB named-user read failed: $user" >&2
     sed -n '1,50p' "$work/smb-download-result.log" >&2 || true
-    stat -c '%a %U %G %n' "$exports" "$exports/$export_name" >&2 || true
+    stat -c '%a %U %G %n' "$exports" "$export_base/$export_name" >&2 || true
     exit 1
   fi
   cmp "$source_path" "$work/$user.download"
@@ -158,8 +169,8 @@ if smbclient //127.0.0.1/foliorelay-fixture -A "$work/folio_ci_denied.auth" \
 fi
 
 smbclient //127.0.0.1/foliorelay-fixture -A "$work/folio_ci_rw1.auth" \
-  -c "rename $export_name Prints/2026/renamed-by-client.pdf; del Prints/2026/renamed-by-client.pdf" >/dev/null
-test ! -e "$exports/$export_name"
+  -c "rename $smb_name Prints/2026/renamed-by-client.pdf; del Prints/2026/renamed-by-client.pdf" >/dev/null
+test ! -e "$export_base/$export_name"
 canonical_after="$(sha256sum "$source_path" | cut -d' ' -f1)"
 test "$canonical_before" = "$canonical_after" || {
   echo "canonical artifact was changed by SMB mutation" >&2; exit 1;

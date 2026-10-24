@@ -151,28 +151,39 @@ func TestExplicitGroupWritableModeAndPrivateDefault(t *testing.T) {
 		st,err:=os.Stat(filepath.Join(root,filepath.FromSlash(first.RelativePath)))
 		if err!=nil || st.Mode().Perm()!=0o600 {t.Fatalf("private default mode=%v err=%v",st,err)}
 	}
-	// A separate export root is required for any alternative mode.
+	if runtime.GOOS=="windows" {return} // Win32 ACL mapping requires its own operator qualification.
 	base:=t.TempDir()
 	canon:=filepath.Join(base,"canonical")
-	shared:=filepath.Join(base,"shared")
+	exportBase:=filepath.Join(base,"export-base")
+	shareDir:=filepath.Join(exportBase,"shared")
 	if err:=os.MkdirAll(canon,0700);err!=nil {t.Fatal(err)}
-	if err:=os.MkdirAll(shared,0700);err!=nil {t.Fatal(err)}
+	if err:=os.MkdirAll(shareDir,0700);err!=nil {t.Fatal(err)}
+	if err:=os.Chmod(shareDir,0770);err!=nil {t.Fatal(err)}
 	canonicalFile:=filepath.Join(canon,"sha256",a.SHA256[:2],a.SHA256)
 	if err:=os.MkdirAll(filepath.Dir(canonicalFile),0700);err!=nil {t.Fatal(err)}
-	// Copy the source fixture bytes independently; never copy the export file
-	// back into the canonical tree as part of production flow.
 	originalData:=[]byte("%PDF-1.7\ncontrolled fixture\n")
 	if err:=os.WriteFile(canonicalFile,originalData,0600);err!=nil {t.Fatal(err)}
-	groupWorker,err:=NewWorkerWithMode(canon,shared,0o660)
+	groupWorker,err:=NewWorkerWithMode(canon,exportBase,0o660)
 	if err!=nil {t.Fatal(err)}
 	defer groupWorker.Close()
-	rcpt,err:=groupWorker.Publish(p,a)
+	gp:=p
+	gp.Folder="shared/"+p.Folder
+	gp.RelativePath="shared/"+p.RelativePath
+	rcpt,err:=groupWorker.Publish(gp,a)
 	if err!=nil {t.Fatal(err)}
-	if runtime.GOOS!="windows" {
-		st,err:=os.Stat(filepath.Join(shared,filepath.FromSlash(rcpt.RelativePath)))
-		if err!=nil || st.Mode().Perm()!=0o660 {t.Fatalf("group mode=%v err=%v",st,err)}
-		dir,err:=os.Stat(filepath.Join(shared,"Prints","2026"))
-		if err!=nil || dir.Mode().Perm()!=0o770 {t.Fatalf("share subfolder mode=%v err=%v",dir,err)}
+	st,err:=os.Stat(filepath.Join(exportBase,filepath.FromSlash(rcpt.RelativePath)))
+	if err!=nil || st.Mode().Perm()!=0o660 {t.Fatalf("group mode=%v err=%v",st,err)}
+	dir,err:=os.Stat(filepath.Join(shareDir,"Prints","2026"))
+	if err!=nil || dir.Mode().Perm()!=0o770 {t.Fatalf("share subfolder mode=%v err=%v",dir,err)}
+	stage,err:=os.Stat(filepath.Join(exportBase,".foliorelay-private-stage"))
+	if err!=nil || stage.Mode().Perm()!=0o700 {t.Fatalf("private staging mode=%v err=%v",stage,err)}
+	if _,err:=NewWorkerWithMode(canon,exportBase,0o666);err==nil {t.Fatal("world-writable mode accepted")}
+	// Protect against the old regression: a shared export root cannot be the
+	// root of the worker's staging filesystem, even when its files use 0660.
+	if _,err:=NewWorkerWithMode(canon,shareDir,0660);!errors.Is(err,ErrUnsafeShare) {
+		t.Fatalf("accepted SMB writable staging parent: %v",err)
 	}
-	if _,err:=NewWorkerWithMode(canon,shared,0o666);err==nil {t.Fatal("world-writable mode accepted")}
+	if _,err:=groupWorker.Publish(p,a);!errors.Is(err,ErrUnsafeShare) {
+		t.Fatalf("group output escaped shared subtree: %v",err)
+	}
 }
