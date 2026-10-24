@@ -132,7 +132,7 @@ func (o *Outbox) Begin(id string) (Effect,error) {
 	agg:="email/"+id
 	snap:=o.durable.Snapshot(agg)
 	if snap.State!="pending" { return Effect{},ErrUnresolvedDelivery }
-	_,err:=o.durable.Apply(state.Command{
+	result,err:=o.durable.Apply(state.Command{
 		Type:"email-dispatch",AggregateID:agg,IdempotencyKey:"dispatch-v1",
 		SemanticFingerprint:id,ExpectedGeneration:&snap.Generation,
 	},func(old state.Snapshot,_ state.Command)(state.TransitionResult,error){
@@ -140,6 +140,9 @@ func (o *Outbox) Begin(id string) (Effect,error) {
 		return state.TransitionResult{State:"dispatching",Changed:true},nil
 	})
 	if err!=nil { return Effect{},err }
+	// The same durable dispatch key can replay under concurrent callers that
+	// both observed pending. Only the caller that committed may send mail.
+	if result.Replayed { return Effect{},ErrUnresolvedDelivery }
 	o.active.Store(id,true)
 	return o.Get(id)
 }

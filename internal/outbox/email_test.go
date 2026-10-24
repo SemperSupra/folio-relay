@@ -4,6 +4,7 @@ import (
 	"errors"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/SemperSupra/folio-relay/internal/security"
@@ -49,6 +50,29 @@ func TestSuccessIsTransportAcceptanceOnly(t *testing.T) {
 	final,err:=o.Conclude(e.ID,"delivered")
 	if err!=nil || final.State!="delivered" { t.Fatalf("finish %#v %v",final,err) }
 	if _,err:=o.Begin(e.ID);!errors.Is(err,ErrUnresolvedDelivery) { t.Fatalf("transport delivered must not retry: %v",err) }
+}
+
+func TestConcurrentBeginHasOneDispatchOwner(t *testing.T) {
+	o,_:=makeOutbox(t)
+	e,err:=o.Enqueue(sample(),security.EmailRecipientPolicy{})
+	if err!=nil { t.Fatal(err) }
+	const callers=64
+	start:=make(chan struct{})
+	results:=make(chan error,callers)
+	var group sync.WaitGroup
+	for i:=0;i<callers;i++ {
+		group.Add(1)
+		go func(){ defer group.Done(); <-start; _,err:=o.Begin(e.ID); results<-err }()
+	}
+	close(start)
+	group.Wait()
+	close(results)
+	owners:=0
+	for err:=range results {
+		if err==nil { owners++; continue }
+		if !errors.Is(err,ErrUnresolvedDelivery) { t.Fatalf("unexpected begin error: %v",err) }
+	}
+	if owners!=1 { t.Fatalf("dispatch owners=%d, want exactly one",owners) }
 }
 
 func TestAmbiguousCrashRefusesAutomatedRetry(t *testing.T) {
