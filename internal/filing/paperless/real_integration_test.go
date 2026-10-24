@@ -119,6 +119,71 @@ func TestDisposableRealPaperless313(t *testing.T){
    t.Fatalf("concrete archived Paperless GET loader unsafe: %#v %v",loadedPacket,err)
  }
  t.Log("archived_paperless_native_readonly_loader=true auto_apply=false")
+
+ // This verifies the NEW archived-effect identity policy with the SAME
+ // actual pinned Paperless 3.1.3 record. The authorization oracle and anchor
+ // are synthetic test doubles and do not establish production admission.
+ ownerPolicy,err:=NewArchivedGrantDecision(recovery,"paperless-fixture",
+  func(_ context.Context,sub ReviewAccessSubject)(ReviewAccessVerdict,error){
+   if sub.Action!=GrantIssue&&sub.Action!=GrantRevoke{return ReviewAccessVerdict{},ErrArchivedGrantPolicy}
+   if sub.ActorID!="approved-paperless-reviewer"||
+      sub.OperatorID!="synthetic-policy"||
+      sub.EffectID!=ticket.ID||sub.DocumentID!=record.ID||
+      sub.TargetID!="paperless-fixture"||sub.TaskID!=taskID||
+      sub.CanonicalSHA256!=doc.SHA256||sub.ApprovalID!=filing.ApprovalID {
+     return ReviewAccessVerdict{},ErrArchivedGrantPolicy
+   }
+   return ReviewAccessVerdict{Subject:sub,ActorIdentityVerified:true,
+    OperatorIdentityVerified:true,RecordPermissionVerified:true,Allowed:true},nil
+  })
+ if err!=nil{t.Fatal(err)}
+ gatedDir:=filepath.Join(t.TempDir(),"anchored-policy-fixture")
+ if err:=os.Mkdir(gatedDir,0o700);err!=nil{t.Fatal(err)}
+ gatedAnchor:=&reviewAnchorFake{}
+ gatedLedger,err:=OpenAnchoredEncryptedReviewGrantLedger(
+  filepath.Join(gatedDir,"grants.frj"),
+  []byte("0123456789abcdef0123456789abcdef"),ownerPolicy,time.Now,gatedAnchor)
+ if err!=nil{t.Fatal(err)}
+ defer gatedLedger.Close()
+ if _,err:=gatedLedger.Issue(ctx,"other-record-user",ticket.ID,
+  "synthetic-policy",time.Minute);err==nil{
+   t.Fatal("unapproved actor obtained a review bearer")
+ }
+ if gatedAnchor.current.Sequence!=0{t.Fatal("unapproved grant advanced independent checkpoint")}
+ gatedToken,err:=gatedLedger.Issue(ctx,"approved-paperless-reviewer",ticket.ID,
+  "synthetic-policy",time.Minute*10)
+ if err!=nil{t.Fatal(err)}
+ gatedBrowser,err:=NewReviewBrowserHandler(gatedLedger.Lookup,sourceLoader,
+  "https://reviews.example.test",[]byte(strings.Repeat("g",32)),time.Now)
+ if err!=nil{t.Fatal(err)}
+ gatedPost:=httptest.NewRequest("POST","https://reviews.example.test/filing/review-sessions",
+   strings.NewReader(fmt.Sprintf("{\"effect_id\":%q}",ticket.ID)))
+ gatedPost.Header.Set("Authorization","Bearer "+gatedToken)
+ gatedPost.Header.Set("Origin","https://reviews.example.test")
+ gatedPost.Header.Set("X-FolioRelay-Review-Session","1")
+ gatedPost.Header.Set("Content-Type","application/json")
+ gatedResp:=httptest.NewRecorder()
+ gatedBrowser.ServeHTTP(gatedResp,gatedPost)
+ if gatedResp.Code!=201||len(gatedResp.Result().Cookies())!=1{
+   t.Fatalf("authorized archived document browser session denied: HTTP %d",gatedResp.Code)
+ }
+ gatedGet:=httptest.NewRequest("GET","https://reviews.example.test/filing/reviews/"+ticket.ID,nil)
+ gatedGet.AddCookie(gatedResp.Result().Cookies()[0])
+ validGated:=httptest.NewRecorder()
+ gatedBrowser.ServeHTTP(validGated,gatedGet)
+ if validGated.Code!=200||!strings.Contains(validGated.Body.String(),record.Title){
+   t.Fatalf("authorized archived Paperless record unavailable HTTP %d",validGated.Code)
+ }
+ if err:=gatedLedger.Revoke(ctx,digestGrant(t,gatedToken),"synthetic-policy");err!=nil{
+  t.Fatal(err)
+ }
+ deniedGated:=httptest.NewRecorder()
+ gatedBrowser.ServeHTTP(deniedGated,gatedGet)
+ if deniedGated.Code!=401||gatedAnchor.current.Sequence!=2{
+   t.Fatalf("revoked browser session survived archived-bound checkpoint: %d",deniedGated.Code)
+ }
+ t.Log("real_paperless_archived_policy_anchor_browser=true issued_one=true revoked=true remote_patch=false")
+
  // Exercise the TLS-bound, short-lived browser session using the same REAL
  // Paperless 3.1.3 native archived document (still completely synthetic).
  browserToken,browserHash:=capabilityFixture()
