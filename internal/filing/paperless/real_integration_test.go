@@ -119,6 +119,46 @@ func TestDisposableRealPaperless313(t *testing.T){
    t.Fatalf("concrete archived Paperless GET loader unsafe: %#v %v",loadedPacket,err)
  }
  t.Log("archived_paperless_native_readonly_loader=true auto_apply=false")
+ // Exercise the TLS-bound, short-lived browser session using the same REAL
+ // Paperless 3.1.3 native archived document (still completely synthetic).
+ browserToken,browserHash:=capabilityFixture()
+ browserNow:=time.Now().UTC()
+ browserGrant:=ReviewGrant{TokenHash:browserHash,ActorID:"human-browser-fixture",
+   EffectID:ticket.ID,ValidFrom:browserNow.Add(-time.Minute),
+   ExpiresAt:browserNow.Add(time.Hour),CanRead:true}
+ browserHandler,err:=NewReviewBrowserHandler(
+   func(hash [32]byte)(ReviewGrant,error){
+     if hash!=browserHash{return ReviewGrant{},ErrReviewGrant}
+     return browserGrant,nil
+   },sourceLoader,"https://reviews.example.test",
+   []byte("0123456789abcdef0123456789abcdef"),
+   func()time.Time{return browserNow})
+ if err!=nil{t.Fatal(err)}
+ sessionRequest:=httptest.NewRequest("POST","https://reviews.example.test/filing/review-sessions",
+   strings.NewReader(fmt.Sprintf("{\\"effect_id\\":%q}",ticket.ID)))
+ sessionRequest.Header.Set("Authorization","Bearer "+browserToken)
+ sessionRequest.Header.Set("Origin","https://reviews.example.test")
+ sessionRequest.Header.Set("X-FolioRelay-Review-Session","1")
+ sessionRequest.Header.Set("Content-Type","application/json")
+ sessionResult:=httptest.NewRecorder()
+ browserHandler.ServeHTTP(sessionResult,sessionRequest)
+ if sessionResult.Code!=201||len(sessionResult.Result().Cookies())!=1{
+    t.Fatalf("synthetic browser exchange failed: status=%d",sessionResult.Code)
+ }
+ readRequest:=httptest.NewRequest("GET","https://reviews.example.test/filing/reviews/"+ticket.ID,nil)
+ readRequest.AddCookie(sessionResult.Result().Cookies()[0])
+ readResult:=httptest.NewRecorder()
+ browserHandler.ServeHTTP(readResult,readRequest)
+ if readResult.Code!=200||!strings.Contains(readResult.Body.String(),record.Title) {
+    t.Fatalf("browser reviewer could not read authorized real-Paperless document: status=%d",readResult.Code)
+ }
+ browserGrant.Revoked=true
+ revokedResult:=httptest.NewRecorder()
+ browserHandler.ServeHTTP(revokedResult,readRequest)
+ if revokedResult.Code!=401{
+   t.Fatalf("revoked native Paperless browser record still accessible: %d",revokedResult.Code)
+ }
+ t.Log("archived_paperless_to_browser_scoped_session=true revoked_before_dms_read=true auto_apply=false")
  // End-to-end, the REAL disposable Paperless metadata feeds our inert
  // reviewer API and a preview, without registering runtime routes or PATCH.
  packet,err:=BuildReviewEnvelope(recovered,record,classic,ReviewEnglish)
