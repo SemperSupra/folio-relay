@@ -19,7 +19,7 @@ import (
 
 // BrowserReviewSession does not reuse FolioRelay management/admin cookies,
 // trust proxy-authenticated actor headers or introduce DMS write authority.
-// A separately issued, 32-byte per-effect bearer can be exchanged ONCE over
+// A separately issued, 32-byte per-effect bearer can be exchanged over
 // direct TLS for an AEAD-sealed, host-only Secure/HttpOnly/SameSite=Strict cookie.
 // GET access always rechecks live grant state for expiry/revocation and scope.
 //
