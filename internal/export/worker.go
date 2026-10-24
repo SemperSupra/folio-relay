@@ -10,6 +10,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -68,7 +69,7 @@ func NewWorkerWithMode(canonicalDir, exportDir string, mode os.FileMode) (*Worke
 	// "shared/" subtree. SMB writers may rename files inside shared/, but
 	// must never rename staging paths in the protected parent.
 	rootStat, err := os.Lstat(out)
-	if err != nil || rootStat.Mode().Perm()&0o022 != 0 {
+	if err != nil || runtime.GOOS != "windows" && rootStat.Mode().Perm()&0o022 != 0 {
 		source.Close(); target.Close()
 		return nil, ErrUnsafeShare
 	}
@@ -77,11 +78,12 @@ func NewWorkerWithMode(canonicalDir, exportDir string, mode os.FileMode) (*Worke
 		return nil, err
 	}
 	stageInfo, err := target.Lstat(".foliorelay-private-stage")
-	if err != nil || !stageInfo.IsDir() || stageInfo.Mode()&os.ModeSymlink != 0 || stageInfo.Mode().Perm() != 0o700 {
+	if err != nil || !stageInfo.IsDir() || stageInfo.Mode()&os.ModeSymlink != 0 || runtime.GOOS != "windows" && stageInfo.Mode().Perm() != 0o700 {
 		source.Close(); target.Close()
 		return nil, ErrUnsafeShare
 	}
 	if mode == 0o660 {
+		if runtime.GOOS == "windows" { source.Close(); target.Close(); return nil, ErrUnsafeShare }
 		// The share root must be site-provisioned with the intended SMB
 		// group, mode and ACL. Never create or chmod it by guesswork.
 		shareInfo, err := target.Lstat("shared")
