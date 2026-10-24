@@ -148,10 +148,24 @@ func (w *Worker) ensureFolder(folder string) error {
 	for i := range parts {
 		name := strings.Join(parts[:i+1], "/")
 		err := w.exports.Mkdir(name, w.directoryMode)
+		created := err == nil
 		if err != nil && !errors.Is(err, os.ErrExist) { return err }
 		stat, err := w.exports.Lstat(name)
 		if err != nil || !stat.IsDir() || stat.Mode() & os.ModeSymlink != 0 {
 			return errors.New("export path contains an unsafe directory")
+		}
+		// mkdir is masked by process umask. On newly owned directories,
+		// enforce the selected share mode before exposing the folder.
+		// Preserve inherited setgid so descendants keep the named SMB group.
+		if created {
+			mode := w.directoryMode
+			if stat.Mode()&os.ModeSetgid != 0 { mode |= os.ModeSetgid }
+			if err := w.exports.Chmod(name, mode); err != nil { return err }
+			stat, err = w.exports.Lstat(name)
+			if err != nil { return err }
+		}
+		if w.directoryMode == 0o770 && stat.Mode().Perm()&0o770 != 0o770 {
+			return errors.New("managed share folder lacks required group permissions")
 		}
 	}
 	return nil
