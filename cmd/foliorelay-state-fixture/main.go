@@ -24,6 +24,7 @@ type ingestRequest struct {
 	MediaType           string `json:"media_type"`
 	Substrate           string `json:"substrate"`
 	SubstrateJobID      string `json:"substrate_job_id"`
+	SourceTitle         string `json:"source_title,omitempty"`
 	Copies              int64  `json:"copies"`
 }
 

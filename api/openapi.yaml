@@ -201,7 +201,8 @@ components:
       type: object
       required:
         [job_id, aggregate_id, accepted_at, state, artifact_sha256,
-         artifact_bytes, media_type, copies, substrate, substrate_job_id]
+         artifact_bytes, media_type, copies, substrate, substrate_job_id,
+         download_name]
       properties:
         job_id: {type: string}
         aggregate_id: {type: string}
@@ -213,6 +214,8 @@ components:
         copies: {type: integer, minimum: 1, maximum: 1000}
         substrate: {type: string}
         substrate_job_id: {type: string}
+        source_title: {type: string, description: "Original print-job title when supplied by the source"}
+        download_name: {type: string, description: "Safe filename with an extension for the retained media type"}
     IngestRequest:
       type: object
       additionalProperties: false
@@ -227,6 +230,7 @@ components:
         media_type: {type: string}
         substrate: {type: string}
         substrate_job_id: {type: string}
+        source_title: {type: string, description: "Optional source print-job title"}
         copies: {type: integer, minimum: 1, maximum: 1000}
     SelfTestCheck:
       type: object

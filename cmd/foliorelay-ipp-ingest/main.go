@@ -27,6 +27,7 @@ type ingestRequest struct {
 	MediaType           string `json:"media_type"`
 	Substrate           string `json:"substrate"`
 	SubstrateJobID      string `json:"substrate_job_id"`
+	SourceTitle         string `json:"source_title,omitempty"`
 	Copies              int64  `json:"copies"`
 }
 
@@ -96,6 +97,10 @@ func main() {
 	}, "\x00")
 	fpSum := sha256.Sum256([]byte(fingerprintInput))
 
+	title := []rune(os.Getenv("FOLIORELAY_SOURCE_JOB_TITLE"))
+	if len(title) > 160 {
+		title = title[:160]
+	}
 	req := ingestRequest{
 		AggregateID:         aggregate,
 		IdempotencyKey:      key,
@@ -105,6 +110,7 @@ func main() {
 		MediaType:           mediaType,
 		Substrate:           substrate,
 		SubstrateJobID:      jobID,
+		SourceTitle:         string(title),
 		Copies:              copies,
 	}
 	payload, _ := json.Marshal(req)

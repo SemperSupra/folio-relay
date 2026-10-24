@@ -28,6 +28,8 @@ type Record struct {
 	Copies         int64     `json:"copies"`
 	Substrate      string    `json:"substrate"`
 	SubstrateJobID string    `json:"substrate_job_id"`
+	SourceTitle    string    `json:"source_title,omitempty"`
+	DownloadName   string    `json:"download_name"`
 }
 
 // Project derives the current Inbox from authoritative commit records.
@@ -81,7 +83,7 @@ func Project(records []frstate.CommitRecord) ([]Record, error) {
 				record.Command.AggregateID)
 		}
 
-		out = append(out, Record{
+		item := Record{
 			JobID:          JobID(record.Command.AggregateID),
 			AggregateID:    record.Command.AggregateID,
 			AcceptedAt:     acceptedAt,
@@ -92,7 +94,10 @@ func Project(records []frstate.CommitRecord) ([]Record, error) {
 			Copies:         copies,
 			Substrate:      metadata["substrate"],
 			SubstrateJobID: metadata["substrate_job_id"],
-		})
+			SourceTitle:    CleanTitle(metadata["source_title"]),
+		}
+		item.DownloadName = DownloadName(item)
+		out = append(out, item)
 	}
 	return out, nil
 }
