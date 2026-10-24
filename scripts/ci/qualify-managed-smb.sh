@@ -74,8 +74,11 @@ for user in folio_ci_rw1 folio_ci_rw2 folio_ci_denied; do
 done
 unset secret
 
-sudo smbd --configfile="$config" --foreground --no-process-group >/dev/null 2>&1 &
-server_pid="$!"
+# Launch in Samba's own daemon process group. Foreground/no-process-group
+# can terminate the hosted Actions step if smbd tears down its inherited group.
+# Store service diagnostics only in this disposable root.
+sudo smbd --configfile="$config" --daemon >"$work/smbd-launch.log" 2>&1
+server_pid="$(cat "$work/smbd.pid" 2>/dev/null || true)"
 # Bounded local readiness polling; never reach a LAN or external host.
 ready=0
 for i in $(seq 1 30); do
@@ -86,7 +89,11 @@ for i in $(seq 1 30); do
   fi
   sleep 1
 done
-test "$ready" -eq 1 || { echo "Samba fixture never became reachable" >&2; exit 1; }
+if [[ "$ready" -ne 1 ]]; then
+  echo "Samba fixture never became reachable" >&2
+  sed -n '1,60p' "$work/smbd-launch.log" >&2 || true
+  exit 1
+fi
 
 for user in folio_ci_rw1 folio_ci_rw2; do
   smbclient //127.0.0.1/foliorelay-fixture -A "$work/$user.auth" \
