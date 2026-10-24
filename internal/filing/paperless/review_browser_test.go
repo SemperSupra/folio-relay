@@ -152,6 +152,9 @@ func TestBrowserSessionRejectsOriginDowngradeCSRFAndManagementCredentials(t *tes
  wrongMethod:=browserRequest(h,"GET","/filing/review-sessions","",nil)
  if wrongMethod.Code!=405{t.Fatal("session minted from GET")}
  noTLS:=httptest.NewRequest("POST",testBrowserOrigin+"/filing/review-sessions",strings.NewReader(payload))
+ // httptest.NewRequest automatically populates TLS for https:// URLs.
+ // Explicitly clear it to model a plaintext hop behind a forged proxy.
+ noTLS.TLS=nil
  noTLS.Host="reviews.example.test"
  noTLS.Header.Set("Origin",testBrowserOrigin)
  noTLS.Header.Set("X-Forwarded-Proto","https")
