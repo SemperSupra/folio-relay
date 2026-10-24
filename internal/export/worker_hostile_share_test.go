@@ -113,3 +113,30 @@ func TestHostileShareWriterCannotPublishOutsideOrTouchPrivateStage(t *testing.T)
         t.Fatalf("temporary source staged outside cleanup or never unlinked: count=%d err=%v",len(staged),err)
     }
 }
+
+// Model the rename window after a successful Mkdir/Lstat and before mode
+// is raised. A share-controlled link must not widen private staging access.
+func TestCreatedFolderSwapCannotChmodPrivateStage(t *testing.T) {
+	if runtime.GOOS == "windows" { t.Skip("requires POSIX symlink and mode semantics") }
+	rootPath := t.TempDir()
+	shared := filepath.Join(rootPath, "shared")
+	private := filepath.Join(rootPath, ".foliorelay-private-stage")
+	if err := os.Mkdir(shared, 0o770); err != nil { t.Fatal(err) }
+	if err := os.Mkdir(private, 0o700); err != nil { t.Fatal(err) }
+	if err := os.Chmod(shared, 0o770); err != nil { t.Fatal(err) }
+	if err := os.Chmod(private, 0o700); err != nil { t.Fatal(err) }
+	root, err := os.OpenRoot(rootPath)
+	if err != nil { t.Fatal(err) }
+	defer root.Close()
+	name := "shared/new-folder"
+	if err := root.Mkdir(name, 0o700); err != nil { t.Fatal(err) }
+	created, err := root.Lstat(name)
+	if err != nil { t.Fatal(err) }
+	if err := root.Remove(name); err != nil { t.Fatal(err) }
+	if err := os.Symlink("../.foliorelay-private-stage", filepath.Join(shared,"new-folder")); err != nil { t.Skipf("symlink unavailable: %v",err) }
+	if err := chmodCreatedDirectory(root, name, created, 0o770); !errors.Is(err, ErrUnsafeShare) {
+		t.Fatalf("replaced folder was not rejected: %v", err)
+	}
+	stage, err := os.Lstat(private)
+	if err != nil || stage.Mode().Perm() != 0o700 { t.Fatalf("private stage mode changed: %#v %v", stage, err) }
+}
