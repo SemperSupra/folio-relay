@@ -163,7 +163,9 @@ func TestDisposableRealPaperless313(t *testing.T){
  // Replay the SAME synthetic document through an encrypted, durable and
  // revoked grant instead of a throwaway memory lookup. Token issuance is
  // explicitly admitted only by this disposable fixture policy.
- grantFile:=filepath.Join(t.TempDir(),"encrypted-review-grants.frj")
+ grantDir:=filepath.Join(t.TempDir(),"private-grant-state")
+ if err:=os.Mkdir(grantDir,0o700);err!=nil{t.Fatal(err)}
+ grantFile:=filepath.Join(grantDir,"encrypted-review-grants.frj")
  ledgerKey:=[]byte("0123456789abcdef0123456789abcdef")
  admit:=func(_ context.Context,action ReviewGrantAction,actor,effect,operator string)error{
    if (action!=GrantIssue&&action!=GrantRevoke)||actor!="synthetic-human"||
