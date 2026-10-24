@@ -182,7 +182,7 @@ func TestDisposableRealPaperless313(t *testing.T){
  if err!=nil{t.Fatal(err)}
  defer recoveredGrants.Close()
  durableBrowser,err:=NewReviewBrowserHandler(recoveredGrants.Lookup,sourceLoader,
-   "https://reviews.example.test",ledgerKey,time.Now)
+   "https://reviews.example.test",[]byte(strings.Repeat("k",32)),time.Now)
  if err!=nil{t.Fatal(err)}
  durablePOST:=httptest.NewRequest("POST","https://reviews.example.test/filing/review-sessions",
    strings.NewReader(fmt.Sprintf("{\"effect_id\":%q}",ticket.ID)))
