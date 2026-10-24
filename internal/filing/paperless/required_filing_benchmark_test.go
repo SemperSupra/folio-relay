@@ -111,6 +111,12 @@ func TestRequiredTrilingualFilingQuality(t *testing.T) {
   decErr:=json.NewDecoder(response.Body).Decode(&record)
   response.Body.Close()
   if decErr!=nil||record.ID!=task.DocumentID{t.Fatalf("readback %s: %v",item.ID,decErr)}
+  // These are fully synthetic CI-generated images only, never user records.
+  // Preserve exactly what Tesseract produced to diagnose why literal Thai
+  // matching abstained on all six required-language document categories.
+  if item.Language=="th"&&!item.Negative{
+    t.Logf("FOLIO_SYNTHETIC_THAI_OCR id=%s text=%q",item.ID,record.Content)
+  }
   stats.DurationsMS=append(stats.DurationsMS,time.Since(start).Milliseconds())
   var actual int
   if record.DocumentType!=nil{actual=*record.DocumentType}
