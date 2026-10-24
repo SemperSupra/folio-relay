@@ -90,6 +90,11 @@ func (c *Client) do(ctx context.Context,method,uri,mime string,body io.Reader)(*
  }
  if resp.StatusCode <200 || resp.StatusCode >=300 {
    resp.Body.Close()
+   // A proxy 5xx/redirect/429 after POST is not definitive proof of no
+   // side effect. The durable submission reservation must stay HOLD.
+   if method==http.MethodPost && (resp.StatusCode>=500 || resp.StatusCode==429 || resp.StatusCode>=300 && resp.StatusCode<400) {
+      return nil,fmt.Errorf("%w: HTTP %d",ErrUncertain,resp.StatusCode)
+   }
    return nil,fmt.Errorf("%w: HTTP %d",ErrRemote,resp.StatusCode)
  }
  return resp,nil
