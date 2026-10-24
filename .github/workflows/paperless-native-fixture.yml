@@ -1,9 +1,6 @@
 name: Paperless native filing disposable qualification
 
 on:
-  push:
-    branches:
-      - test/paperless-native-classifier-20261024
   pull_request:
     paths:
       - "internal/filing/paperless/**"
@@ -21,7 +18,7 @@ concurrency:
 jobs:
   paperless313:
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
@@ -63,7 +60,7 @@ jobs:
             | tee /tmp/folio-paperless-image.txt
       - name: Qualify real async ingest, readback and duplicate behavior
         shell: bash
-        timeout-minutes: 24
+        timeout-minutes: 12
         run: |
           set -euo pipefail
           ready=0
@@ -99,14 +96,7 @@ jobs:
           )"
           echo "::add-mask::$FOLIO_FIXTURE_PAPERLESS_TOKEN"
           unset FOLIO_FIXTURE_PAPERLESS_PASSWORD
-          go test -tags=paperless_integration ./internal/filing/paperless -run '^(TestDisposableRealPaperless313|TestNativeClassifierBenchmark)
-      - name: Fixture cleanup
-        if: always()
-        shell: bash
-        run: |
-          docker rm -f folio_ci_paperless folio_ci_valkey >/dev/null 2>&1 || true
-          docker network rm folio_paperless_ci >/dev/null 2>&1 || true
- -count=1 -v
+          go test -tags=paperless_integration ./internal/filing/paperless -run '^TestDisposableRealPaperless313$' -count=1 -v
       - name: Fixture cleanup
         if: always()
         shell: bash
