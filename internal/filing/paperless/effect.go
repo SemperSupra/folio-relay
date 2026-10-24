@@ -59,7 +59,15 @@ func (i Intent) Validate()error {
  return nil
 }
 func effectID(i Intent)string {
- b,_:=json.Marshal(i)
+ // Approval IDs are authorization evidence, not a license for multiple
+ // uploads of the same immutable document to the same destination/policy.
+ // v1 intentionally de-duplicates across repeated approval gestures.
+ identity:=struct{
+   Digest string `json:"digest"`
+   Target string `json:"target"`
+   Policy string `json:"policy"`
+ }{i.CanonicalSHA256,i.TargetID,i.PolicyVersion}
+ b,_:=json.Marshal(identity)
  h:=sha256.Sum256(append([]byte("foliorelay-paperless-filing/v1\x00"),b...))
  return hex.EncodeToString(h[:])
 }

@@ -6,6 +6,8 @@ import (
  "strings"
  "testing"
 
+ "github.com/SemperSupra/folio-relay/internal/state"
+
 )
 func testIntent() Intent {
  return Intent{
@@ -24,8 +26,12 @@ func TestExplicitApprovalAndStableEnqueue(t *testing.T){
  b,err:=o.Enqueue(i)
  if err!=nil||a!=b{t.Fatalf("non-idempotent enqueue %#v %#v %v",a,b,err)}
  i.ApprovalID="user-approved-002"
+ if _,err:=o.Enqueue(i);!errors.Is(err,state.ErrIdempotencyConflict){
+   t.Fatalf("second approval must NOT duplicate identical content: %v",err)
+ }
+ i.TargetID="paperless-alternate"
  changed,err:=o.Enqueue(i)
- if err!=nil||changed.ID==a.ID{t.Fatalf("second approval collision %#v %v",changed,err)}
+ if err!=nil||changed.ID==a.ID{t.Fatalf("new authorized destination must have distinct identity %#v %v",changed,err)}
  i.ApprovalID=""
  if _,err:=o.Enqueue(i);!errors.Is(err,ErrApproval){t.Fatalf("unauthorized intent %v",err)}
 }

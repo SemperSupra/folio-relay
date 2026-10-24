@@ -12,6 +12,9 @@ import (
  "path/filepath"
  "strings"
  "testing"
+ "errors"
+
+ "github.com/SemperSupra/folio-relay/internal/state"
  "time"
 )
 
@@ -99,28 +102,15 @@ func TestDisposableRealPaperless313(t *testing.T){
  if err!=nil||recovered.State!="archived"||recovered.DocumentID!=record.ID{
    t.Fatalf("durable end-to-end recovery %#v %v",recovered,err)
  }
- // Repeat the identical bytes as a brand-new explicitly authorized intent
- // to establish the DMS' duplicate handling without damaging its original.
+ // The first real v3.1.3 qualification showed that a raw second
+ // POST of identical bytes can create a SECOND archive ID. Prevent that
+ // POST at our durable adapter boundary, including after journal restart.
  filing.ApprovalID="approved-fixture-2"
- secondEffect,err:=recovery.Enqueue(filing)
- if err!=nil{t.Fatal(err)}
- if _,err:=recovery.Begin(secondEffect.ID);err!=nil{t.Fatal(err)}
- task2,err:=c.Upload(ctx,doc)
- if err!=nil {t.Fatalf("duplicate attempt did not yield a verifiable Paperless task: %v",err)}
- if _,err:=recovery.Accept(secondEffect.ID,task2);err!=nil{t.Fatal(err)}
- for {
-  if err:=ctx.Err();err!=nil{t.Fatalf("duplicate outcome timeout: %v",err)}
-  second,err:=c.Observe(ctx,task2)
-  if err!=nil{t.Fatal(err)}
-  if second.Outcome=="duplicate" || second.Outcome=="rejected" {
-    final,err:=recovery.MarkTask(secondEffect.ID,second)
-    if err!=nil{t.Fatalf("durable duplicate/rejection: %v",err)}
-    t.Logf("duplicate candidate no archive outcome=%s durable=%s",second.Outcome,final.State)
-    break
-  }
-  if second.Outcome=="archived" {
-     t.Fatalf("duplicate created a second archived doc id=%d",second.DocumentID)
-  }
-  time.Sleep(2*time.Second)
+ if _,err:=recovery.Enqueue(filing);!errors.Is(err,state.ErrIdempotencyConflict){
+   t.Fatalf("fresh approval incorrectly authorized duplicate upload: %v",err)
  }
+ if _,err:=recovery.Begin(ticket.ID);!errors.Is(err,ErrHold){
+   t.Fatalf("recovered archived effect must not be sent again: %v",err)
+ }
+ t.Log("duplicate repeated approval blocked before network=true")
 }
