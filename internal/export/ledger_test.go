@@ -22,7 +22,7 @@ func TestDurableExportEffectAndNoImplicitReplay(t *testing.T) {
 	if err!=nil || again!=first {t.Fatalf("replay %#v %#v %v",first,again,err)}
 	intent.Plan.Filename="different.pdf"
 	intent.Plan.RelativePath="Prints/2026/different.pdf"
-	if _,err:=l.Enqueue(intent);!errors.Is(err,errors.New("never")) && err==nil {t.Fatal("same action changed semantic payload")}
+	if _,err:=l.Enqueue(intent);err==nil {t.Fatal("same action changed semantic payload")}
 	if _,err:=l.Begin(first.ID);err!=nil {t.Fatal(err)}
 	if _,err:=w.Publish(p,a);err!=nil {t.Fatal(err)}
 	if err:=l.Close();err!=nil {t.Fatal(err)}
