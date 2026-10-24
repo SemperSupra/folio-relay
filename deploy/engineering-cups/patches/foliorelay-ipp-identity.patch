@@ -1,3 +1,15 @@
+diff --git a/cups/ipp-support.c b/cups/ipp-support.c
+index 19bde141..c52b700e 100644
+--- a/cups/ipp-support.c
++++ b/cups/ipp-support.c
+@@ -1759,6 +1759,7 @@ ippCreateRequestedArray(ipp_t *request)	/* I - IPP request */
+     "printer-organizational-unit",
+     "printer-output-tray",		/* IPP JPS3 */
+     "printer-service-type",		/* IPP System */
++    "printer-serial-number",
+     "printer-settable-attributes-supported",
+     "printer-state",
+     "printer-state-change-date-time",
 diff --git a/scheduler/ipp.c b/scheduler/ipp.c
 index 9a280e75..f594252f 100644
 --- a/scheduler/ipp.c
