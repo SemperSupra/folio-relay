@@ -6,7 +6,6 @@ import (
  "strings"
  "testing"
 
- "github.com/SemperSupra/folio-relay/internal/state"
 )
 func testIntent() Intent {
  return Intent{
@@ -117,5 +116,4 @@ func TestEffectJournalContainsNoContentOrCredentials(t *testing.T){
  rows:=o.durable.Records()
  if len(rows)!=1||rows[0].Command.Metadata["intent"]==""{t.Fatal("no durable metadata")}
  if rows[0].Command.Metadata["document"]!=""||rows[0].Command.Metadata["token"]!=""{t.Fatal("credentials or document persisted")}
- if !errors.Is(state.ErrIdempotencyConflict,state.ErrIdempotencyConflict){t.Fatal("unreachable")}
 }
