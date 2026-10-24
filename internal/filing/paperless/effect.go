@@ -18,7 +18,27 @@ import (
 var (
  ErrApproval = errors.New("filing requires an explicit approved destination")
  ErrHold = errors.New("filing requires durable destination reconciliation")
- identRe = regexp.MustCompile(`^[A-Za-z0-9_-]{3,72}$`)
+ identRe = regexp.MustCompile(`^[A-Za-z0-9_-]{1,72}package paperless
+
+import (
+ "crypto/sha256"
+ "encoding/hex"
+ "encoding/json"
+ "errors"
+ "fmt"
+ "regexp"
+ "sync"
+
+ "github.com/SemperSupra/folio-relay/internal/state"
+)
+
+// Filing effects are independent of printing, email, and managed SMB output.
+// Once submission could have occurred, missing responses must NEVER trigger
+// an automatic retry, even after a process crash.
+var (
+ ErrApproval = errors.New("filing requires an explicit approved destination")
+ ErrHold = errors.New("filing requires durable destination reconciliation")
+ )
 )
 
 type Intent struct {
