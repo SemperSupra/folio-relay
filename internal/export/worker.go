@@ -38,6 +38,7 @@ type Worker struct {
 	canonical *os.Root
 	exports *os.Root
 	fileMode os.FileMode
+	directoryMode os.FileMode
 }
 
 func NewWorker(canonicalDir, exportDir string) (*Worker, error) {
@@ -62,7 +63,9 @@ func NewWorkerWithMode(canonicalDir, exportDir string, mode os.FileMode) (*Worke
 	if err != nil { return nil, err }
 	target, err := os.OpenRoot(out)
 	if err != nil { source.Close(); return nil, err }
-	return &Worker{canonical: source, exports: target, fileMode:mode}, nil
+	dirMode := os.FileMode(0o750)
+	if mode == 0o660 { dirMode = 0o770 }
+	return &Worker{canonical: source, exports: target, fileMode:mode, directoryMode:dirMode}, nil
 }
 
 func checkedRoot(dir string) (string, error) {
@@ -144,11 +147,25 @@ func (w *Worker) ensureFolder(folder string) error {
 	parts := strings.Split(folder, "/")
 	for i := range parts {
 		name := strings.Join(parts[:i+1], "/")
-		err := w.exports.Mkdir(name, 0o750)
+		err := w.exports.Mkdir(name, w.directoryMode)
+		created := err == nil
 		if err != nil && !errors.Is(err, os.ErrExist) { return err }
 		stat, err := w.exports.Lstat(name)
 		if err != nil || !stat.IsDir() || stat.Mode() & os.ModeSymlink != 0 {
 			return errors.New("export path contains an unsafe directory")
+		}
+		// mkdir is masked by process umask. On newly owned directories,
+		// enforce the selected share mode before exposing the folder.
+		// Preserve inherited setgid so descendants keep the named SMB group.
+		if created {
+			mode := w.directoryMode
+			if stat.Mode()&os.ModeSetgid != 0 { mode |= os.ModeSetgid }
+			if err := w.exports.Chmod(name, mode); err != nil { return err }
+			stat, err = w.exports.Lstat(name)
+			if err != nil { return err }
+		}
+		if w.directoryMode == 0o770 && stat.Mode().Perm()&0o770 != 0o770 {
+			return errors.New("managed share folder lacks required group permissions")
 		}
 	}
 	return nil

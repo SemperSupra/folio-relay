@@ -171,6 +171,8 @@ func TestExplicitGroupWritableModeAndPrivateDefault(t *testing.T) {
 	if runtime.GOOS!="windows" {
 		st,err:=os.Stat(filepath.Join(shared,filepath.FromSlash(rcpt.RelativePath)))
 		if err!=nil || st.Mode().Perm()!=0o660 {t.Fatalf("group mode=%v err=%v",st,err)}
+		dir,err:=os.Stat(filepath.Join(shared,"Prints","2026"))
+		if err!=nil || dir.Mode().Perm()!=0o770 {t.Fatalf("share subfolder mode=%v err=%v",dir,err)}
 	}
 	if _,err:=NewWorkerWithMode(canon,shared,0o666);err==nil {t.Fatal("world-writable mode accepted")}
 }
