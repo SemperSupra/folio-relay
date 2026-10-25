@@ -98,6 +98,13 @@ paths:
   /api/v1/jobs/{job_id}/artifact:
     get:
       operationId: getArtifact
+      description: >
+        The complete canonical source is copied into protected scratch storage,
+        verified against the durable accepted SHA-256 and length, and only then
+        exposed. A missing, modified, or unavailable source never yields
+        partial unverified document bytes. The observed historical job remains
+        durable. This transport currently has management-session authorization,
+        not user/record-scoped identity; product AAA #96 gates that rollout.
       security: [{bearerAuth: []}]
       parameters:
         - in: path
@@ -106,10 +113,20 @@ paths:
           schema: {type: string}
       responses:
         "200":
-          description: Original accepted source artifact.
+          description: Fully verified source byte snapshot (no partial range support).
           content:
             application/octet-stream: {}
         "404": {$ref: "#/components/responses/NotFound"}
+        "409":
+          description: Canonical source has an invalid reference or corrupt bytes.
+        "429":
+          description: Bounded integrity/snapshot worker is busy.
+          headers:
+            Retry-After:
+              schema: {type: string}
+        "503":
+          description: Snapshot could not be qualified (storage, read, cancellation).
+
   /api/v1/jobs/{job_id}/integrity:
     get:
       operationId: getJobIntegrity
