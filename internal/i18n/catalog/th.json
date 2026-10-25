@@ -59,5 +59,12 @@
   "diagnostics.profiles.airprint.pass": "เปิดใช้งานโปรไฟล์ AirPrint ผ่านการกำหนดค่าที่ผ่านการตรวจสอบแล้ว",
   "diagnostics.profiles.airprint.warn": "ยังไม่ได้เปิดใช้งานโปรไฟล์ AirPrint",
   "diagnostics.code_only": "รหัสการวินิจฉัย: {code}",
-  "errors.generic": "ไม่สามารถดำเนินการให้เสร็จได้ อ้างอิง: {code}"
+  "errors.generic": "ไม่สามารถดำเนินการให้เสร็จได้ อ้างอิง: {code}",
+  "locale.label": "ภาษา",
+  "diagnostics.technical_detail": "รายละเอียดทางเทคนิค",
+  "diagnostics.printer.identity.fix": "แก้ไขข้อมูลระบุตัวตนถาวรของเครื่องพิมพ์ก่อนรับงานพิมพ์",
+  "diagnostics.state.inbox_projection.fix": "เก็บรักษาบันทึกเหตุการณ์และตรวจสอบรายการแรกที่ไม่ถูกต้องในกล่องขาเข้า",
+  "diagnostics.storage.artifact_store.fix": "กู้คืนชุดข้อมูลหรือจุดเมานต์ FolioRelay ที่กำหนดค่าไว้ก่อนรับงานพิมพ์",
+  "diagnostics.profiles.airprint.fix": "เปิดใช้งานเมื่อระบบการพิมพ์ที่เลือกผ่านเกณฑ์ AirPrint MVP แล้วเท่านั้น",
+  "overview.degraded": "ต้องดำเนินการ"
 }
