@@ -116,6 +116,69 @@ func TestIngestInboxArtifactSurvivesRestart(t *testing.T) {
 	if !bytes.Equal(got, body) {
 		t.Fatalf("artifact changed: %q", got)
 	}
+
+	// Integrity is a separate, authenticated observation. It preserves the
+	// durable job while external filesystem changes affect only availability.
+	integrityPath := "/api/v1/jobs/" + page.Items[0].JobID + "/integrity"
+	checkIntegrity := func(want frinbox.Integrity, reason string) {
+		t.Helper()
+		r := httptest.NewRequest(http.MethodGet, integrityPath, nil)
+		r.Header.Set("Authorization", "Bearer "+testToken)
+		response := httptest.NewRecorder()
+		h.ServeHTTP(response, r)
+		if response.Code != http.StatusOK || response.Header().Get("Cache-Control") != "no-store" {
+			t.Fatalf("integrity status/header: %d %q", response.Code, response.Header().Get("Cache-Control"))
+		}
+		var receipt frinbox.IntegrityReceipt
+		if err := json.Unmarshal(response.Body.Bytes(), &receipt); err != nil {
+			t.Fatal(err)
+		}
+		if receipt.JobID != page.Items[0].JobID || receipt.State != want || receipt.ReasonCode != reason || receipt.CheckedAt.IsZero() {
+			t.Fatalf("unexpected integrity receipt: %+v", receipt)
+		}
+		if strings.Contains(response.Body.String(), store) || strings.Contains(response.Body.String(), string(body)) {
+			t.Fatal("integrity receipt leaked canonical path or document bytes")
+		}
+	}
+	unauthorized := httptest.NewRecorder()
+	h.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodGet, integrityPath, nil))
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("integrity without auth: %d", unauthorized.Code)
+	}
+	missingJob := httptest.NewRequest(http.MethodGet, "/api/v1/jobs/job-"+strings.Repeat("0", 64)+"/integrity", nil)
+	missingJob.Header.Set("Authorization", "Bearer "+testToken)
+	unknown := httptest.NewRecorder()
+	h.ServeHTTP(unknown, missingJob)
+	if unknown.Code != http.StatusNotFound {
+		t.Fatalf("unknown job integrity: %d", unknown.Code)
+	}
+	checkIntegrity(frinbox.IntegrityAvailable, "canonical_verified")
+	server.integritySlot <- struct{}{}
+	busyRequest := httptest.NewRequest(http.MethodGet, integrityPath, nil)
+	busyRequest.Header.Set("Authorization", "Bearer "+testToken)
+	busy := httptest.NewRecorder()
+	h.ServeHTTP(busy, busyRequest)
+	<-server.integritySlot
+	if busy.Code != http.StatusTooManyRequests || busy.Header().Get("Retry-After") != "2" {
+		t.Fatalf("concurrent integrity work was not bounded: %d %q", busy.Code, busy.Header().Get("Retry-After"))
+	}
+	altered := append([]byte(nil), body...)
+	altered[len(altered)-2] ^= 1
+	if err := os.WriteFile(artifactPath, altered, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	checkIntegrity(frinbox.IntegrityCorrupt, "canonical_hash_mismatch")
+	if err := os.Remove(artifactPath); err != nil {
+		t.Fatal(err)
+	}
+	checkIntegrity(frinbox.IntegrityMissing, "canonical_artifact_missing")
+	jobRead := httptest.NewRequest(http.MethodGet, "/api/v1/jobs/"+page.Items[0].JobID, nil)
+	jobRead.Header.Set("Authorization", "Bearer "+testToken)
+	retained := httptest.NewRecorder()
+	h.ServeHTTP(retained, jobRead)
+	if retained.Code != http.StatusOK {
+		t.Fatalf("integrity observation removed job: %d", retained.Code)
+	}
 }
 
 func TestManagementEndpointsRequireBearerToken(t *testing.T) {

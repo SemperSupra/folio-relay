@@ -41,6 +41,7 @@ type Server struct {
 	token         string
 	printer       frprinter.Identity
 	profiles      Profiles
+	integritySlot chan struct{}
 }
 
 type ingestRequest struct {
@@ -74,7 +75,7 @@ func New(state *frstate.DurableEngine, artifactStore, token string, printer frpr
 	}
 	return &Server{
 		state: state, artifactStore: artifactStore, token: token,
-		printer: printer, profiles: profiles,
+		printer: printer, profiles: profiles, integritySlot: make(chan struct{}, 1),
 	}, nil
 }
 
@@ -98,6 +99,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/self-test", s.requireAuth(http.HandlerFunc(s.handleSelfTest)))
 	mux.Handle("GET /api/v1/jobs", s.requireAuth(http.HandlerFunc(s.handleJobs)))
 	mux.Handle("GET /api/v1/jobs/{job_id}", s.requireAuth(http.HandlerFunc(s.handleJob)))
+	mux.Handle("GET /api/v1/jobs/{job_id}/integrity", s.requireAuth(http.HandlerFunc(s.handleJobIntegrity)))
 	mux.Handle("GET /api/v1/jobs/{job_id}/artifact", s.requireAuth(http.HandlerFunc(s.handleArtifact)))
 	mux.Handle("POST /api/v1/ingest", s.requireAuth(http.HandlerFunc(s.handleIngest)))
 	// Compatibility alias for the existing print adapter while the product API
@@ -284,8 +286,8 @@ func (s *Server) handleSelfTest(w http.ResponseWriter, _ *http.Request) {
 		overall = "fail"
 		checks = append(checks, selfTestCheck{
 			Code: "printer.identity", Status: "fail",
-			Message: "Canonical printer identity is invalid.",
-			Detail: err.Error(),
+			Message:     "Canonical printer identity is invalid.",
+			Detail:      err.Error(),
 			Remediation: "Repair the durable printer identity before admitting print jobs.",
 		})
 	} else {
@@ -299,8 +301,8 @@ func (s *Server) handleSelfTest(w http.ResponseWriter, _ *http.Request) {
 		overall = "fail"
 		checks = append(checks, selfTestCheck{
 			Code: "state.inbox_projection", Status: "fail",
-			Message: "Durable Inbox projection cannot be reconstructed.",
-			Detail: err.Error(),
+			Message:     "Durable Inbox projection cannot be reconstructed.",
+			Detail:      err.Error(),
 			Remediation: "Preserve the journal and inspect the first invalid durable Inbox record.",
 		})
 	} else {
@@ -319,8 +321,8 @@ func (s *Server) handleSelfTest(w http.ResponseWriter, _ *http.Request) {
 		}
 		checks = append(checks, selfTestCheck{
 			Code: "storage.artifact_store", Status: "fail",
-			Message: "Artifact store is unavailable.",
-			Detail: detail,
+			Message:     "Artifact store is unavailable.",
+			Detail:      detail,
 			Remediation: "Restore the configured FolioRelay data dataset/mount before accepting jobs.",
 		})
 	} else {
@@ -342,7 +344,7 @@ func (s *Server) handleSelfTest(w http.ResponseWriter, _ *http.Request) {
 	} else {
 		checks = append(checks, selfTestCheck{
 			Code: "profiles.airprint", Status: "warn",
-			Message: "AirPrint profile is not yet enabled.",
+			Message:     "AirPrint profile is not yet enabled.",
 			Remediation: "Enable only after the selected substrate passes the AirPrint MVP profile gate.",
 		})
 		if overall == "pass" {
@@ -358,9 +360,9 @@ func (s *Server) handleSelfTest(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) handlePrinter(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"identity": s.printer,
+		"identity":   s.printer,
 		"public_uri": s.printer.URI(),
-		"profiles": s.profiles,
+		"profiles":   s.profiles,
 	})
 }
 
@@ -426,6 +428,31 @@ func (s *Server) handleJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, record)
+}
+
+// handleJobIntegrity observes only the canonical source named by a durable
+// accepted job. It does not rewrite the job or validate any delivery copy.
+// A successful observation can become stale immediately after this request.
+func (s *Server) handleJobIntegrity(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	record, ok, err := s.findJob(r.PathValue("job_id"))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "inbox_projection_failed", "inbox projection unavailable")
+		return
+	}
+	if !ok {
+		writeError(w, http.StatusNotFound, "job_not_found", "job not found")
+		return
+	}
+	select {
+	case s.integritySlot <- struct{}{}:
+		defer func() { <-s.integritySlot }()
+	default:
+		w.Header().Set("Retry-After", "2")
+		writeError(w, http.StatusTooManyRequests, "integrity_verification_busy", "verification is busy")
+		return
+	}
+	writeJSON(w, http.StatusOK, frinbox.VerifyCanonicalArtifact(s.artifactStore, record, time.Now()))
 }
 
 func (s *Server) handleArtifact(w http.ResponseWriter, r *http.Request) {
