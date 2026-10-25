@@ -5,7 +5,8 @@ import (
  "crypto/sha256"
  "encoding/hex"
  "errors"
- "fmt"
+ "path/filepath"
+ "runtime"
  "io"
  "os"
  "path"
@@ -107,11 +108,11 @@ func SnapshotVerifiedArtifact(ctx context.Context,rootDir string,record Record,c
  committed:=false
  defer func(){if !committed {_=snap.Close()}}()
  stat,err:=os.Stat(dir)
- if err!=nil || !stat.IsDir() || stat.Mode().Perm()!=0o700 {
+ if err!=nil || !stat.IsDir() || (runtime.GOOS!="windows" && stat.Mode().Perm()!=0o700) {
   receipt.ReasonCode="snapshot_storage_untrusted"
   return nil,receipt
  }
- snap.file,err=os.OpenFile(pathJoinPrivate(dir,"verified"),os.O_CREATE|os.O_EXCL|os.O_RDWR,0o600)
+ snap.file,err=os.OpenFile(filepath.Join(dir,"verified"),os.O_CREATE|os.O_EXCL|os.O_RDWR,0o600)
  if err!=nil {receipt.ReasonCode="snapshot_storage_unavailable";return nil,receipt}
  h:=sha256.New()
  // Hash exactly the bytes copied to the isolated private snapshot, not a
@@ -142,5 +143,3 @@ func SnapshotVerifiedArtifact(ctx context.Context,rootDir string,record Record,c
  return snap,receipt
 }
 
-// No user-controlled path components enter this local scratch path.
-func pathJoinPrivate(dir,name string)string{return fmt.Sprintf("%s%c%s",dir,os.PathSeparator,name)}
