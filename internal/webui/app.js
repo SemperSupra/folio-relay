@@ -1,7 +1,102 @@
 "use strict";
 
 const $ = (id) => document.getElementById(id);
-const state = { printer: null, status: null, diagnostics: null, locale: "en", messages: {} };
+// This last-resort, trusted plain-text copy is checked against the Go embedded
+// English catalog in five-profile browser CI. Do not issue network requests
+// or display raw i18n keys when language catalogs are offline.
+const ENGLISH = Object.freeze({
+  "portal.tagline": "Virtual Printer",
+  "portal.sign_out": "Sign out",
+  "login.title": "Connect to FolioRelay",
+  "login.description": "Enter the management credential created when the TrueNAS app was installed.",
+  "login.credential": "Management credential",
+  "login.sign_in": "Sign in",
+  "login.invalid": "The management credential was not accepted.",
+  "login.required": "Authentication required",
+  "login.unavailable": "Session status unavailable",
+  "nav.aria": "FolioRelay views",
+  "nav.overview": "Overview",
+  "nav.inbox": "Inbox",
+  "nav.printer": "Printer",
+  "nav.diagnostics": "Diagnostics",
+  "overview.system_status": "System status",
+  "overview.checking": "Checking…",
+  "overview.ready": "Ready",
+  "overview.accepting": "FolioRelay is accepting and retaining print jobs.",
+  "overview.self_test": "Run self-test",
+  "overview.native_apple": "Native iPhone/iPad printing",
+  "overview.native_windows": "Inbox Microsoft IPP path",
+  "overview.accepted_jobs": "Accepted print jobs",
+  "overview.endpoint": "Printer endpoint",
+  "overview.copy": "Copy",
+  "overview.copied": "Copied",
+  "overview.never": "No successful prints yet.",
+  "overview.last_print": "Last accepted print: {time}",
+  "overview.enabled": "Enabled",
+  "overview.disabled": "Disabled",
+  "overview.not_enabled": "Not enabled",
+  "overview.airprint_enabled": "AirPrint is configured. Installed-system discovery is verified separately by deployment diagnostics and real-device acceptance.",
+  "overview.airprint_disabled": "AirPrint is not enabled in this runtime profile.",
+  "inbox.heading": "Accepted artifacts",
+  "inbox.refresh": "Refresh",
+  "inbox.empty": "No accepted print jobs yet.",
+  "inbox.download": "Download",
+  "printer.native": "Native printing",
+  "printer.name": "Name",
+  "printer.location": "Location",
+  "printer.public_uri": "Public URI",
+  "printer.uuid": "Printer UUID",
+  "printer.windows_ipp": "Windows IPP",
+  "printer.instructions_windows": "Add the printer using the IPP endpoint above. No vendor driver is required.",
+  "printer.airprint_loading": "AirPrint status is loading.",
+  "diagnostics.shared_oracle": "Shared human / automation / agent oracle",
+  "diagnostics.next_action": "Next action: {action}",
+  "diagnostics.pass": "Pass",
+  "diagnostics.fail": "Fail",
+  "diagnostics.warn": "Warning",
+  "diagnostics.unknown": "Unknown",
+  "diagnostics.printer.identity.pass": "Canonical printer identity is valid.",
+  "diagnostics.printer.identity.fail": "Canonical printer identity is invalid.",
+  "diagnostics.state.inbox_projection.pass": "Durable Inbox projection is reconstructable.",
+  "diagnostics.state.inbox_projection.fail": "Durable Inbox projection cannot be reconstructed.",
+  "diagnostics.storage.artifact_store.pass": "Artifact store is available.",
+  "diagnostics.storage.artifact_store.fail": "Artifact store is unavailable.",
+  "diagnostics.profiles.windows_ipp.pass": "Windows inbox IPP profile is enabled.",
+  "diagnostics.profiles.airprint.pass": "AirPrint profile is enabled by qualified configuration.",
+  "diagnostics.profiles.airprint.warn": "AirPrint profile is not yet enabled.",
+  "diagnostics.code_only": "Diagnostic code: {code}",
+  "errors.generic": "The operation could not be completed. Reference: {code}",
+  "locale.label": "Language",
+  "diagnostics.technical_detail": "Technical detail",
+  "diagnostics.printer.identity.fix": "Repair the durable printer identity before admitting print jobs.",
+  "diagnostics.state.inbox_projection.fix": "Preserve the journal and inspect the first invalid durable Inbox record.",
+  "diagnostics.storage.artifact_store.fix": "Restore the configured FolioRelay data dataset/mount before accepting jobs.",
+  "diagnostics.profiles.airprint.fix": "Enable only after the selected substrate passes the AirPrint MVP profile gate.",
+  "overview.degraded": "Action required"
+});
+const state = {
+  printer: null, status: null, diagnostics: null, jobPage: null,
+  locale: "en", messages: ENGLISH, localeRequest: 0
+};
+const keys = Object.keys(ENGLISH).sort();
+function placeholders(message) {
+  return [...new Set([...message.matchAll(/\{([a-z][a-z0-9_]*)\}/g)].map(x => x[1]))].sort();
+}
+function validCatalog(candidate) {
+  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return false;
+  const provided = Object.keys(candidate).sort();
+  if (provided.length !== keys.length || provided.some((k, i) => k !== keys[i])) return false;
+  return keys.every((key) => {
+    const entry = candidate[key];
+    return typeof entry === "string" && entry.length > 0 &&
+      !/[<>]/.test(entry) &&
+      JSON.stringify(placeholders(entry)) === JSON.stringify(placeholders(ENGLISH[key]));
+  });
+}
+function announce(text) {
+  const region = $("announcements");
+  if (region) region.textContent = text;
+}
 
 // A language is a presentation preference only. It never changes session
 // authority, document identity, durable states, or provider routing.
@@ -13,10 +108,10 @@ function browserLocale() {
   return "en";
 }
 function tr(key, values = {}) {
-  const template = state.messages[key];
-  if (typeof template !== "string") return key;
+  const template = state.messages[key] ?? ENGLISH[key];
+  if (typeof template !== "string") return ENGLISH["login.unavailable"];
   return template.replace(/\{([a-z][a-z0-9_]*)\}/g, (_match, name) =>
-    Object.prototype.hasOwnProperty.call(values, name) ? String(values[name]) : "");
+    Object.prototype.hasOwnProperty.call(values, name) ? String(values[name]) : "—");
 }
 function renderStatic() {
   document.documentElement.lang = state.locale;
@@ -31,21 +126,35 @@ function renderStatic() {
 }
 async function changeLocale(lang) {
   if (!["en", "de", "th"].includes(lang)) throw new Error("unsupported locale");
-  const response = await fetch("/locales/" + lang, {
-    credentials: "same-origin", cache: "no-store"
-  });
-  if (!response.ok) throw new Error("locale catalog unavailable");
-  const catalog = await response.json();
-  if (!catalog || typeof catalog["login.title"] !== "string" ||
-      typeof catalog["diagnostics.next_action"] !== "string") {
-    throw new Error("invalid locale catalog");
+  // Last requested locale wins. An older fetch may resolve after a newer
+  // selection; it must never modify the UI, focus, or user-facing preference.
+  const request = ++state.localeRequest;
+  let catalog;
+  try {
+    if (lang === "en") {
+      // English works offline even when the catalog HTTP endpoint is down.
+      catalog = ENGLISH;
+    } else {
+      const response = await fetch("/locales/" + lang, {
+        credentials: "same-origin", cache: "no-store"
+      });
+      if (!response.ok) throw new Error("locale catalog unavailable");
+      catalog = await response.json();
+      if (!validCatalog(catalog)) throw new Error("incomplete locale catalog");
+    }
+  } catch (error) {
+    if (request !== state.localeRequest) return false;
+    throw error;
   }
+  if (request !== state.localeRequest) return false;
   state.messages = catalog;
   state.locale = lang;
   renderStatic();
   if (state.printer && state.status) renderOverview();
   if (state.diagnostics) renderChecks(state.diagnostics);
-  if (state.status && !$("inbox").hidden) await loadJobs();
+  if (state.jobPage && !$("inbox").hidden) renderJobs();
+  announce(tr("locale.label") + ": " + $("language").selectedOptions[0].textContent);
+  return true;
 }
 
 
@@ -109,7 +218,8 @@ function renderOverview() {
   overall.textContent = status.status === "ready" ?
     tr("overview.ready") : tr("overview.degraded");
   overall.className = status.status === "ready" ? "status-ready" : "status-warn";
-  setText("status-detail", tr("overview.accepting"));
+  setText("status-detail", tr(status.status === "ready" ?
+    "overview.accepting" : "overview.degraded"));
   setText("job-count", String(status.inbox_jobs ?? 0));
   setText("last-print", status.last_successful_print_at ?
     tr("overview.last_print", { time: prettyTime(status.last_successful_print_at) }) :
@@ -146,7 +256,12 @@ function renderPrinter(printer) {
 }
 
 async function loadJobs() {
-  const page = await api("/api/v1/jobs?limit=100");
+  state.jobPage = await api("/api/v1/jobs?limit=100");
+  renderJobs();
+}
+
+function renderJobs() {
+  const page = state.jobPage;
   const root = $("jobs");
   root.replaceChildren();
   if (!page.items?.length) {
@@ -286,11 +401,13 @@ $("copy-uri").addEventListener("click", async () => {
 });
 
 $("language").addEventListener("change", async () => {
-  const before = state.locale;
+  const requested = $("language").value;
   try {
-    await changeLocale($("language").value);
+    await changeLocale(requested);
   } catch (_) {
-    $("language").value = before;
+    // Failure of the latest request preserves the last *committed* locale.
+    $("language").value = state.locale;
+    announce(tr("errors.generic", {code: "locale_unavailable"}));
   }
 });
 
@@ -298,8 +415,11 @@ async function bootstrap() {
   try {
     await changeLocale(browserLocale());
   } catch (_) {
-    // English markup remains available if the source-only catalog endpoint
-    // cannot be served. Do not claim translated UI on partial failure.
+    // The embedded English catalog is always available, including during
+    // network failures before an authenticated session has been established.
+    state.locale = "en";
+    state.messages = ENGLISH;
+    renderStatic();
   }
   try {
     const response = await fetch("/auth/session", {
