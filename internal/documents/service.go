@@ -56,7 +56,6 @@ type Document struct {
 type Command struct {
 	JobID            string     `json:"job_id"`
 	ActionID         string     `json:"action_id"`
-	Actor            Principal  `json:"actor"`
 	ExpectedRevision uint64     `json:"expected_revision"`
 	Kind             string     `json:"kind"` // set_metadata, archive, restore
 	Metadata         Annotation `json:"metadata,omitempty"`
@@ -125,7 +124,7 @@ func validAnnotation(a Annotation) bool {
 }
 
 func validCommand(c Command) bool {
-	if !jobPattern.MatchString(c.JobID) || !actionPattern.MatchString(c.ActionID) || !validPrincipal(c.Actor) {
+	if !jobPattern.MatchString(c.JobID) || !actionPattern.MatchString(c.ActionID) {
 		return false
 	}
 	switch c.Kind {
@@ -173,7 +172,7 @@ func (s *Service) view(id string) (Document, error) {
 		if err := json.Unmarshal([]byte(r.Command.Metadata["next"]), &doc.Annotation); err != nil {
 			return Document{}, err
 		}
-		if r.Result.Snapshot.State == "archived" != doc.Annotation.Archived {
+		if (r.Result.Snapshot.State == "archived") != doc.Annotation.Archived {
 			return Document{}, ErrInvalid
 		}
 		return doc, nil
@@ -198,15 +197,15 @@ func (s *Service) Get(actor Principal, id string) (Document, error) {
 
 // Apply commits a reversible user annotation/review action. Replayed commands
 // return their original revision, even if later actions changed the document.
-func (s *Service) Apply(c Command) (Receipt, error) {
-	if !validCommand(c) {
+func (s *Service) Apply(actor Principal, c Command) (Receipt, error) {
+	if !validPrincipal(actor) || !validCommand(c) {
 		return Receipt{}, ErrInvalid
 	}
 	current, err := s.view(c.JobID)
 	if err != nil {
 		return Receipt{}, err
 	}
-	if err := s.auth.Authorize(c.Actor, current.Job, c.Kind); err != nil {
+	if err := s.auth.Authorize(actor, current.Job, c.Kind); err != nil {
 		return Receipt{}, ErrUnauthorized
 	}
 	next := current.Annotation
@@ -219,7 +218,10 @@ func (s *Service) Apply(c Command) (Receipt, error) {
 	case "restore":
 		next.Archived = false
 	}
-	request, err := json.Marshal(c)
+	request, err := json.Marshal(struct {
+		Actor   Principal `json:"actor"`
+		Command Command   `json:"command"`
+	}{Actor: actor, Command: c})
 	if err != nil {
 		return Receipt{}, err
 	}
@@ -237,7 +239,7 @@ func (s *Service) Apply(c Command) (Receipt, error) {
 		IdempotencyKey: "action/" + c.ActionID, SemanticFingerprint: hex.EncodeToString(fingerprint[:]),
 		ExpectedGeneration: &c.ExpectedRevision,
 		Metadata: map[string]string{
-			"actor_id": c.Actor.ID, "actor_kind": c.Actor.Kind, "action": c.Kind,
+			"actor_id": actor.ID, "actor_kind": actor.Kind, "action": c.Kind,
 			"job_id": c.JobID, "source_sha256": current.Job.ArtifactSHA256,
 			"previous": string(before), "next": string(after),
 		},
