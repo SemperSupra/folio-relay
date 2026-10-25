@@ -55,10 +55,11 @@ func (r snapshotReader) Read(p []byte)(int,error) {
 
 // SnapshotVerifiedArtifact never returns a readable snapshot until ALL bytes
 // have been checked against the accepted durable SHA-256 and size. The
-// snapshot is copied into a fresh 0700 private temporary directory with a
-// 0600 file, isolated from the attacker-writable shared export root.
+// snapshot is copied into a fresh 0700 private temporary directory under
+// the protected artifact-store root (not OS /tmp, which a scratch image lacks),
+// with a 0600 file. The separate SMB export share cannot access this path.
 // It is not sufficient to precheck a mutable source then stream that source.
-// The temp root must be capacity/ownership qualified on the actual runtime.
+// Store free space, cleanup, ownership and quota need exact-target checks.
 func SnapshotVerifiedArtifact(ctx context.Context,rootDir string,record Record,checkedAt time.Time)(*VerifiedSnapshot,IntegrityReceipt){
  receipt:=IntegrityReceipt{JobID:record.JobID,State:IntegrityPending,CheckedAt:checkedAt.UTC(),ReasonCode:"not_verified"}
  if ctx==nil || checkedAt.IsZero() || rootDir=="" || record.JobID=="" {
@@ -102,7 +103,7 @@ func SnapshotVerifiedArtifact(ctx context.Context,rootDir string,record Record,c
   receipt.State=IntegrityCorrupt;receipt.ReasonCode="canonical_file_changed_during_open"
   return nil,receipt
  }
- dir,err:=os.MkdirTemp("","foliorelay-private-snapshot-")
+ dir,err:=os.MkdirTemp(rootDir,".foliorelay-private-snapshot-")
  if err!=nil {receipt.ReasonCode="snapshot_storage_unavailable";return nil,receipt}
  snap:=&VerifiedSnapshot{privateDir:dir,bytes:record.ArtifactBytes}
  committed:=false
