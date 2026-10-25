@@ -13,6 +13,7 @@ COPY internal/airprint ./internal/airprint
 COPY internal/control ./internal/control
 COPY internal/dnssd ./internal/dnssd
 COPY internal/inbox ./internal/inbox
+COPY internal/i18n ./internal/i18n
 COPY internal/printer ./internal/printer
 COPY internal/security ./internal/security
 COPY internal/state ./internal/state

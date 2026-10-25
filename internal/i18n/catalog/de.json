@@ -59,5 +59,12 @@
   "diagnostics.profiles.airprint.pass": "Das AirPrint-Profil wurde über eine geprüfte Konfiguration aktiviert.",
   "diagnostics.profiles.airprint.warn": "Das AirPrint-Profil ist noch nicht aktiviert.",
   "diagnostics.code_only": "Diagnosecode: {code}",
-  "errors.generic": "Der Vorgang konnte nicht abgeschlossen werden. Referenz: {code}"
+  "errors.generic": "Der Vorgang konnte nicht abgeschlossen werden. Referenz: {code}",
+  "locale.label": "Sprache",
+  "diagnostics.technical_detail": "Technisches Detail",
+  "diagnostics.printer.identity.fix": "Reparieren Sie die dauerhafte Druckeridentität, bevor neue Druckaufträge angenommen werden.",
+  "diagnostics.state.inbox_projection.fix": "Bewahren Sie das Journal auf und prüfen Sie den ersten ungültigen dauerhaften Eingangsdatensatz.",
+  "diagnostics.storage.artifact_store.fix": "Stellen Sie den konfigurierten FolioRelay-Datensatz bzw. Einhängepunkt wieder her, bevor Druckaufträge angenommen werden.",
+  "diagnostics.profiles.airprint.fix": "Erst aktivieren, nachdem die ausgewählte Druckkomponente die AirPrint-MVP-Prüfung bestanden hat.",
+  "overview.degraded": "Aktion erforderlich"
 }

@@ -59,5 +59,12 @@
   "diagnostics.profiles.airprint.pass": "AirPrint profile is enabled by qualified configuration.",
   "diagnostics.profiles.airprint.warn": "AirPrint profile is not yet enabled.",
   "diagnostics.code_only": "Diagnostic code: {code}",
-  "errors.generic": "The operation could not be completed. Reference: {code}"
+  "errors.generic": "The operation could not be completed. Reference: {code}",
+  "locale.label": "Language",
+  "diagnostics.technical_detail": "Technical detail",
+  "diagnostics.printer.identity.fix": "Repair the durable printer identity before admitting print jobs.",
+  "diagnostics.state.inbox_projection.fix": "Preserve the journal and inspect the first invalid durable Inbox record.",
+  "diagnostics.storage.artifact_store.fix": "Restore the configured FolioRelay data dataset/mount before accepting jobs.",
+  "diagnostics.profiles.airprint.fix": "Enable only after the selected substrate passes the AirPrint MVP profile gate.",
+  "overview.degraded": "Action required"
 }
