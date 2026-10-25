@@ -153,6 +153,40 @@ func TestIngestInboxArtifactSurvivesRestart(t *testing.T) {
 		t.Fatalf("unknown job integrity: %d", unknown.Code)
 	}
 	checkIntegrity(frinbox.IntegrityAvailable, "canonical_verified")
+	// The real download endpoint must use the same checksum slot, but unlike
+	// integrity status must produce zero document body bytes on verification
+	// failure, not a partial untrusted download with HTTP 200.
+	downloadPath := "/api/v1/jobs/" + page.Items[0].JobID + "/artifact"
+	checkDownload := func(wantStatus int, wantCode string) {
+		t.Helper()
+		r := httptest.NewRequest(http.MethodGet, downloadPath, nil)
+		r.Header.Set("Authorization", "Bearer "+testToken)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w,r)
+		if w.Code!=wantStatus || w.Header().Get("Cache-Control")!="no-store" {
+			t.Fatalf("download integrity response %d, cache=%q, body=%q",w.Code,w.Header().Get("Cache-Control"),w.Body.String())
+		}
+		if wantStatus==http.StatusOK {
+			if !bytes.Equal(w.Body.Bytes(),body) {
+				t.Fatalf("accepted download changed bytes: %q",w.Body.Bytes())
+			}
+			if w.Header().Get("Accept-Ranges")!="none" {
+				t.Fatal("partial unverified range transfers were not disabled")
+			}
+			return
+		}
+		var fault struct {Error struct {Code string `json:"code"`} `json:"error"`}
+		if err:=json.Unmarshal(w.Body.Bytes(),&fault);err!=nil{t.Fatal(err)}
+		if fault.Error.Code!=wantCode || bytes.Contains(w.Body.Bytes(),body) || strings.Contains(w.Body.String(),store){
+			t.Fatalf("unverified bytes or paths exposed: response=%q",w.Body.String())
+		}
+	}
+	checkDownload(http.StatusOK,"")
+	// Mutually bound status and download checks prevent unlimited concurrent
+	// scratch-disk consumption. The rejected request does not send bytes.
+	server.integritySlot <- struct{}{}
+	checkDownload(http.StatusTooManyRequests,"integrity_verification_busy")
+	<-server.integritySlot
 	server.integritySlot <- struct{}{}
 	busyRequest := httptest.NewRequest(http.MethodGet, integrityPath, nil)
 	busyRequest.Header.Set("Authorization", "Bearer "+testToken)
@@ -168,10 +202,12 @@ func TestIngestInboxArtifactSurvivesRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkIntegrity(frinbox.IntegrityCorrupt, "canonical_hash_mismatch")
+	checkDownload(http.StatusConflict,"artifact_integrity_failed")
 	if err := os.Remove(artifactPath); err != nil {
 		t.Fatal(err)
 	}
 	checkIntegrity(frinbox.IntegrityMissing, "canonical_artifact_missing")
+	checkDownload(http.StatusNotFound,"artifact_not_found")
 	jobRead := httptest.NewRequest(http.MethodGet, "/api/v1/jobs/"+page.Items[0].JobID, nil)
 	jobRead.Header.Set("Authorization", "Bearer "+testToken)
 	retained := httptest.NewRecorder()
