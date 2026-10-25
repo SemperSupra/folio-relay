@@ -110,6 +110,31 @@ paths:
           content:
             application/octet-stream: {}
         "404": {$ref: "#/components/responses/NotFound"}
+  /api/v1/jobs/{job_id}/integrity:
+    get:
+      operationId: getJobIntegrity
+      description: >
+        Read-only, point-in-time verification of the retained canonical artifact.
+        The receipt can become stale; it does not prove later downloads or
+        independent SMB, email, cloud, or filing deliveries.
+      security: [{bearerAuth: []}]
+      parameters:
+        - in: path
+          name: job_id
+          required: true
+          schema: {type: string}
+      responses:
+        "200":
+          description: Verification observation for a durable accepted job.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/IntegrityReceipt"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "429":
+          description: Integrity verification is busy; retry after the indicated delay.
+          headers:
+            Retry-After:
+              schema: {type: string}
   /api/v1/self-test:
     post:
       operationId: runSelfTest
@@ -216,6 +241,14 @@ components:
         substrate_job_id: {type: string}
         source_title: {type: string, description: "Original print-job title when supplied by the source"}
         download_name: {type: string, description: "Safe filename with an extension for the retained media type"}
+    IntegrityReceipt:
+      type: object
+      required: [job_id, state, checked_at, reason_code]
+      properties:
+        job_id: {type: string}
+        state: {enum: [available, missing, corrupt, verification_pending]}
+        checked_at: {type: string, format: date-time}
+        reason_code: {type: string}
     IngestRequest:
       type: object
       additionalProperties: false
