@@ -16,9 +16,14 @@ test('public locale catalog is bounded, complete and language neutral', async ({
   const sourceKeys = Object.keys(entries.en).sort();
   expect(Object.keys(entries.de).sort()).toEqual(sourceKeys);
   expect(Object.keys(entries.th).sort()).toEqual(sourceKeys);
-  for (const attempt of ['fr', '..', 'th-TH', 'config', 'admin']) {
+  for (const attempt of ['fr', 'th-TH', 'config', 'admin']) {
     expect((await request.get('/locales/' + encodeURIComponent(attempt))).status()).toBe(404);
   }
+  // URL clients/Go's ServeMux normalize dot-segments to the site root.
+  // An HTTP 200 HTML root is not acceptance of an unsupported locale:
+  // verify no translation catalog is exposed, instead of requiring 404.
+  const normalized = await request.get('/locales/' + encodeURIComponent('..'));
+  expect(normalized.headers()['content-type'] || '').not.toContain('application/json');
 });
 
 test('German and Thai login and incorrect credentials stay accessible', async ({ page }) => {
