@@ -19,6 +19,7 @@ import (
 
 	frapi "github.com/SemperSupra/folio-relay/api"
 	frinbox "github.com/SemperSupra/folio-relay/internal/inbox"
+	fri18n "github.com/SemperSupra/folio-relay/internal/i18n"
 	frprinter "github.com/SemperSupra/folio-relay/internal/printer"
 	frsecurity "github.com/SemperSupra/folio-relay/internal/security"
 	frstate "github.com/SemperSupra/folio-relay/internal/state"
@@ -88,6 +89,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /openapi.yaml", s.handleOpenAPI)
 	mux.HandleFunc("GET /{$}", s.handleWebIndex)
 	mux.HandleFunc("GET /app.js", s.handleWebAppJS)
+	mux.HandleFunc("GET /locales/{locale}", s.handleLocaleCatalog)
 	mux.HandleFunc("GET /style.css", s.handleWebStyle)
 	mux.HandleFunc("GET /favicon.ico", s.handleWebFavicon)
 	mux.HandleFunc("GET /auth/session", s.handleSessionStatus)
@@ -224,6 +226,25 @@ func (s *Server) handleWebStyle(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/css; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	_, _ = w.Write(frweb.StyleCSS)
+}
+
+// Localized catalog lookup contains only version-controlled candidate
+// presentation strings. No cookie, user identity or document data enters it.
+// Machine-readable diagnostic/error codes remain stable and untranslated.
+func (s *Server) handleLocaleCatalog(w http.ResponseWriter, r *http.Request) {
+	locale := r.PathValue("locale")
+	if locale != "en" && locale != "de" && locale != "th" {
+		http.NotFound(w, r)
+		return
+	}
+	catalog, err := fri18n.Catalog(fri18n.Locale(locale))
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "locale_unavailable", "catalog unavailable")
+		return
+	}
+	webSecurityHeaders(w)
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, catalog)
 }
 
 func (s *Server) handleWebFavicon(w http.ResponseWriter, _ *http.Request) {
