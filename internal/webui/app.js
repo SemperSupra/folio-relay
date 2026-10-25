@@ -15,7 +15,7 @@ function browserLocale() {
 function tr(key, values = {}) {
   const template = state.messages[key];
   if (typeof template !== "string") return key;
-  return template.replace(/\\{([a-z][a-z0-9_]*)\\}/g, (_match, name) =>
+  return template.replace(/\{([a-z][a-z0-9_]*)\}/g, (_match, name) =>
     Object.prototype.hasOwnProperty.call(values, name) ? String(values[name]) : "");
 }
 function renderStatic() {
