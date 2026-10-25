@@ -9,6 +9,7 @@ import (
 	"path"
 	"regexp"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/SemperSupra/folio-relay/internal/export"
@@ -24,6 +25,7 @@ var (
 	profileIDPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`)
 	actionIDPattern  = regexp.MustCompile(`^[a-zA-Z0-9_-]{8,80}$`)
 	digestPattern    = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	jobIDPattern     = regexp.MustCompile(`^job-[0-9a-f]{64}$`)
 )
 
 // Profile is a non-secret reference to an independently enrolled destination.
@@ -31,6 +33,66 @@ var (
 type Profile struct {
 	ID       string `json:"id"`
 	Provider string `json:"provider"`
+}
+
+// validatePlan rejects altered or raw rclone destinations before an intent is
+// durably admitted. It does not claim that a provider can create without
+// replacing an existing object; that needs separate adapter qualification.
+func validatePlan(p Plan) error {
+	if !actionIDPattern.MatchString(p.ActionID) || !jobIDPattern.MatchString(p.JobID) ||
+		!profileIDPattern.MatchString(p.ProfileID) || !digestPattern.MatchString(p.ArtifactSHA256) ||
+		p.ArtifactBytes < 0 || p.ArtifactBytes > 1<<30 || len(p.ObjectKey) > maxObjectKey || len(p.MediaType) > 128 {
+		return ErrInvalidPlan
+	}
+	switch p.Provider {
+	case "google_drive", "onedrive", "icloud_drive", "nextcloud", "s3":
+	default:
+		return ErrInvalidPlan
+	}
+	if p.RemoteName != "fr_"+p.ProfileID || p.RclonePath != p.RemoteName+":"+p.ObjectKey ||
+		!strings.HasPrefix(p.ObjectKey, "foliorelay/") || path.Clean(p.ObjectKey) != p.ObjectKey ||
+		strings.ContainsAny(p.ObjectKey, "\\:") || len(p.ObjectKey) == 0 {
+		return ErrInvalidPlan
+	}
+	for _, component := range strings.Split(p.ObjectKey, "/") {
+		if component == "" || component == "." || component == ".." || strings.HasPrefix(component, ".") ||
+			strings.HasSuffix(component, ".") || strings.HasSuffix(component, " ") || len(component) > 180 {
+			return ErrInvalidPlan
+		}
+		for _, r := range component {
+			if unicode.IsControl(r) || strings.ContainsRune(`<>"|?*`, r) {
+				return ErrInvalidPlan
+			}
+		}
+	}
+	filename := path.Base(p.ObjectKey)
+	suffix := sha256.Sum256([]byte("foliorelay-cloud-copy/v1\x00" + p.ActionID))
+	if !strings.HasSuffix(filename, "-"+hex.EncodeToString(suffix[:])+path.Ext(filename)) ||
+		path.Ext(filename) != extensionForMedia(p.MediaType) {
+		return ErrInvalidPlan
+	}
+	return nil
+}
+
+func extensionForMedia(media string) string {
+	switch strings.ToLower(strings.TrimSpace(strings.SplitN(media, ";", 2)[0])) {
+	case "application/pdf":
+		return ".pdf"
+	case "image/urf":
+		return ".urf"
+	case "image/pwg-raster":
+		return ".pwg"
+	case "application/postscript":
+		return ".ps"
+	case "image/jpeg":
+		return ".jpg"
+	case "image/png":
+		return ".png"
+	case "text/plain":
+		return ".txt"
+	default:
+		return ".bin"
+	}
 }
 
 // Plan is inert. The remote name is derived from a trusted profile ID, and
@@ -42,6 +104,7 @@ type Plan struct {
 	Provider       string `json:"provider"`
 	ArtifactSHA256 string `json:"artifact_sha256"`
 	ArtifactBytes  int64  `json:"artifact_bytes"`
+	MediaType      string `json:"media_type"`
 	RemoteName     string `json:"remote_name"`
 	ObjectKey      string `json:"object_key"`
 	RclonePath     string `json:"rclone_path"`
@@ -97,6 +160,7 @@ func MakePlan(profile Profile, actionID string, defaults export.Defaults, overri
 	return Plan{
 		ActionID: actionID, JobID: job.JobID, ProfileID: profile.ID, Provider: profile.Provider,
 		ArtifactSHA256: artifact.SHA256, ArtifactBytes: artifact.Bytes,
+		MediaType:  name.MediaType,
 		RemoteName: remote, ObjectKey: key, RclonePath: remote + ":" + key,
 	}, nil
 }
