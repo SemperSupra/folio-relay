@@ -455,42 +455,51 @@ func (s *Server) handleJobIntegrity(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, frinbox.VerifyCanonicalArtifact(s.artifactStore, record, time.Now()))
 }
 
+// handleArtifact exposes only a fully verified, private snapshot. The source
+// can disappear or change during verification; its bytes cannot reach the
+// HTTP writer until a complete snapshot matches the accepted digest.
+// Per-user/record authorization is separately gated on product AAA #96.
 func (s *Server) handleArtifact(w http.ResponseWriter, r *http.Request) {
-	record, ok, err := s.findJob(r.PathValue("job_id"))
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "inbox_projection_failed", err.Error())
-		return
-	}
-	if !ok {
-		writeError(w, http.StatusNotFound, "job_not_found", "job not found")
-		return
-	}
-	path, err := s.artifactPath(record.ArtifactSHA256)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "artifact_reference_invalid", err.Error())
-		return
-	}
-	file, err := os.Open(path)
-	if errors.Is(err, os.ErrNotExist) {
-		writeError(w, http.StatusNotFound, "artifact_not_found", "artifact not found")
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "artifact_open_failed", "artifact unavailable")
-		return
-	}
-	defer file.Close()
-	info, err := file.Stat()
-	if err != nil || !info.Mode().IsRegular() {
-		writeError(w, http.StatusInternalServerError, "artifact_invalid", "artifact unavailable")
-		return
-	}
-	w.Header().Set("Content-Type", record.MediaType)
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, record.DownloadName))
-	w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
-	w.WriteHeader(http.StatusOK)
-	_, _ = io.Copy(w, file)
+ w.Header().Set("Cache-Control", "no-store")
+ record,ok,err:=s.findJob(r.PathValue("job_id"))
+ if err!=nil {
+  writeError(w,http.StatusInternalServerError,"inbox_projection_failed","inbox projection unavailable")
+  return
+ }
+ if !ok {writeError(w,http.StatusNotFound,"job_not_found","job not found");return}
+ // Share the existing bounded checksum worker slot with the status endpoint
+ // to prevent many simultaneous 100 MiB private disk snapshots.
+ select {
+ case s.integritySlot<-struct{}{}:
+  defer func(){<-s.integritySlot}()
+ default:
+  w.Header().Set("Retry-After","2")
+  writeError(w,http.StatusTooManyRequests,"integrity_verification_busy","verification is busy")
+  return
+ }
+ snap,receipt:=frinbox.SnapshotVerifiedArtifact(r.Context(),s.artifactStore,record,time.Now())
+ if snap==nil {
+  switch receipt.State {
+  case frinbox.IntegrityMissing:
+   writeError(w,http.StatusNotFound,"artifact_not_found","artifact unavailable")
+  case frinbox.IntegrityCorrupt:
+   writeError(w,http.StatusConflict,"artifact_integrity_failed","artifact integrity check failed")
+  default:
+   writeError(w,http.StatusServiceUnavailable,"artifact_integrity_unavailable","artifact verification unavailable")
+  }
+  return
+ }
+ defer snap.Close()
+ if err:=r.Context().Err();err!=nil {return}
+ w.Header().Set("Content-Type",record.MediaType)
+ w.Header().Set("X-Content-Type-Options","nosniff")
+ w.Header().Set("Content-Disposition",fmt.Sprintf(`attachment; filename="%s"`,record.DownloadName))
+ w.Header().Set("Content-Length",strconv.FormatInt(snap.Size(),10))
+ w.Header().Set("Accept-Ranges","none")
+ w.WriteHeader(http.StatusOK)
+ // Only verified snapshot bytes are written. Client disconnection may truncate
+ // transport, but cannot cause unverified canonical bytes to be sent.
+ _,_=io.Copy(w,snap)
 }
 
 func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
