@@ -17,7 +17,7 @@ import (
 type ownerPolicy struct{}
 
 func (ownerPolicy) Authorize(p Principal, _ inbox.Record, _ string) error {
-	if p.ID != "owner-1" || p.Kind != "human" {
+	if p.Issuer != "https://idp.example.test" || p.ID != "owner-1" || p.Kind != "human" {
 		return ErrUnauthorized
 	}
 	return nil
@@ -56,7 +56,7 @@ func TestMetadataArchiveRestoreAndReplaySurviveRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	actor := Principal{ID: "owner-1", Kind: "human"}
+	actor := Principal{Issuer: "https://idp.example.test", ID: "owner-1", Kind: "human"}
 	initial, err := s.Get(actor, jobID)
 	if err != nil || initial.Revision != 0 || initial.Job.SourceTitle != "Original.pdf" {
 		t.Fatalf("initial: %#v %v", initial, err)
@@ -119,14 +119,24 @@ func TestDenyUnknownJobUnauthorizedActorAndChangedReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	actor := Principal{ID: "owner-1", Kind: "human"}
+	actor := Principal{Issuer: "https://idp.example.test", ID: "owner-1", Kind: "human"}
 	cmd := Command{JobID: jobID, ActionID: "action_edit_1", Kind: "set_metadata", Metadata: Annotation{Label: "Review"}}
-	wrongActor := Principal{ID: "stranger", Kind: "human"}
+	wrongActor := Principal{Issuer: "https://idp.example.test", ID: "stranger", Kind: "human"}
 	if _, err := s.Apply(wrongActor, cmd); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("unauthorized apply: %v", err)
 	}
 	if _, err := s.Get(wrongActor, jobID); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("unauthorized read: %v", err)
+	}
+	sameNameOtherIssuer := Principal{Issuer: "https://other-idp.example.test", ID: "owner-1", Kind: "human"}
+	if _, err := s.Get(sameNameOtherIssuer, jobID); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("cross-issuer read: %v", err)
+	}
+	if _, err := s.Apply(sameNameOtherIssuer, cmd); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("cross-issuer apply: %v", err)
+	}
+	if _, err := s.Apply(Principal{ID: "owner-1", Kind: "human"}, cmd); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("issuerless principal: %v", err)
 	}
 	unknown := cmd
 	unknown.JobID = "job-" + strings.Repeat("0", 64)
@@ -140,7 +150,7 @@ func TestDenyUnknownJobUnauthorizedActorAndChangedReplay(t *testing.T) {
 		t.Fatalf("different actor reused another actor's receipt: %v", err)
 	}
 	commits := d.Records()
-	if len(commits) != 2 || commits[1].Command.Metadata["actor_id"] != "owner-1" ||
+	if len(commits) != 2 || commits[1].Command.Metadata["actor_issuer"] != "https://idp.example.test" || commits[1].Command.Metadata["actor_id"] != "owner-1" ||
 		commits[1].Command.Metadata["action"] != "set_metadata" ||
 		commits[1].Command.Metadata["source_sha256"] != strings.Repeat("a", 64) ||
 		commits[1].Command.Metadata["previous"] == "" || commits[1].Command.Metadata["next"] == "" ||
@@ -195,7 +205,7 @@ func TestConcurrentRevisionHasOneWinner(t *testing.T) {
 			cmd := Command{JobID: jobID, ActionID: fmt.Sprintf("action_concurrent_%02d", i),
 				Kind: "set_metadata", ExpectedRevision: 0,
 				Metadata: Annotation{Label: fmt.Sprintf("Candidate%02d", i)}}
-			if _, err := s.Apply(Principal{ID: "owner-1", Kind: "human"}, cmd); err == nil {
+			if _, err := s.Apply(Principal{Issuer: "https://idp.example.test", ID: "owner-1", Kind: "human"}, cmd); err == nil {
 				won.Add(1)
 			}
 		}(i)
@@ -204,7 +214,7 @@ func TestConcurrentRevisionHasOneWinner(t *testing.T) {
 	if won.Load() != 1 {
 		t.Fatalf("concurrent winners: %d", won.Load())
 	}
-	view, err := s.Get(Principal{ID: "owner-1", Kind: "human"}, jobID)
+	view, err := s.Get(Principal{Issuer: "https://idp.example.test", ID: "owner-1", Kind: "human"}, jobID)
 	if err != nil || view.Revision != 1 {
 		t.Fatalf("revision: %#v %v", view, err)
 	}

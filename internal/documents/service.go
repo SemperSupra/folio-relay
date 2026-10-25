@@ -29,8 +29,9 @@ var (
 // Principal must be obtained from a separately authenticated transport.
 // A shared management token does not identify a document owner.
 type Principal struct {
-	ID   string `json:"id"`
-	Kind string `json:"kind"` // human, automation, agent
+	Issuer string `json:"issuer"`
+	ID     string `json:"id"`
+	Kind   string `json:"kind"` // human, automation, agent
 }
 
 // Authorizer is mandatory. No default allow-all policy is provided.
@@ -82,10 +83,11 @@ func NewService(d *state.DurableEngine, auth Authorizer) (*Service, error) {
 }
 
 func validPrincipal(p Principal) bool {
-	if p.ID == "" || p.ID != strings.TrimSpace(p.ID) || len(p.ID) > 128 || !utf8.ValidString(p.ID) {
+	if p.Issuer == "" || p.Issuer != strings.TrimSpace(p.Issuer) || len(p.Issuer) > 256 || !utf8.ValidString(p.Issuer) ||
+		p.ID == "" || p.ID != strings.TrimSpace(p.ID) || len(p.ID) > 128 || !utf8.ValidString(p.ID) {
 		return false
 	}
-	for _, r := range p.ID {
+	for _, r := range p.Issuer + p.ID {
 		if unicode.IsControl(r) {
 			return false
 		}
@@ -239,7 +241,7 @@ func (s *Service) Apply(actor Principal, c Command) (Receipt, error) {
 		IdempotencyKey: "action/" + c.ActionID, SemanticFingerprint: hex.EncodeToString(fingerprint[:]),
 		ExpectedGeneration: &c.ExpectedRevision,
 		Metadata: map[string]string{
-			"actor_id": actor.ID, "actor_kind": actor.Kind, "action": c.Kind,
+			"actor_issuer": actor.Issuer, "actor_id": actor.ID, "actor_kind": actor.Kind, "action": c.Kind,
 			"job_id": c.JobID, "source_sha256": current.Job.ArtifactSHA256,
 			"previous": string(before), "next": string(after),
 		},
