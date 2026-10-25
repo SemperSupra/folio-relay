@@ -101,3 +101,90 @@ test('language chooser is keyboard-sized and does not create horizontal overflow
     expect(viewport.scrollWidth).toBeLessThanOrEqual(viewport.width + 1);
   }
 });
+
+test('offline first load and missing translated catalog retain complete English UI', async ({ page }) => {
+  await page.addInitScript(() => Object.defineProperty(navigator, 'languages', {
+    configurable: true, get: () => ['th-TH', 'en-US']
+  }));
+  await page.route('**/locales/th', route => route.abort('failed'));
+  await page.goto('/');
+  await expect(page.locator('html')).toHaveAttribute('lang','en');
+  await expect(page.locator('#language')).toHaveValue('en');
+  await expect(page.getByRole('heading',{name:'Connect to FolioRelay'})).toBeVisible();
+  await page.locator('#credential').fill(TOKEN);
+  await page.locator('#login-form button[type=submit]').click();
+  await expect(page.locator('#overall-status')).toHaveText('Ready');
+  await expect(page.locator('#status-detail')).toContainText('accepting and retaining');
+  await expect(page.locator('#login-error')).not.toContainText('login.required');
+  await expect((await new AxeBuilder({page}).analyze()).violations).toEqual([]);
+});
+
+test('entire English fallback is locked to the Go-served canonical catalog', async ({page,request}) => {
+  const canonical = await (await request.get('/locales/en')).json();
+  await page.goto('/');
+  const embedded = await page.evaluate(() => ENGLISH);
+  expect(embedded).toEqual(canonical);
+});
+
+test('invalid placeholders, missing keys and 503 do not change locale or identity', async ({page,request}) => {
+  const catalog = await (await request.get('/locales/de')).json();
+  await page.goto('/');
+  await page.route('**/locales/de', async route => {
+    const bad={...catalog};
+    delete bad['inbox.empty'];
+    await route.fulfill({json:bad});
+  });
+  await page.locator('#language').selectOption('de');
+  await expect(page.locator('#language')).toHaveValue('en');
+  await expect(page.locator('html')).toHaveAttribute('lang','en');
+  await expect(page.locator('#announcements')).toContainText('locale_unavailable');
+  await expect(page.locator('#login h1')).toHaveText('Connect to FolioRelay');
+  await page.unroute('**/locales/de');
+  await page.route('**/locales/de', route => {
+    const bad={...catalog,'diagnostics.next_action':'Nächster Schritt: {other}'};
+    return route.fulfill({json:bad});
+  });
+  await page.locator('#language').selectOption('de');
+  await expect(page.locator('#language')).toHaveValue('en');
+  await expect(page.locator('html')).toHaveAttribute('lang','en');
+  await page.unroute('**/locales/de');
+  await page.route('**/locales/de', route => route.fulfill({status:503,body:'unavailable'}));
+  await page.locator('#language').selectOption('de');
+  await expect(page.locator('#language')).toHaveValue('en');
+  await expect(page.locator('html')).toHaveAttribute('lang','en');
+  await expect((await new AxeBuilder({page}).analyze()).violations).toEqual([]);
+});
+
+test('latest user language choice wins an older response without a second action', async ({page,request}) => {
+  const th = await (await request.get('/locales/th')).json();
+  let releaseThai, startedThai;
+  const released = new Promise(resolve => {releaseThai=resolve;});
+  const started = new Promise(resolve => {startedThai=resolve;});
+  let finishedThai;
+  const finished = new Promise(resolve => {finishedThai=resolve;});
+  await page.route('**/locales/th', async route => {
+    startedThai();
+    await released;
+    await route.fulfill({json:th});
+    finishedThai();
+  });
+  let selfTests=0;
+  page.on('request', request => {
+    if (request.method()==='POST'&&request.url().includes('/api/v1/self-test')) selfTests++;
+  });
+  await page.goto('/');
+  await page.locator('#language').selectOption('th');
+  await started;
+  await page.locator('#language').selectOption('en');
+  await expect(page.locator('html')).toHaveAttribute('lang','en');
+  releaseThai();
+  await finished;
+  // Await a browser animation frame to allow the stale async response
+  // continuation to run before making the final invariant assertion.
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+  await expect(page.locator('html')).toHaveAttribute('lang','en');
+  await expect(page.locator('#language')).toHaveValue('en');
+  await expect(page.locator('#login h1')).toHaveText('Connect to FolioRelay');
+  expect(selfTests).toBe(0);
+  await expect(page.locator('#announcements')).toContainText('Language');
+});
