@@ -1,6 +1,7 @@
 package control
 
 import (
+	"context"
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	frinbox "github.com/SemperSupra/folio-relay/internal/inbox"
 	frprinter "github.com/SemperSupra/folio-relay/internal/printer"
@@ -182,8 +184,18 @@ func TestIngestInboxArtifactSurvivesRestart(t *testing.T) {
 		}
 	}
 	checkDownload(http.StatusOK,"")
+	// A separate Server (or package caller) can hold the global RAM slot
+	// even when this Server's local integrity semaphore is not occupied.
+	held,heldReceipt:=frinbox.SnapshotVerifiedArtifact(
+		context.Background(),store,page.Items[0],time.Now())
+	if held==nil || heldReceipt.State!=frinbox.IntegrityAvailable {
+		t.Fatalf("failed to hold process-wide snapshot: %+v",heldReceipt)
+	}
+	checkDownload(http.StatusTooManyRequests,"snapshot_memory_busy")
+	if err:=held.Close();err!=nil{t.Fatal(err)}
+	checkDownload(http.StatusOK,"")
 	// Mutually bound status and download checks prevent unlimited concurrent
-	// scratch-disk consumption. The rejected request does not send bytes.
+	// memory consumption. The rejected request does not send bytes.
 	server.integritySlot <- struct{}{}
 	checkDownload(http.StatusTooManyRequests,"integrity_verification_busy")
 	<-server.integritySlot
