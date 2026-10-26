@@ -3,7 +3,6 @@ package printformat
 import (
     "os"
     "path/filepath"
-    "regexp"
     "sort"
     "strings"
     "testing"
@@ -11,109 +10,67 @@ import (
     "github.com/SemperSupra/folio-relay/internal/airprint"
 )
 
-// These are the only currently qualified, unconverted artifact formats.
-// This source assertion is not evidence that a later image was installed.
-var retainedFormats = []string{"application/pdf", "image/urf"}
+// Retained sources are identity-copied: no FolioRelay conversion engine.
+var retainedFormats=[]string{"application/pdf","image/urf"}
 
-func readSource(t *testing.T, path ...string) string {
+func readRootFile(t *testing.T, parts ...string) string {
     t.Helper()
-    all:=append([]string{"..",".."},path...)
-    data,err:=os.ReadFile(filepath.Join(all...))
+    p:=filepath.Join(append([]string{"..",".."},parts...)...)
+    b,err:=os.ReadFile(p)
     if err!=nil{t.Fatal(err)}
-    return string(data)
+    return string(b)
 }
 
-func TestRetainedPrintFormatAdvertisedParity(t *testing.T) {
+func TestAirPrintPPDAndBackendFormatsStayAligned(t *testing.T) {
     advertised:=strings.Split(airprint.PDL,",")
     sort.Strings(advertised)
-    if strings.Join(advertised,",")!=strings.Join(retainedFormats,",") {
-        t.Fatalf("AirPrint advertised unsupported or omitted formats: %v",advertised)
+    if strings.Join(advertised,",")!=strings.Join(retainedFormats,","){
+        t.Fatalf("unqualified AirPrint MIME drift: %v",advertised)
     }
 
-    ppd:=readSource(t,"experiments","print-substrate","cups-foliorelay.ppd")
-    line:=regexp.MustCompile(`^\*cupsFilter2: "([^ ]+) ([^ ]+) 0 -"package printformat
-
-import (
-    "os"
-    "path/filepath"
-    "regexp"
-    "sort"
-    "strings"
-    "testing"
-
-    "github.com/SemperSupra/folio-relay/internal/airprint"
-)
-
-// These are the only currently qualified, unconverted artifact formats.
-// This source assertion is not evidence that a later image was installed.
-var retainedFormats = []string{"application/pdf", "image/urf"}
-
-func readSource(t *testing.T, path ...string) string {
-    t.Helper()
-    all:=append([]string{"..",".."},path...)
-    data,err:=os.ReadFile(filepath.Join(all...))
-    if err!=nil{t.Fatal(err)}
-    return string(data)
-}
-
-func TestRetainedPrintFormatAdvertisedParity(t *testing.T) {
-    advertised:=strings.Split(airprint.PDL,",")
-    sort.Strings(advertised)
-    if strings.Join(advertised,",")!=strings.Join(retainedFormats,",") {
-        t.Fatalf("AirPrint advertised unsupported or omitted formats: %v",advertised)
-    }
-
-    ppd:=readSource(t,"experiments","print-substrate","cups-foliorelay.ppd")
-)
-    var matches [][]string
-    for _,raw:=range strings.Split(ppd,"\n") {
-        // The source checkout may use Windows CRLF; trim line endings
-        // without changing the checked-in PPD or runtime conversion paths.
-        if parts:=line.FindStringSubmatch(strings.TrimSpace(raw));parts!=nil {
-            matches=append(matches,parts)
+    ppd:=readRootFile(t,"experiments","print-substrate","cups-foliorelay.ppd")
+    var formats []string
+    const prefix="*cupsFilter2: "
+    for _,raw:=range strings.Split(ppd,"\n"){
+        line:=strings.TrimSpace(raw) // Cross-platform CRLF/ LF safe
+        if !strings.HasPrefix(line,prefix){continue}
+        spec:=strings.TrimPrefix(line,prefix)
+        if !strings.HasPrefix(spec,"\"") || !strings.HasSuffix(spec,"\""){
+            t.Fatalf("invalid PPD source format declaration %q",line)
         }
-    }
-    if len(matches)!=len(retainedFormats) {
-        t.Fatalf("PPD advertised %d filter paths, expected %d",len(matches),len(retainedFormats))
-    }
-    got:=make([]string,0,len(matches))
-    for _,m:=range matches{
-        if m[1]!=m[2] {
-            t.Fatalf("printer now converts %s to %s; requires independent format qualification",m[1],m[2])
+        f:=strings.Fields(strings.Trim(spec,"\""))
+        if len(f)!=4 || f[2]!="0" || f[3]!="-" || f[0]!=f[1]{
+            t.Fatalf("unqualified PPD converter/filter declaration: %q",line)
         }
-        got=append(got,m[1])
+        formats=append(formats,f[0])
     }
-    sort.Strings(got)
-    if strings.Join(got,",")!=strings.Join(retainedFormats,","){
-        t.Fatalf("PPD formats %v do not match AirPrint/retained formats %v",got,retainedFormats)
+    sort.Strings(formats)
+    if strings.Join(formats,",")!=strings.Join(retainedFormats,","){
+        t.Fatalf("PPD identity formats %v do not match retained PDF/URF",formats)
     }
 
-    backend:=readSource(t,"experiments","print-substrate","cups-backend.sh")
-    // Pin the fail-closed final MIME switch at the actual print ingest
-    // boundary, not only the client-visible PPD and DNS-SD string.
+    backend:=readRootFile(t,"experiments","print-substrate","cups-backend.sh")
     if !strings.Contains(backend,"application/pdf|image/urf)") ||
-        !strings.Contains(backend,"unsupported FolioRelay media type") {
-        t.Fatal("CUPS ingest whitelist no longer matches PDF/URF; review before exposing new formats")
+       !strings.Contains(backend,"unsupported FolioRelay media type"){
+        t.Fatal("CUPS final MIME whitelist changed without format qualification")
     }
-    if strings.Contains(backend,"application/postscript|") ||
-       strings.Contains(backend,"image/jpeg|") ||
-       strings.Contains(backend,"image/png|") {
-        t.Fatal("unexpected unqualified backend format")
+    for _,bad:=range []string{"application/postscript|","image/jpeg|","image/png|"}{
+        if strings.Contains(backend,bad){
+            t.Fatalf("unexpected unqualified CUPS ingest format %q",bad)
+        }
     }
 }
 
-func TestPrintFormatSurfaceDoesNotPromisePhysicalOutput(t *testing.T) {
-    printer:=readSource(t,"deploy","engineering-cups","printers.conf")
-    if !strings.Contains(printer,"DeviceURI foliorelay:/"){
-        t.Fatal("current printer no longer points exclusively to FolioRelay retention backend")
+func TestPrinterIsCaptureOnlyWithQualifiedPageSizes(t *testing.T) {
+    conf:=readRootFile(t,"deploy","engineering-cups","printers.conf")
+    if !strings.Contains(conf,"DeviceURI foliorelay:/"){
+        t.Fatal("printer URI changed from capture-only backend")
     }
-    ppd:=readSource(t,"experiments","print-substrate","cups-foliorelay.ppd")
-    for _,size:=range []string{"*PageSize A4/A4:","*PageSize Letter/US Letter:"} {
-        if !strings.Contains(ppd,size){t.Fatalf("source page size absent: %q",size)}
+    if !strings.Contains(conf,"Type 4100"){
+        t.Fatal("observed B&W and small-media printer type changed")
     }
-    // Type 4100 corresponds to a B&W small-format CUPS printer. RGB in a
-    // PPD is not proof of a color-printing output route.
-    if !strings.Contains(printer,"Type 4100"){
-        t.Fatal("B&W/small-media IPP printer-type projection changed without acceptance")
+    ppd:=readRootFile(t,"experiments","print-substrate","cups-foliorelay.ppd")
+    for _,size:=range []string{"*PageSize A4/A4:","*PageSize Letter/US Letter:"}{
+        if !strings.Contains(ppd,size){t.Fatalf("PPD page size missing %q",size)}
     }
 }
