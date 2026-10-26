@@ -95,12 +95,7 @@ func main() {
 	}
 	handler := server.Handler()
 
-	httpServer := &http.Server{
-		Addr:              *listen,
-		Handler:           handler,
-		ReadHeaderTimeout: 5 * time.Second,
-		IdleTimeout:       60 * time.Second,
-	}
+	httpServer := newControlHTTPServer(*listen, handler)
 	if *httpsListen == "" {
 		log.Printf("foliorelayd private HTTP listening on %s", *listen)
 		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -109,12 +104,7 @@ func main() {
 		return
 	}
 
-	httpsServer := &http.Server{
-		Addr:              *httpsListen,
-		Handler:           handler,
-		ReadHeaderTimeout: 5 * time.Second,
-		IdleTimeout:       60 * time.Second,
-	}
+	httpsServer := newControlHTTPServer(*httpsListen, handler)
 	errCh := make(chan error, 2)
 	go func() {
 		log.Printf("foliorelayd private HTTP listening on %s", *listen)
@@ -134,4 +124,21 @@ func main() {
 	}()
 
 	log.Fatal(<-errCh)
+}
+
+// Keep the private and TLS listeners on the same bounded transport policy.
+// The successful download handler holds one verified in-memory document until
+// its response is complete; without a write deadline a stalled peer could
+// retain the process-wide memory admission slot indefinitely. This deadline
+// bounds the response, not the client's evidence of completed delivery.
+const controlWriteTimeout = 5 * time.Minute
+
+func newControlHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		WriteTimeout:      controlWriteTimeout,
+		IdleTimeout:       60 * time.Second,
+	}
 }
