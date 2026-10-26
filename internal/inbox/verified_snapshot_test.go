@@ -19,15 +19,20 @@ func TestVerifiedSnapshotPinsOriginalBytesAfterSourceMutation(t *testing.T) {
  if receipt.State!=IntegrityAvailable || snapshot==nil || snapshot.Size()!=int64(len(original)){
   t.Fatalf("snapshot not admitted: %+v",receipt)
  }
- privateDir:=snapshot.privateDir
- st,err:=os.Stat(filepath.Join(privateDir,"verified"))
- if err!=nil || !st.Mode().IsRegular(){t.Fatalf("private snapshot missing: %v",err)}
+ // Neither the verified copy nor scratch metadata has an OS pathname:
+ // a filesystem peer with the same UID has no post-verification disk target.
+ entries,err:=os.ReadDir(root)
+ if err!=nil{t.Fatal(err)}
+ for _,entry:=range entries {
+  if strings.Contains(entry.Name(),"snapshot") {t.Fatalf("snapshot left disk path: %q",entry.Name())}
+ }
  if err:=os.WriteFile(file,bytes.Repeat([]byte{'X'},len(original)),0o600);err!=nil{t.Fatal(err)}
  if err:=os.Remove(file);err!=nil{t.Fatal(err)}
  result,err:=io.ReadAll(snapshot)
  if err!=nil || !bytes.Equal(result,original){t.Fatalf("source mutation changed verified snapshot: %q / %v",result,err)}
  if err:=snapshot.Close();err!=nil{t.Fatal(err)}
- if _,err:=os.Stat(privateDir);!os.IsNotExist(err){t.Fatalf("private scratch survives close: %v",err)}
+ // Close destroys the owned byte buffer and does not need disk cleanup.
+ if snapshot.reader!=nil || snapshot.buffer!=nil {t.Fatal("closed snapshot retains readable bytes")}
  if _,err:=snapshot.Read(make([]byte,1));!os.IsNotExist(err)&&err!=os.ErrClosed{
   t.Fatalf("closed snapshot unexpectedly read: %v",err)
  }
