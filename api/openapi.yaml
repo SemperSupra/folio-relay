@@ -120,7 +120,10 @@ paths:
         "409":
           description: Canonical source has an invalid reference or corrupt bytes.
         "429":
-          description: Bounded integrity/snapshot worker is busy.
+          description: >
+            The per-server integrity worker or process-wide live verified
+            memory buffer is busy. Retry after the indicated delay;
+            no artifact bytes have been served.
           headers:
             Retry-After:
               schema: {type: string}

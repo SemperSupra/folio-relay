@@ -9,33 +9,50 @@ import (
     "io"
     "os"
     "path"
+    "sync"
     "time"
 )
 
 // VerifiedSnapshot owns a bounded in-process copy of an accepted artifact.
 // There is no scratch pathname to swap or rewrite after the digest passes.
 // The caller must Close the snapshot after HTTP delivery or cancellation.
+// snapshotMemorySlot reserves at most one 100 MiB-capable buffer per process,
+// across ALL independent control Server instances and direct Go callers.
+// A separate cgroup/host limit is still needed across multiple processes.
+var snapshotMemorySlot = make(chan struct{}, 1)
+
 type VerifiedSnapshot struct {
+    mu sync.Mutex
     reader *bytes.Reader
     buffer []byte
     bytes int64
+    holdsSlot bool
 }
 
 func (s *VerifiedSnapshot) Read(p []byte) (int,error) {
-    if s==nil || s.reader==nil { return 0,os.ErrClosed }
+    if s==nil { return 0,os.ErrClosed }
+    s.mu.Lock()
+    defer s.mu.Unlock()
+    if s.reader==nil {return 0,os.ErrClosed}
     return s.reader.Read(p)
 }
 func (s *VerifiedSnapshot) Size() int64 {
     if s==nil {return 0}
-    return s.bytes
+    return s.bytes // immutable after allocation
 }
 func (s *VerifiedSnapshot) Close() error {
     if s==nil {return nil}
-    // Release the owned content buffer once HTTP delivery is over.
-    // No pathname or on-disk scratch file exists, even after a crash.
+    s.mu.Lock()
+    defer s.mu.Unlock()
+    // Serialize with Read, scrub bytes, and return the process-wide capacity.
+    // Idempotent Close must never release a second caller's reservation.
     clear(s.buffer)
     s.buffer=nil
     s.reader=nil
+    if s.holdsSlot {
+        s.holdsSlot=false
+        <-snapshotMemorySlot
+    }
     return nil
 }
 
@@ -54,8 +71,9 @@ func (r snapshotReader) Read(p []byte)(int,error) {
 // bounded in-memory copy equals the durable accepted SHA-256 and length.
 // A full-privilege same-UID filesystem actor cannot mutate the verified copy
 // by editing or replacing a scratch pathname: no scratch file is created.
-// Only one verifier per control instance is allowed by the HTTP handler.
-// The 100 MiB memory bound is still an exact-target capacity/release gate.
+// The HTTP handler bounds one verifier per Server; this primitive also
+// reserves one live snapshot per PROCESS (including independent Server objects).
+// Cross-process cgroup memory limits remain a separate target gate.
 func SnapshotVerifiedArtifact(ctx context.Context,rootDir string,record Record,checkedAt time.Time)(*VerifiedSnapshot,IntegrityReceipt){
     receipt:=IntegrityReceipt{
         JobID:record.JobID,State:IntegrityPending,
@@ -109,11 +127,20 @@ func SnapshotVerifiedArtifact(ctx context.Context,rootDir string,record Record,c
         return nil,receipt
     }
 
+    // Reserve before allocating. The slot is held until Close, not merely
+    // through SHA verification, because the HTTP response still owns RAM.
+    // Default-deny when another source/client already holds a snapshot.
+    select {
+    case snapshotMemorySlot<-struct{}{}:
+    default:
+        receipt.ReasonCode="snapshot_memory_busy"
+        return nil,receipt
+    }
     // The accepted length has already passed the 100 MiB bound. Using one
     // exact-size allocation avoids unbounded buffer growth or disk spill.
     data:=make([]byte,int(record.ArtifactBytes))
     committed:=false
-    defer func(){if !committed {clear(data)}}()
+    defer func(){if !committed {clear(data);<-snapshotMemorySlot}}()
     reader:=snapshotReader{ctx:ctx,src:source}
     n,err:=io.ReadFull(reader,data)
     if ctx.Err()!=nil {receipt.ReasonCode="verification_cancelled";return nil,receipt}
@@ -140,7 +167,7 @@ func SnapshotVerifiedArtifact(ctx context.Context,rootDir string,record Record,c
         return nil,receipt
     }
     if ctx.Err()!=nil {receipt.ReasonCode="verification_cancelled";return nil,receipt}
-    snapshot:=&VerifiedSnapshot{reader:bytes.NewReader(data),buffer:data,bytes:record.ArtifactBytes}
+    snapshot:=&VerifiedSnapshot{reader:bytes.NewReader(data),buffer:data,bytes:record.ArtifactBytes,holdsSlot:true}
     receipt.State=IntegrityAvailable
     receipt.ReasonCode="canonical_verified"
     committed=true

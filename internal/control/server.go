@@ -485,8 +485,8 @@ func (s *Server) handleArtifact(w http.ResponseWriter, r *http.Request) {
   return
  }
  if !ok {writeError(w,http.StatusNotFound,"job_not_found","job not found");return}
- // Share the existing bounded checksum worker slot with the status endpoint
- // to prevent many simultaneous 100 MiB private disk snapshots.
+ // Share the checksum worker slot with the status endpoint. The snapshot
+ // package independently reserves one live 100 MiB-capable buffer per process.
  select {
  case s.integritySlot<-struct{}{}:
   defer func(){<-s.integritySlot}()
@@ -497,6 +497,11 @@ func (s *Server) handleArtifact(w http.ResponseWriter, r *http.Request) {
  }
  snap,receipt:=frinbox.SnapshotVerifiedArtifact(r.Context(),s.artifactStore,record,time.Now())
  if snap==nil {
+  if receipt.ReasonCode=="snapshot_memory_busy" {
+   w.Header().Set("Retry-After","2")
+   writeError(w,http.StatusTooManyRequests,"snapshot_memory_busy","verification memory is busy")
+   return
+  }
   switch receipt.State {
   case frinbox.IntegrityMissing:
    writeError(w,http.StatusNotFound,"artifact_not_found","artifact unavailable")
