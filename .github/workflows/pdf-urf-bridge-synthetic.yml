@@ -1,0 +1,80 @@
+name: PDF Apple URF Roundtrip Synthetic Qualification
+
+on:
+  pull_request:
+    paths:
+      - 'tests/pdfderivation/**'
+      - '.github/workflows/pdf-urf-bridge-synthetic.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  urf-actual-byte-roundtrip:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Install upstream libcups raster and OCR test-only tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential libcups2-dev fonts-dejavu-core fontconfig \
+            python3-pil python3-pikepdf img2pdf qpdf poppler-utils \
+            ocrmypdf tesseract-ocr tesseract-ocr-eng
+      - name: Build bounded disposable URF source codec and qualify bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/foliorelay-urf-proof"
+          mkdir -p "$evidence"
+          cc -std=c11 -O2 -Wall -Wextra -Werror \
+            -o "$evidence/urf-bridge" tests/pdfderivation/urf_synthetic_bridge.c -lcups
+          python3 tests/pdfderivation/make_urf_synthetic_pgm.py "$evidence/source.pgm"
+          "$evidence/urf-bridge" encode "$evidence/source.pgm" "$evidence/apple.urf"
+          test "$(head -c 7 "$evidence/apple.urf")" = UNIRAST
+          "$evidence/urf-bridge" decode "$evidence/apple.urf" "$evidence/decoded.pgm"
+          cmp "$evidence/source.pgm" "$evidence/decoded.pgm"
+          head -c 100 "$evidence/apple.urf" > "$evidence/truncated.urf"
+          if "$evidence/urf-bridge" decode "$evidence/truncated.urf" "$evidence/bad.pgm"; then
+            echo 'ERROR: truncated URF was admitted' >&2
+            exit 1
+          fi
+          test ! -e "$evidence/bad.pgm"
+          python3 - "$evidence/decoded.pgm" "$evidence/decoded.png" <<'PY'
+          from PIL import Image
+          import sys
+          with Image.open(sys.argv[1]) as image:
+              image.save(sys.argv[2],format="PNG")
+          PY
+          img2pdf "$evidence/decoded.png" -o "$evidence/raster.pdf"
+          ocrmypdf --skip-text --language eng --output-type pdf \
+            --title "FolioRelay Apple URF Synthetic" \
+            --author "Synthetic Test Harness" \
+            "$evidence/raster.pdf" "$evidence/searchable.pdf"
+          qpdf --check "$evidence/searchable.pdf"
+          pdftotext -enc UTF-8 "$evidence/searchable.pdf" "$evidence/extracted.txt"
+          grep -qi 'FolioRelay' "$evidence/extracted.txt"
+          grep -qi 'SYNTHETIC' "$evidence/extracted.txt"
+          pdfinfo "$evidence/searchable.pdf" > "$evidence/info.txt"
+          grep -Eq '^Pages:[[:space:]]*1$' "$evidence/info.txt"
+          python3 tests/pdfderivation/check_embedded_metadata.py \
+            "$evidence/searchable.pdf" \
+            'FolioRelay Apple URF Synthetic' 'Synthetic Test Harness'
+          (cd "$evidence" && sha256sum source.pgm apple.urf decoded.pgm raster.pdf searchable.pdf) \
+            > "$evidence/sha256.txt"
+          printf '%s\n' 'PASS: real Apple UNIRAST bytes -> exact grayscale pixels -> searchable PDF' \
+            'NOT PROVEN: arbitrary URF profiles, full editable reconstruction, deployed conversion' \
+            > "$evidence/qualification.txt"
+      - name: Preserve synthetic-only first-failure evidence
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v4
+        with:
+          name: foliorelay-urf-byte-ocr-proof
+          path: ${{ runner.temp }}/foliorelay-urf-proof/
+          retention-days: 7
+          if-no-files-found: warn
