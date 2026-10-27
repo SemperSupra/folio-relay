@@ -43,7 +43,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             ocrmypdf tesseract-ocr tesseract-ocr-eng tesseract-ocr-deu \
-            tesseract-ocr-tha python3-reportlab img2pdf poppler-utils qpdf
+            tesseract-ocr-tha python3-reportlab python3-pikepdf img2pdf poppler-utils qpdf
           mkdir -p "$RUNNER_TEMP/foliorelay-ocr-proof"
           {
             ocrmypdf --version
@@ -75,6 +75,9 @@ jobs:
           grep -Eq '^Pages:[[:space:]]*1$' "$evidence/pdfinfo.txt"
           grep -Eq '^Title:[[:space:]]*FolioRelay Synthetic Proof' "$evidence/pdfinfo.txt"
           grep -Eq '^Author:[[:space:]]*Synthetic Test Harness' "$evidence/pdfinfo.txt"
+          python3 tests/pdfderivation/check_embedded_metadata.py \
+            "$evidence/searchable.pdf" 'FolioRelay Synthetic Proof' \
+            'Synthetic Test Harness'
           # Separate source-native preservation smoke; never force-rasterize
           # genuinely editable source text just to apply OCR to another page.
           ocrmypdf --skip-text --language eng --output-type pdf \
