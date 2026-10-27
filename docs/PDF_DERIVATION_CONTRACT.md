@@ -45,3 +45,10 @@ This Go package makes **no filesystem, network, printer or document mutation**; 
 7. New immutable images, TrueNAS virtual F0-F5, physical new target admission **after independent review**. Historical H0-H4 and consumed Foundry deployment CREATE stay untouched.
 
 **Status:** The source Go contract and synthetic CI workflow are research-only. No new user-facing normalized PDF capability is deployed or claimed ready.
+
+
+## Additional pure-Go derivative identity and event projection (draft only)
+
+`internal/pdfderivation/lifecycle.go` offers an immutable **intent key**, domain-separated SHA-256 over version, canonical original SHA-256 + MIME, processor profile and output kind (`searchable-pdf` or `reconstructed-editable-pdf`). The key **is not a file path** and confers no access authority. `JobEvent` supplies a proposed monotonically sequenced, idempotent append-only model with stable actions `start`, `complete`, `require_review`, `fail` and `cancel`. Identical duplicate event IDs replay without duplicate transitions; conflicting duplicates or sequence gaps fail closed. `Projection` gives humans, automation and agents a common state, reason and explicit next-action list. Completion requires the previously defined independent `Receipt.ValidateReady`; a searchable-image OCR result cannot be accepted as an editable rendition.
+
+This is **only a reducer and contract**. It does not persist events, enforce a transaction, authenticate clients, grant record permissions, reserve resources, render PDFs, perform exports, or write a content-addressed derivative. Actual durable journal storage, crash/replay reconciliation, scoped ACL (#96), HTTP/CLI/UI surfaces and effect execution remain future separately reviewed lanes. Production authority must not trust a caller-supplied `Evidence` struct; evidence must come from independently verified bytes in the sandboxed worker.
