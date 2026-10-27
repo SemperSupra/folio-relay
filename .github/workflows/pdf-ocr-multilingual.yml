@@ -1,0 +1,76 @@
+name: PDF OCR Multilingual Synthetic Qualification
+
+on:
+  pull_request:
+    paths:
+      - 'tests/pdfderivation/**'
+      - '.github/workflows/pdf-ocr-multilingual.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  multilingual-searchable:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Install disposable headless EN/DE/TH OCR tooling
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            python3-pil fonts-dejavu-core fonts-thai-tlwg fontconfig \
+            ocrmypdf tesseract-ocr tesseract-ocr-eng tesseract-ocr-deu \
+            tesseract-ocr-tha img2pdf poppler-utils qpdf python3-pikepdf
+          output="$RUNNER_TEMP/foliorelay-multilingual-proof"
+          mkdir -p "$output"
+          {
+            ocrmypdf --version
+            tesseract --version 2>&1 | head -1
+            tesseract --list-langs 2>&1
+            qpdf --version
+            fc-match Garuda
+          } > "$output/tool-versions.txt"
+          cat "$output/tool-versions.txt"
+      - name: Render fake printed text and OCR to actual searchable PDFs
+        shell: bash
+        run: |
+          set -euo pipefail
+          output="$RUNNER_TEMP/foliorelay-multilingual-proof"
+          python3 tests/pdfderivation/make_multilingual_images.py "$output"
+          for lang in eng deu tha; do
+            img2pdf "$output/$lang-raster.png" -o "$output/$lang-image.pdf"
+            ocrmypdf --skip-text --language "$lang" --jobs 2 \
+              --output-type pdf \
+              --title "FolioRelay Synthetic $lang" \
+              --author "Synthetic Test Harness" \
+              --sidecar "$output/$lang-sidecar.txt" \
+              "$output/$lang-image.pdf" "$output/$lang-searchable.pdf"
+            qpdf --check "$output/$lang-searchable.pdf"
+            pdftotext -enc UTF-8 "$output/$lang-searchable.pdf" \
+              "$output/$lang-extracted.txt"
+            pdfinfo "$output/$lang-searchable.pdf" > "$output/$lang-pdfinfo.txt"
+            grep -Eq '^Pages:[[:space:]]*1$' "$output/$lang-pdfinfo.txt"
+            python3 tests/pdfderivation/check_embedded_metadata.py \
+              "$output/$lang-searchable.pdf" \
+              "FolioRelay Synthetic $lang" "Synthetic Test Harness"
+          done
+          python3 tests/pdfderivation/check_multilingual_ocr.py "$output"
+          (cd "$output" && sha256sum *-image.pdf *-searchable.pdf) \
+            > "$output/sha256.txt"
+          printf '%s\n' \
+            'Searchable-image OCR qualification only; layout editing NOT tested' \
+            > "$output/qualification.txt"
+      - name: Publish synthetic fixtures, oracles and first-failure evidence
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v4
+        with:
+          name: foliorelay-en-de-th-synthetic
+          path: ${{ runner.temp }}/foliorelay-multilingual-proof/
+          retention-days: 7
+          if-no-files-found: warn
