@@ -12,7 +12,7 @@ def main():
         ["fc-match","-f","%{file}","DejaVu Sans"],text=True).strip()
     if not pathlib.Path(font_path).is_file():
         raise SystemExit("font not available")
-    image=Image.new("L",(2480,3508),255)  # A4 / 300 dpi
+    image=Image.new("L",(2480,3507),255)  # exact libcups PWG A4 / 300 dpi
     pen=ImageDraw.Draw(image)
     face=ImageFont.truetype(font_path,105)
     for i,line in enumerate([
