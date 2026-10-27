@@ -1,0 +1,96 @@
+name: PDF Derivation Synthetic Qualification
+
+on:
+  pull_request:
+    paths:
+      - 'internal/pdfderivation/**'
+      - 'tests/pdfderivation/**'
+      - 'docs/PDF_DERIVATION_CONTRACT.md'
+      - '.github/workflows/pdf-derivation-synthetic.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Setup Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: '1.27.1'
+          cache: false
+      - name: Validate source-only PDF editability contract
+        run: |
+          set -euo pipefail
+          go vet ./internal/pdfderivation
+          go test -count=1 -race -v ./internal/pdfderivation
+
+  disposable-ocr-census:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Install headless OCR primitives from Ubuntu repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ocrmypdf tesseract-ocr tesseract-ocr-eng tesseract-ocr-deu \
+            tesseract-ocr-tha python3-reportlab img2pdf poppler-utils qpdf
+          mkdir -p "$RUNNER_TEMP/foliorelay-ocr-proof"
+          {
+            ocrmypdf --version
+            tesseract --version 2>&1 | head -1
+            tesseract --list-langs 2>&1
+            qpdf --version
+          } >"$RUNNER_TEMP/foliorelay-ocr-proof/tool-versions.txt"
+          cat "$RUNNER_TEMP/foliorelay-ocr-proof/tool-versions.txt"
+      - name: Prove searchable OCR and embedded Info metadata on synthetic English page
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/foliorelay-ocr-proof"
+          export EVIDENCE="$evidence"
+          python3 tests/pdfderivation/make_synthetic_pdf.py "$evidence/native.pdf"
+          pdftoppm -f 1 -l 1 -r 300 -png -singlefile \
+            "$evidence/native.pdf" "$evidence/page"
+          img2pdf "$evidence/page.png" -o "$evidence/raster.pdf"
+          ocrmypdf --skip-text --language eng \
+            --output-type pdf --title 'FolioRelay Synthetic Proof' \
+            --author 'Synthetic Test Harness' \
+            --sidecar "$evidence/ocr.txt" \
+            "$evidence/raster.pdf" "$evidence/searchable.pdf"
+          qpdf --check "$evidence/searchable.pdf"
+          pdftotext "$evidence/searchable.pdf" "$evidence/extracted.txt"
+          grep -qi 'FolioRelay' "$evidence/extracted.txt"
+          grep -qi 'SYNTHETIC' "$evidence/extracted.txt"
+          pdfinfo "$evidence/searchable.pdf" > "$evidence/pdfinfo.txt"
+          grep -Eq '^Pages:[[:space:]]*1$' "$evidence/pdfinfo.txt"
+          grep -Eq '^Title:[[:space:]]*FolioRelay Synthetic Proof' "$evidence/pdfinfo.txt"
+          grep -Eq '^Author:[[:space:]]*Synthetic Test Harness' "$evidence/pdfinfo.txt"
+          # Separate source-native preservation smoke; never force-rasterize
+          # genuinely editable source text just to apply OCR to another page.
+          ocrmypdf --skip-text --language eng --output-type pdf \
+            "$evidence/native.pdf" "$evidence/preserved-native.pdf"
+          pdftotext "$evidence/preserved-native.pdf" "$evidence/preserved-native.txt"
+          grep -qi 'FolioRelay' "$evidence/preserved-native.txt"
+          qpdf --check "$evidence/preserved-native.pdf"
+          (cd "$evidence" && sha256sum native.pdf raster.pdf searchable.pdf preserved-native.pdf) \
+            > "$evidence/sha256.txt"
+          printf '%s\n' 'PASS searchable-image OCR proof; NOT a reconstructed-editable PDF proof' \
+            > "$evidence/qualification.txt"
+      - name: Upload synthetic only receipts
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v4
+        with:
+          name: foliorelay-disposable-ocr-proof
+          path: ${{ runner.temp }}/foliorelay-ocr-proof/
+          if-no-files-found: warn
+          retention-days: 7
