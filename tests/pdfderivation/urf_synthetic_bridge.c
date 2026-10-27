@@ -45,8 +45,12 @@ static int encode(const char *source, const char *target) {
   if (maxval!=255 || !cupsRasterInitPWGHeader(
     &header,media,"sgray_8",300,300,"one-sided",NULL) ||
     !bounded(&header) || width!=header.cupsWidth || height!=header.cupsHeight) {
-    fprintf(stderr,"PGM / Apple raster profile mismatch: input %u x %u\n",
-            width,height);
+    fprintf(stderr,
+      "PGM / Apple raster profile mismatch: input %u x %u; generated %u x %u; "
+      "bits=%u/%u bpl=%u cspace=%d bounded=%d\\n",
+      width,height,header.cupsWidth,header.cupsHeight,
+      header.cupsBitsPerColor,header.cupsBitsPerPixel,
+      header.cupsBytesPerLine,header.cupsColorSpace,bounded(&header));
     goto done;
   }
   header.cupsInteger[CUPS_RASTER_PWG_TotalPageCount]=1;
