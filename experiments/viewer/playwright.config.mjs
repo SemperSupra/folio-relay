@@ -15,7 +15,7 @@ export default defineConfig({
     video: "retain-on-failure", serviceWorkers: "block"
   },
   webServer: {
-    command: "node experiments/viewer/server.mjs",
+    command: "node server.mjs",
     url: baseURL,
     reuseExistingServer: !process.env.CI,
     timeout: 20_000
