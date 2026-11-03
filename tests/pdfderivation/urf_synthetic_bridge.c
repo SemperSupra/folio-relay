@@ -87,6 +87,16 @@ static int decode(const char *source,const char *target) {
   unsigned char *line=NULL;
   int result=1;
   if(fd<0){perror("open URF");return result;}
+  // The upstream reader accepts some alternate header variants. This source
+  // preview profile admits ONLY exact seven-byte Apple "UNIRAST" magic.
+  // Inspect the same open fd later passed to libcups (no pathname reopen).
+  unsigned char signature[7];
+  if(read(fd,signature,sizeof(signature))!=(ssize_t)sizeof(signature) ||
+      memcmp(signature,"UNIRAST",sizeof(signature))!=0 ||
+      lseek(fd,0,SEEK_SET)!=0) {
+    fprintf(stderr,"invalid Apple raster signature\n");
+    goto done;
+  }
   in=cupsRasterOpen(fd,CUPS_RASTER_READ);
   if(!in || !cupsRasterReadHeader2(in,&header) || !bounded(&header)){
     fprintf(stderr,"unsupported, missing or oversized grayscale Apple raster\n");
