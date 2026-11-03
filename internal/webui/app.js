@@ -104,8 +104,23 @@ async function loadJobs() {
     row.className = "job";
 
     const primary = document.createElement("div");
-    const title = document.createElement("strong");
+    // A preview must be explicitly advertised for this exact record by a
+    // future scoped backend. The installed shared management session and
+    // download endpoint do NOT authorize displaying an inline PDF by default.
+    // Never trust an API-provided URL: derive a fixed same-origin viewer path
+    // from a strictly validated, canonical job ID. The view route itself must
+    // independently recheck real actor/document ACL and source integrity.
+    const previewReady = job.media_type === "application/pdf"
+      && /^job-[0-9a-f]{64}$/.test(job.job_id || "")
+      && job.preview?.state === "available"
+      && job.preview?.kind === "pdf"
+      && job.preview?.contract === "scoped-v1";
+    const title = document.createElement(previewReady ? "a" : "strong");
     title.textContent = job.source_title || job.download_name || prettyTime(job.accepted_at);
+    if (previewReady) {
+      title.href = "/viewer?job_id=" + encodeURIComponent(job.job_id);
+      title.setAttribute("aria-label", "View PDF: " + title.textContent);
+    }
     const id = document.createElement("code");
     id.textContent = prettyTime(job.accepted_at) + " · " + job.job_id;
     primary.append(title, document.createElement("br"), id);
