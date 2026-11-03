@@ -39,6 +39,9 @@ jobs:
           python3 tests/pdfderivation/urf_preview_falsify.py \
             "$evidence/bridge" "$evidence/two-page" "$evidence/source.pgm" "$evidence" \
             | tee "$evidence/negative-results.txt"
+          python3 tests/pdfderivation/urf_concurrent_outputs.py \
+            "$evidence/bridge" "$evidence/valid.urf" "$evidence/source.pgm" \
+            | tee "$evidence/concurrent-results.txt"
           python3 - "$evidence/decoded.pgm" "$evidence/preview.png" <<'PY'
           import sys
           from PIL import Image
@@ -61,6 +64,7 @@ jobs:
           name: foliorelay-urf-preview-negative
           path: |
             ${{ runner.temp }}/urf-preview-falsification/negative-results.txt
+            ${{ runner.temp }}/urf-preview-falsification/concurrent-results.txt
             ${{ runner.temp }}/urf-preview-falsification/sha256.txt
             ${{ runner.temp }}/urf-preview-falsification/pdfinfo.txt
             ${{ runner.temp }}/urf-preview-falsification/summary.txt
