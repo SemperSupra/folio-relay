@@ -31,8 +31,7 @@ for (const [character,reason] of [["b","denied"],["c","missing"],["d","corrupt"]
 for (const query of [
   "",
   "?job_id=../../other",
-  "?job_id=" + encodeURIComponent("job-" + "a".repeat(63) + "
-"),
+  "?job_id=" + encodeURIComponent("job-" + "a".repeat(63) + String.fromCharCode(10)),
   "?job_id=" + id("A"),
   "?url=https://steal.invalid/example.pdf"
 ]) {
