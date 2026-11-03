@@ -13,6 +13,7 @@ test("PDF.js renders an admitted synthetic PDF without external network", async 
   await expect(page.locator("#page-status")).toHaveText("Page 1 of 1");
   await expect(page.locator("#text-result")).toContainText("FolioRelay SYNTHETIC");
   await expect(page.locator("#page-canvas")).toBeVisible();
+  await expect(page.locator("#download-original")).toBeVisible();
   const dims = await page.locator("#page-canvas").evaluate(canvas => ({
     width: canvas.width, height: canvas.height
   }));
@@ -37,6 +38,7 @@ for (const scenario of ["denied", "missing", "corrupt", "unrecognized"]) {
     await page.goto("/?scenario=" + scenario);
     await expect(page.locator("#preview")).toHaveAttribute("data-state", "denied");
     await expect(page.locator("#page-canvas")).toBeHidden();
+    await expect(page.locator("#download-original")).toBeHidden();
     await expect(page.locator("#status")).toContainText("unavailable or denied");
     await expect(page.getByRole("button", {name: "Next page"})).toBeDisabled();
   });
