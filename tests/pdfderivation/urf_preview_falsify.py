@@ -88,6 +88,25 @@ def main() -> None:
             raise RuntimeError("unexpected source trailing bytes accepted")
         print("PASS: trailing PGM bytes rejected")
 
+    # RED: decoding must neither truncate a pre-existing output nor follow a
+    # symlink into a canonical artifact. A failure must not unlink either.
+    with tempfile.TemporaryDirectory(prefix="urf-output-negative-") as d:
+        tmp = pathlib.Path(d)
+        victim = tmp / "canonical-sentinel.txt"
+        victim.write_bytes(b"DO-NOT-MODIFY-CANONICAL")
+        link = tmp / "preview-link.pgm"
+        link.symlink_to(victim)
+        proc = run(bridge, "decode", valid, link)
+        if proc.returncode == 0 or not link.is_symlink() or victim.read_bytes() != b"DO-NOT-MODIFY-CANONICAL":
+            raise RuntimeError("RED: URF decoder followed or removed existing symlink output")
+        print("PASS: existing symlink destination rejected without mutation")
+        existing = tmp / "existing-output.pgm"
+        existing.write_bytes(b"EXISTING-DATA-RETAINED")
+        proc = run(bridge, "decode", valid, existing)
+        if proc.returncode == 0 or existing.read_bytes() != b"EXISTING-DATA-RETAINED":
+            raise RuntimeError("RED: URF decoder overwrote existing destination")
+        print("PASS: existing regular output rejected without mutation")
+
     if sha(original) != source_digest:
         raise RuntimeError("canonical fixture was modified")
     print("PASS: original fixture unchanged sha256=" + source_digest)
