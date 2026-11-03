@@ -45,9 +45,11 @@ async function render() {
     const contents = await page.getTextContent();
     byId("text-result").textContent = contents.items.map(i => i.str || "").join(" ");
     canvas.hidden = false;
+    byId("download-original").hidden = false;
     status("ready", "Preview ready; this is a synthetic document.");
   } catch {
     byId("page-canvas").hidden = true;
+    byId("download-original").hidden = true;
     status("failed", "Preview rendering failed; the original remains downloadable.");
   } finally {
     state.rendering = false;
@@ -96,6 +98,7 @@ async function open() {
     await render();
   } catch {
     byId("page-canvas").hidden = true;
+    byId("download-original").hidden = true;
     state.document = null;
     status("denied", "Preview unavailable or denied. No document pages were shown.");
     controls();
