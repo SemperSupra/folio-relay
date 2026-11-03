@@ -59,6 +59,20 @@ http.createServer(async (req, res) => {
   const scoped = /^\/api\/v1\/jobs\/(job-[0-9a-f]{64})\/(preview|artifact)$/.exec(pathname);
   if (scoped) {
     const id = scoped[1];
+    // Synthetic-only hostile body admission oracles; no real custody.
+    if (id === "job-" + "e".repeat(64) && scoped[2] === "preview") {
+      res.writeHead(200, {"Content-Type":"application/pdf",
+        "Content-Length":String(10 * 1024 * 1024 + 1), ...headers});
+      res.end("%PDF-1.7\nTOO SHORT\n");
+      return;
+    }
+    if (id === "job-" + "8".repeat(64) && scoped[2] === "preview") {
+      res.writeHead(200, {"Content-Type":"application/pdf", ...headers});
+      // Node emits chunked transfer encoding because no Content-Length exists.
+      res.write(Buffer.alloc(10 * 1024 * 1024, 0x50));
+      res.end(Buffer.from([0x50]));
+      return;
+    }
     // Fake-source-only redirect, never backed by a real document or actor.
     // The browser fetch must reject this 302 without third-party egress.
     if (id === "job-" + "f".repeat(64) && scoped[2] === "preview") {
