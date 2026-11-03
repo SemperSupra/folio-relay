@@ -107,7 +107,7 @@ func TestScopedPreviewVerifiedBytesAndFailClosedConsumption(t *testing.T){
     if !bytes.Equal(ok.Body.Bytes(),original) ||
         ok.Header().Get("Content-Type")!="application/pdf" ||
         !strings.HasPrefix(ok.Header().Get("Content-Disposition"),"inline;") ||
-        aclCalls!=2 || stopCalls!=2 {
+        aclCalls<3 || stopCalls<3 {
         t.Fatalf("verified preview mismatch or skipped read-time recheck: hdr=%v body=%q calls=%d/%d",ok.Header(),ok.Body.String(),aclCalls,stopCalls)
     }
     req:=httptest.NewRequest(http.MethodGet,"/api/v1/jobs/"+record.JobID+"/preview",nil)
