@@ -136,6 +136,35 @@ func NewPDFPreviewHandler(
         w.Header().Set("Content-Disposition",fmt.Sprintf("inline; filename=%q",record.DownloadName))
         w.Header().Set("Content-Length",strconv.FormatInt(snap.Size(),10))
         w.WriteHeader(http.StatusOK)
-        _,_=io.Copy(w,snap)
+        // Midstream revocation cannot recall already transmitted bytes, but
+        // this bounded loop checks fresh ACL and stop state before each chunk.
+        // An external source of linearizable revocation is still REQUIRED.
+        _=copyPreviewWithCurrentAccess(ctx,w,snap,guard)
     }),nil
+}
+
+// Each read owns no more than 16 KiB of newly deliverable document data.
+// The shared #101/#102 verified snapshot still owns and later scrubs the
+// complete, previously hash-validated canonical bytes.
+const previewDeliveryChunkBytes = 16 << 10
+
+func copyPreviewWithCurrentAccess(ctx context.Context, writer io.Writer, source io.Reader, permitted func() bool) error {
+    var chunk [previewDeliveryChunkBytes]byte
+    defer clear(chunk[:])
+    for {
+        if err:=ctx.Err();err!=nil{return err}
+        n,readErr:=source.Read(chunk[:])
+        if n>0 {
+            // A revocation during a blocking read also closes the gate.
+            if ctx.Err()!=nil || !permitted() {
+                return errors.New("preview delivery revoked or unavailable")
+            }
+            written,writeErr:=writer.Write(chunk[:n])
+            if writeErr!=nil{return writeErr}
+            if written!=n{return io.ErrShortWrite}
+        }
+        if readErr==io.EOF{return nil}
+        if readErr!=nil{return readErr}
+        if n==0{return io.ErrNoProgress}
+    }
 }
