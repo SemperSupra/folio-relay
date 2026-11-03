@@ -1,0 +1,68 @@
+name: URF preview source profile falsification
+
+on:
+  pull_request:
+    paths:
+      - 'tests/pdfderivation/**'
+      - '.github/workflows/urf-preview-profile-source.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  synthetic-urf-negative:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 22
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Install upstream CUPS and PDF validation libraries
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libcups2-dev build-essential python3-pil fonts-dejavu-core \
+            fontconfig img2pdf qpdf poppler-utils
+      - name: Execute synthetic URF preview adversarial suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/urf-preview-falsification"
+          mkdir -p "$evidence"
+          cc -std=c11 -O2 -Wall -Wextra -Werror \
+            -o "$evidence/bridge" tests/pdfderivation/urf_synthetic_bridge.c -lcups
+          cc -std=c11 -O2 -Wall -Wextra -Werror \
+            -o "$evidence/two-page" tests/pdfderivation/urf_extra_page_probe.c -lcups
+          python3 tests/pdfderivation/make_urf_synthetic_pgm.py "$evidence/source.pgm"
+          python3 tests/pdfderivation/urf_preview_falsify.py \
+            "$evidence/bridge" "$evidence/two-page" "$evidence/source.pgm" "$evidence" \
+            | tee "$evidence/negative-results.txt"
+          python3 - "$evidence/decoded.pgm" "$evidence/preview.png" <<'PY'
+          import sys
+          from PIL import Image
+          with Image.open(sys.argv[1]) as page:
+              page.save(sys.argv[2], format="PNG")
+          PY
+          img2pdf "$evidence/preview.png" -o "$evidence/preview.pdf"
+          qpdf --check "$evidence/preview.pdf"
+          pdfinfo "$evidence/preview.pdf" > "$evidence/pdfinfo.txt"
+          grep -Eq '^Pages:[[:space:]]*1$' "$evidence/pdfinfo.txt"
+          (cd "$evidence" && sha256sum source.pgm valid.urf decoded.pgm preview.pdf) > "$evidence/sha256.txt"
+          echo "PASS: bounded real URF grayscale -> upstream-produced PDF preview" \
+            | tee "$evidence/summary.txt"
+          echo "NOT PROVEN: real AirPrint profile coverage, all color spaces, production service" \
+            >> "$evidence/summary.txt"
+      - name: Store rights-cleared source-only evidence
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v4
+        with:
+          name: foliorelay-urf-preview-negative
+          path: |
+            ${{ runner.temp }}/urf-preview-falsification/negative-results.txt
+            ${{ runner.temp }}/urf-preview-falsification/sha256.txt
+            ${{ runner.temp }}/urf-preview-falsification/pdfinfo.txt
+            ${{ runner.temp }}/urf-preview-falsification/summary.txt
+          if-no-files-found: warn
+          retention-days: 7
