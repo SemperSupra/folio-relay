@@ -56,7 +56,7 @@ http.createServer(async (req, res) => {
   // SOURCE-ONLY contract fixture: IDs are hardcoded fake roles and cannot
   // name real storage. In a real app, the Go actor-scoped verified-snapshot
   // handler must perform fresh document authorization BEFORE any PDF byte.
-  const scoped = /^\\/api\\/v1\\/jobs\\/(job-[0-9a-f]{64})\\/(preview|artifact)$/.exec(pathname);
+  const scoped = /^\/api\/v1\/jobs\/(job-[0-9a-f]{64})\/(preview|artifact)$/.exec(pathname);
   if (scoped) {
     const id = scoped[1];
     if (id === "job-" + "a".repeat(64)) return end(200, "application/pdf", pdf);
