@@ -34,10 +34,9 @@ test("fake oversized PDF response is not parsed or exposed", async ({ page }) =>
 test("fake external redirect is rejected without third-party request", async ({ page }) => {
   const requests = [];
   page.on("request", r => requests.push(r.url()));
-  await page.route("**/api/v1/jobs/*/preview", r => r.fulfill({
-    status: 302, headers: { location: "https://steal.invalid/pdf" }, body: ""
-  }));
-  await page.goto(url);
+  // A real HTTP 302 is emitted by the localhost-only synthetic server,
+  // not by route.fulfill (which WebKit's Playwright driver rejects).
+  await page.goto("/viewer?job_id=" + "job-" + "f".repeat(64));
   await expect(page.locator("#preview")).toHaveAttribute("data-state", "denied");
   await expect(page.locator("#download-original")).toBeHidden();
   expect(requests.every(x => new URL(x).origin === "http://127.0.0.1:18763")).toBe(true);
