@@ -59,6 +59,13 @@ http.createServer(async (req, res) => {
   const scoped = /^\/api\/v1\/jobs\/(job-[0-9a-f]{64})\/(preview|artifact)$/.exec(pathname);
   if (scoped) {
     const id = scoped[1];
+    // Fake-source-only redirect, never backed by a real document or actor.
+    // The browser fetch must reject this 302 without third-party egress.
+    if (id === "job-" + "f".repeat(64) && scoped[2] === "preview") {
+      res.writeHead(302, {Location: "https://steal.invalid/never-follow", ...headers});
+      res.end();
+      return;
+    }
     if (id === "job-" + "a".repeat(64)) return end(200, "application/pdf", pdf);
     if (id === "job-" + "b".repeat(64)) return end(403, "application/json", '{"error":"denied"}');
     if (id === "job-" + "c".repeat(64)) return end(404, "application/json", '{"error":"missing"}');
