@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 200809L
 /*
  * Disposable research-only Apple URF/PWG raster bridge.
  * Input/output: one monochrome 8-bit PGM (P5) page, bounded A4 300dpi.
@@ -85,7 +86,7 @@ static int decode(const char *source,const char *target) {
   cups_page_header2_t header, extra;
   FILE *out=NULL;
   unsigned char *line=NULL;
-  int result=1;
+  int outfd=-1, created=0, result=1;
   if(fd<0){perror("open URF");return result;}
   // The upstream reader accepts some alternate header variants. This source
   // preview profile admits ONLY exact seven-byte Apple "UNIRAST" magic.
@@ -102,8 +103,15 @@ static int decode(const char *source,const char *target) {
     fprintf(stderr,"unsupported, missing or oversized grayscale Apple raster\n");
     goto done;
   }
-  out=fopen(target,"wb");
-  if(!out){perror("open PGM");goto done;}
+  // Source-only output must be newly owned: no canonical clobber, no
+  // existing file overwrite, and no symlink following. Still NOT a
+  // production-safe cross-directory/concurrent-writer protocol.
+  outfd=open(target,O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW,0600);
+  if(outfd<0){perror("exclusive preview output");goto done;}
+  created=1;
+  out=fdopen(outfd,"wb");
+  if(!out){perror("fdopen preview output");goto done;}
+  outfd=-1;
   if(fprintf(out,"P5\n%u %u\n255\n",header.cupsWidth,header.cupsHeight)<0)
     goto done;
   line=malloc(header.cupsWidth);
@@ -122,10 +130,11 @@ static int decode(const char *source,const char *target) {
   result=0;
 done:
   free(line);
-  if(out) fclose(out);
+  if(out && fclose(out)!=0) result=1;
+  if(outfd>=0)close(outfd);
   if(in)cupsRasterClose(in);
   close(fd);
-  if(result)unlink(target);
+  if(result && created)unlink(target);
   return result;
 }
 
