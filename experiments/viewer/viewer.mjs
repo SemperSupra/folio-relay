@@ -10,9 +10,20 @@ const allowedFixturePaths = Object.freeze({
   corrupt: "/corrupt.pdf"
 });
 const query = new URL(location.href).searchParams;
+const scoped = location.pathname === "/viewer";
+const recordID = scoped ? query.get("job_id") : null;
+// Do not build a document URL from arbitrary query parameters, and never
+// accept a full PDF URL or token from the browser. The synthetic server has
+// fake record IDs only; source-side authorization does NOT live here.
+const canonicalID = typeof recordID === "string" && /^job-[0-9a-f]{64}$/.test(recordID);
 const scenario = query.get("scenario") || "ok";
-const pdfPath = Object.hasOwn(allowedFixturePaths, scenario) ?
-  allowedFixturePaths[scenario] : allowedFixturePaths.denied;
+const pdfPath = scoped
+  ? (canonicalID ? "/api/v1/jobs/" + recordID + "/preview" : null)
+  : (Object.hasOwn(allowedFixturePaths, scenario) ?
+    allowedFixturePaths[scenario] : allowedFixturePaths.denied);
+const downloadPath = scoped && canonicalID
+  ? "/api/v1/jobs/" + recordID + "/artifact"
+  : "/synthetic.pdf";
 
 GlobalWorkerOptions.workerSrc = "/vendor/pdf.worker.mjs";
 
@@ -45,6 +56,7 @@ async function render() {
     const contents = await page.getTextContent();
     byId("text-result").textContent = contents.items.map(i => i.str || "").join(" ");
     canvas.hidden = false;
+    byId("download-original").href = downloadPath;
     byId("download-original").hidden = false;
     status("ready", "Preview ready; this is a synthetic document.");
   } catch {
@@ -75,6 +87,7 @@ for (const [id, factor] of [["zoom-in", 1.25], ["zoom-out", .8]]) {
 
 async function open() {
   try {
+    if (!pdfPath) throw new Error("invalid or missing scoped document id");
     const response = await fetch(pdfPath, {
       cache: "no-store", credentials: "same-origin",
       headers: { Accept: "application/pdf" },
