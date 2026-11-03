@@ -1,0 +1,70 @@
+name: Inbox PDF viewer synthetic source qualification
+
+on:
+  pull_request:
+    paths:
+      - 'experiments/viewer/**'
+      - 'tests/viewer/**'
+      - '.github/workflows/inbox-pdf-viewer-source.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  read-only-viewer:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Node 22
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: '22'
+      - name: Install pinned upstream viewer and test tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --no-save --package-lock=false --ignore-scripts --no-audit --no-fund \
+            pdfjs-dist@6.4.299 @playwright/test@1.62.1
+          node --input-type=module -e "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url); if (require('pdfjs-dist/package.json').version !== '6.4.299') process.exit(1);"
+          mkdir -p build/viewer-evidence
+          npm view pdfjs-dist@6.4.299 dist.integrity > build/viewer-evidence/upstream-tarball-integrity.txt
+          sha256sum node_modules/pdfjs-dist/build/pdf.mjs \
+            node_modules/pdfjs-dist/build/pdf.worker.mjs \
+            > build/viewer-evidence/upstream-modules.sha256
+          cat node_modules/pdfjs-dist/LICENSE > build/viewer-evidence/upstream-license.txt
+      - name: Install browser runtimes
+        run: npx playwright install --with-deps chromium firefox webkit
+      - name: Validate syntax and source security boundaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check experiments/viewer/server.mjs
+          node --check experiments/viewer/viewer.mjs
+          node --check experiments/viewer/playwright.config.mjs
+          node --check tests/viewer/source-preview.spec.mjs
+          grep -Fq 'enableScripting: false' experiments/viewer/viewer.mjs
+          grep -Fq 'isEvalSupported: false' experiments/viewer/viewer.mjs
+          grep -Fq "object-src 'none'" experiments/viewer/server.mjs
+      - name: Test five browser profiles on generated public-safe PDF
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx playwright test -c experiments/viewer/playwright.config.mjs
+      - name: Preserve source-only first failures and supply-chain evidence
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v4
+        with:
+          name: foliorelay-synthetic-viewer-source
+          path: |
+            build/viewer-evidence/
+            build/viewer-results/
+            build/viewer-report/
+          if-no-files-found: warn
+          retention-days: 7

@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>FolioRelay — Synthetic PDF Viewer Qualification</title>
+<link rel="stylesheet" href="/viewer.css">
+<script type="module" src="/viewer.mjs"></script>
+</head>
+<body>
+<main>
+  <header>
+    <p class="eyebrow">SOURCE-ONLY QUALIFICATION · SYNTHETIC DOCUMENT</p>
+    <h1>Document preview</h1>
+    <p>This independent browser fixture is not a FolioRelay runtime route or an authorization decision.</p>
+  </header>
+  <nav aria-label="Document controls">
+    <button id="previous" type="button" disabled>Previous page</button>
+    <output id="page-status" aria-live="polite">No document loaded</output>
+    <button id="next" type="button" disabled>Next page</button>
+    <button id="zoom-out" type="button" disabled>Zoom out</button>
+    <button id="zoom-in" type="button" disabled>Zoom in</button>
+    <a id="download-original" href="/synthetic.pdf" download="foliorelay-synthetic.pdf" hidden>Download synthetic original</a>
+  </nav>
+  <section aria-label="Document viewing area">
+    <p id="status" role="status" aria-live="polite">Opening synthetic preview…</p>
+    <div id="preview" data-state="loading">
+      <canvas id="page-canvas" role="img" aria-label="PDF page preview" hidden></canvas>
+    </div>
+    <p id="text-result" class="visually-hidden"></p>
+  </section>
+</main>
+</body>
+</html>
