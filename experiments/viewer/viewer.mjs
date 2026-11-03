@@ -148,6 +148,60 @@ for (const [id, factor] of [["zoom-in", 1.25], ["zoom-out", .8]]) {
   });
 }
 
+// Experimental client-side admission. A real server/client max must be
+// reconciled with #87 before production; never trust Content-Length alone.
+// Avoid response.arrayBuffer(): it allocates the entire hostile body before a
+// size check and mislabels otherwise valid larger source files as denied.
+const syntheticPDFMaxBytes = 10 * 1024 * 1024;
+async function readBoundedSyntheticPDF(response) {
+  const declared = response.headers.get("Content-Length");
+  const rejectBody = async () => {
+    if (response.body) {
+      try { await response.body.cancel(); } catch { /* fail closed */ }
+    }
+  };
+  if (declared !== null) {
+    if (!/^(0|[1-9][0-9]*)$/.test(declared) ||
+        !Number.isSafeInteger(Number(declared)) ||
+        Number(declared) > syntheticPDFMaxBytes) {
+      await rejectBody();
+      throw new Error("invalid or oversized declared fixture");
+    }
+  }
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("missing response stream");
+  const parts = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!(value instanceof Uint8Array)) throw new Error("invalid PDF chunk");
+      total += value.byteLength;
+      if (total > syntheticPDFMaxBytes) {
+        throw new Error("oversized streamed fixture");
+      }
+      parts.push(value);
+    }
+    if (total < 16 || (declared !== null && Number(declared) !== total)) {
+      throw new Error("short or inconsistent fixture");
+    }
+    const admitted = new Uint8Array(total);
+    let cursor = 0;
+    for (const part of parts) {
+      admitted.set(part,cursor);
+      cursor += part.byteLength;
+    }
+    return admitted;
+  } catch (err) {
+    try { await reader.cancel(); } catch { /* fail closed */ }
+    throw err;
+  } finally {
+    parts.length=0;
+    reader.releaseLock();
+  }
+}
+
 async function open() {
   try {
     if (!pdfPath) throw new Error("invalid or missing scoped document id");
@@ -159,12 +213,9 @@ async function open() {
     if (!response.ok || response.headers.get("Content-Type") !== "application/pdf") {
       throw new Error("not admitted");
     }
-    const bytes = await response.arrayBuffer();
-    if (bytes.byteLength < 16 || bytes.byteLength > 10 * 1024 * 1024) {
-      throw new Error("invalid fixture size");
-    }
+    const bytes = await readBoundedSyntheticPDF(response);
     const task = getDocument({
-      data: new Uint8Array(bytes),
+      data: bytes,
       isEvalSupported: false, enableScripting: false, stopAtErrors: true
     });
     state.document = await task.promise;
