@@ -16,7 +16,7 @@ test("fixed scoped preview URL renders the right synthetic PDF in five browsers"
   await expect(page.locator("#download-original")).toBeVisible();
   expect(requested.some(x => x.includes("/api/v1/jobs/" + id("a") + "/preview"))).toBe(true);
   expect(requested.every(x => x.startsWith("http://127.0.0.1:18763/"))).toBe(true);
-  expect(requested.some(x => x.includes("steal.invalid"))).toBe(false);
+  expect(requested.every(x => new URL(x).origin === "http://127.0.0.1:18763")).toBe(true);
 });
 
 for (const [character,reason] of [["b","denied"],["c","missing"],["d","corrupt"]]) {
@@ -42,6 +42,6 @@ for (const query of [
     await expect(page.locator("#preview")).toHaveAttribute("data-state","denied");
     await expect(page.locator("#download-original")).toBeHidden();
     expect(requests.some(x => x.includes("/api/v1/jobs/"))).toBe(false);
-    expect(requests.some(x => x.includes("steal.invalid"))).toBe(false);
+    expect(requests.every(x => new URL(x).origin === "http://127.0.0.1:18763")).toBe(true);
   });
 }
