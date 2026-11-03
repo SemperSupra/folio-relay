@@ -36,6 +36,7 @@ const pdf = fakePDF();
 
 const files = new Map([
   ["/", ["index.html", "text/html; charset=utf-8"]],
+  ["/viewer", ["index.html", "text/html; charset=utf-8"]],
   ["/viewer.mjs", ["viewer.mjs", "text/javascript; charset=utf-8"]],
   ["/viewer.css", ["viewer.css", "text/css; charset=utf-8"]],
   ["/vendor/pdf.mjs", ["node_modules/pdfjs-dist/build/pdf.mjs", "text/javascript; charset=utf-8"]],
@@ -51,6 +52,18 @@ http.createServer(async (req, res) => {
   };
   function end(code, mime, body) {
     res.writeHead(code, {"Content-Type":mime, ...headers}); res.end(body);
+  }
+  // SOURCE-ONLY contract fixture: IDs are hardcoded fake roles and cannot
+  // name real storage. In a real app, the Go actor-scoped verified-snapshot
+  // handler must perform fresh document authorization BEFORE any PDF byte.
+  const scoped = /^\\/api\\/v1\\/jobs\\/(job-[0-9a-f]{64})\\/(preview|artifact)$/.exec(pathname);
+  if (scoped) {
+    const id = scoped[1];
+    if (id === "job-" + "a".repeat(64)) return end(200, "application/pdf", pdf);
+    if (id === "job-" + "b".repeat(64)) return end(403, "application/json", '{"error":"denied"}');
+    if (id === "job-" + "c".repeat(64)) return end(404, "application/json", '{"error":"missing"}');
+    if (id === "job-" + "d".repeat(64)) return end(200, "application/pdf", "NOT A PDF");
+    return end(404, "application/json", '{"error":"unknown"}');
   }
   if (pathname === "/synthetic.pdf") return end(200, "application/pdf", pdf);
   if (pathname === "/denied.pdf") return end(403, "application/json", '{"error":"denied"}');
