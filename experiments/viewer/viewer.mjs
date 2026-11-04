@@ -1,6 +1,7 @@
 // SOURCE-ONLY viewer experiment. Do not register in product or use this
 // synthetic route as a production authorization / integrity implementation.
 import { getDocument, GlobalWorkerOptions } from "/vendor/pdf.mjs";
+import { readBoundedSyntheticPDF } from "/bounded_reader.mjs";
 
 const byId = id => document.getElementById(id);
 const allowedFixturePaths = Object.freeze({
@@ -148,6 +149,9 @@ for (const [id, factor] of [["zoom-in", 1.25], ["zoom-out", .8]]) {
   });
 }
 
+// Tested separately with controlled ReadableStreams in Playwright.
+// Fixture cap is 10 MiB, NOT an accepted production document budget.
+
 async function open() {
   try {
     if (!pdfPath) throw new Error("invalid or missing scoped document id");
@@ -159,12 +163,9 @@ async function open() {
     if (!response.ok || response.headers.get("Content-Type") !== "application/pdf") {
       throw new Error("not admitted");
     }
-    const bytes = await response.arrayBuffer();
-    if (bytes.byteLength < 16 || bytes.byteLength > 10 * 1024 * 1024) {
-      throw new Error("invalid fixture size");
-    }
+    const bytes = await readBoundedSyntheticPDF(response);
     const task = getDocument({
-      data: new Uint8Array(bytes),
+      data: bytes,
       isEvalSupported: false, enableScripting: false, stopAtErrors: true
     });
     state.document = await task.promise;
