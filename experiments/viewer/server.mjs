@@ -38,6 +38,7 @@ const files = new Map([
   ["/", ["index.html", "text/html; charset=utf-8"]],
   ["/viewer", ["index.html", "text/html; charset=utf-8"]],
   ["/viewer.mjs", ["viewer.mjs", "text/javascript; charset=utf-8"]],
+  ["/bounded_reader.mjs", ["bounded_reader.mjs", "text/javascript; charset=utf-8"]],
   ["/viewer.css", ["viewer.css", "text/css; charset=utf-8"]],
   ["/vendor/pdf.mjs", ["node_modules/pdfjs-dist/build/pdf.mjs", "text/javascript; charset=utf-8"]],
   ["/vendor/pdf.worker.mjs", ["node_modules/pdfjs-dist/build/pdf.worker.mjs", "text/javascript; charset=utf-8"]]
