@@ -144,13 +144,13 @@ for (const [id, delta] of [["previous", -1], ["next", 1]]) {
 for (const [id, factor] of [["zoom-in", 1.25], ["zoom-out", .8]]) {
   byId(id).addEventListener("click", async () => {
     if (state.rendering || !state.document) return;
-    state.zoom = Math.min(2, Ma// Tested separately with controlled ReadableStreams in Playwright.
-// Fixture cap is 10 MiB, NOT an accepted production document budget.
- finally {
-    parts.length=0;
-    reader.releaseLock();
-  }
+    state.zoom = Math.min(2, Math.max(.5, state.zoom * factor));
+    await render();
+  });
 }
+
+// Tested separately with controlled ReadableStreams in Playwright.
+// Fixture cap is 10 MiB, NOT an accepted production document budget.
 
 async function open() {
   try {
