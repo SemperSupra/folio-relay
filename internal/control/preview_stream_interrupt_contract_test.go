@@ -8,6 +8,8 @@ import (
   "errors"
   "io"
   "testing"
+  "sync/atomic"
+  "time"
 )
 
 type cancellingAfterWrite struct {
@@ -83,5 +85,57 @@ func TestPreviewStreamExpiredContextHasNoSourceOrGuardActivity(t *testing.T) {
   if !errors.Is(err,context.Canceled) || reader.calls!=0 || allowed!=0 {
     t.Fatalf("cancelled context unexpectedly read or authorized: %v %d %d",
       err,reader.calls,allowed)
+  }
+}
+
+// This test is deliberately explicit about the in-flight Write limitation:
+// no Go callback can retract bytes that a blocked writer has already accepted.
+// However, a revoked record must not receive the NEXT chunk after it unblocks.
+type syntheticBlockedPreviewWriter struct {
+  started chan struct{}
+  release chan struct{}
+  writes atomic.Int64
+  bytes atomic.Int64
+}
+func (w *syntheticBlockedPreviewWriter) Write(p []byte) (int,error) {
+  if w.writes.Add(1)==1 {
+    w.bytes.Add(int64(len(p)))
+    close(w.started)
+    <-w.release
+  } else {
+    w.bytes.Add(int64(len(p)))
+  }
+  return len(p),nil
+}
+func TestPreviewBlockedWriterRevocationStopsNextChunk(t *testing.T) {
+  writer:=&syntheticBlockedPreviewWriter{started:make(chan struct{}),release:make(chan struct{})}
+  allowed:=&atomic.Bool{}
+  allowed.Store(true)
+  var guards atomic.Int64
+  result:=make(chan error,1)
+  go func() {
+    result<-copyPreviewWithCurrentAccess(context.Background(),writer,
+      bytes.NewReader(bytes.Repeat([]byte("P"),5*previewDeliveryChunkBytes+9)),
+      func()bool {guards.Add(1);return allowed.Load()})
+  }()
+  select {
+  case <-writer.started:
+  case <-time.After(3*time.Second):
+    close(writer.release)
+    t.Fatal("first chunk never entered blocked Write")
+  }
+  // Revocation happens while the first Write is in-flight, after its guard.
+  // This doesn't prove remote network cancellation or distributed stop timing.
+  allowed.Store(false)
+  close(writer.release)
+  select {
+  case err:=<-result:
+    if err==nil || writer.writes.Load()!=1 ||
+        writer.bytes.Load()!=previewDeliveryChunkBytes || guards.Load()!=2 {
+      t.Fatalf("revocation emitted further chunks: err=%v writes=%d bytes=%d guards=%d",
+        err,writer.writes.Load(),writer.bytes.Load(),guards.Load())
+    }
+  case <-time.After(3*time.Second):
+    t.Fatal("blocked preview stream did not terminate after release")
   }
 }
