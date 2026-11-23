@@ -107,6 +107,25 @@ def main() -> None:
             raise RuntimeError("RED: URF decoder overwrote existing destination")
         print("PASS: existing regular output rejected without mutation")
 
+    # Independent encode-path RED: failed O_EXCL must never unlink an
+    # existing output. The previous cleanup unlinked(target) unconditionally.
+    with tempfile.TemporaryDirectory(prefix="urf-encode-ownership-") as d:
+        tmp = pathlib.Path(d)
+        victim = tmp / "canonical-sentinel.txt"
+        victim.write_bytes(b"DO-NOT-DELETE-CANONICAL")
+        existing = tmp / "pre-existing.urf"
+        existing.write_bytes(b"PREEXISTING-URF-BYTES")
+        proc = run(bridge, "encode", original, existing)
+        if proc.returncode == 0 or not existing.is_file() or existing.read_bytes() != b"PREEXISTING-URF-BYTES":
+            raise RuntimeError("RED: failed encoder removed or overwrote pre-existing output")
+        print("PASS: pre-existing encoder output preserved on exclusive-open failure")
+        link = tmp / "pre-existing-link.urf"
+        link.symlink_to(victim)
+        proc = run(bridge, "encode", original, link)
+        if proc.returncode == 0 or not link.is_symlink() or victim.read_bytes() != b"DO-NOT-DELETE-CANONICAL":
+            raise RuntimeError("RED: failed encoder unlinked symlink or touched canonical victim")
+        print("PASS: pre-existing encoder symlink and its target preserved")
+
     if sha(original) != source_digest:
         raise RuntimeError("canonical fixture was modified")
     print("PASS: original fixture unchanged sha256=" + source_digest)
