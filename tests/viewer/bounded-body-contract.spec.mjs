@@ -93,3 +93,42 @@ test("exact declared size succeeds; short advertised size fails",async({page})=>
   });
   expect(result).toEqual({length:32,correct:true,mismatchDenied:true});
 });
+
+// Hostile slow-origin oracle: a response can be within its size budget yet
+// never send EOF. This is a synthetic 75ms read contract, not a product SLA.
+test("stalled stream after first chunk is cancelled at read deadline",async({page})=>{
+  await page.goto("/");
+  const result=await page.evaluate(async()=>{
+    const {readBoundedSyntheticPDF}=await import("/bounded_reader.mjs");
+    let cancels=0,denied=false;
+    const body=new ReadableStream({
+      start(controller){controller.enqueue(new Uint8Array(64).fill(0x50));},
+      cancel(){cancels++;}
+    },{highWaterMark:0});
+    try{await readBoundedSyntheticPDF(new Response(body),{readDeadlineMs:75});}
+    catch{denied=true;}
+    return {cancels,denied};
+  });
+  expect(result).toEqual({cancels:1,denied:true});
+});
+
+test("invalid deadline refuses body before first stream pull",async({page})=>{
+  await page.goto("/");
+  const result=await page.evaluate(async()=>{
+    const {readBoundedSyntheticPDF}=await import("/bounded_reader.mjs");
+    const outcomes=[];
+    for(const deadline of [0,-1,30001,1.5]){
+      let pulls=0,cancels=0,denied=false;
+      const body=new ReadableStream({
+        pull(controller){pulls++;controller.enqueue(new Uint8Array(64));},
+        cancel(){cancels++;}
+      },{highWaterMark:0});
+      try{await readBoundedSyntheticPDF(new Response(body),{readDeadlineMs:deadline});}
+      catch{denied=true;}
+      outcomes.push({pulls,cancels,denied});
+    }
+    return outcomes;
+  });
+  expect(result).toHaveLength(4);
+  for(const resultItem of result)expect(resultItem).toEqual({pulls:0,cancels:1,denied:true});
+});
