@@ -139,7 +139,13 @@ func NewPDFPreviewHandler(
         // Midstream revocation cannot recall already transmitted bytes, but
         // this bounded loop checks fresh ACL and stop state before each chunk.
         // An external source of linearizable revocation is still REQUIRED.
-        _=copyPreviewWithCurrentAccess(ctx,w,snap,guard)
+        if err:=copyPreviewWithCurrentAccess(ctx,w,snap,guard);err!=nil {
+            // The 200 and declared length are already on the wire. Returning
+            // silently would misrepresent a partial send as handler success.
+            // Abort the HTTP exchange; clients must still verify complete
+            // length/hash. Runtime actor+record audit is an independent gate.
+            panic(http.ErrAbortHandler)
+        }
     }),nil
 }
 
