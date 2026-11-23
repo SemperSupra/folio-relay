@@ -34,7 +34,7 @@ static int encode(const char *source, const char *target) {
   cups_raster_t *out = NULL;
   unsigned width=0,height=0,maxval=0;
   unsigned char *line=NULL;
-  int fd=-1, result=1, separator;
+  int fd=-1, created=0, result=1, separator;
   if (!in || !media) { fprintf(stderr,"missing PGM/media\n"); goto done; }
   if (fscanf(in, "P5 %u %u %u", &width, &height, &maxval)!=3) {
     fprintf(stderr,"invalid PGM header\n"); goto done;
@@ -55,8 +55,11 @@ static int encode(const char *source, const char *target) {
     goto done;
   }
   header.cupsInteger[CUPS_RASTER_PWG_TotalPageCount]=1;
-  fd=open(target,O_WRONLY|O_CREAT|O_EXCL,0600);
+  fd=open(target,O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW,0600);
+  // Only clean up a newly owned output, never a pre-existing destination.
+  // Production workers still require an independently isolated output root.
   if (fd<0) {perror("open URF");goto done;}
+  created=1;
   out=cupsRasterOpen(fd,CUPS_RASTER_WRITE_APPLE);
   if (!out || !cupsRasterWriteHeader2(out,&header)) {
     fprintf(stderr,"unable to encode Apple raster header\n");goto done;
@@ -76,7 +79,7 @@ done:
   if(out) cupsRasterClose(out);
   if(fd>=0) close(fd);
   if(in) fclose(in);
-  if(result) unlink(target);
+  if(result && created) unlink(target);
   return result;
 }
 
