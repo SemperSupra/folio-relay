@@ -2,7 +2,9 @@
 // Hard bounds and no redirects are independent of real #96 actor authorization.
 export const syntheticPDFMaxBytes = 10 * 1024 * 1024;
 
-export async function readBoundedSyntheticPDF(response) {
+export const syntheticReadDeadlineMs = 30_000;
+
+export async function readBoundedSyntheticPDF(response, { readDeadlineMs = syntheticReadDeadlineMs } = {}) {
   const declared = response.headers.get("Content-Length");
   const rejectBody = async () => {
     if (response.body) {
@@ -17,13 +19,24 @@ export async function readBoundedSyntheticPDF(response) {
       throw new Error("invalid or oversized declared fixture");
     }
   }
+  if (!Number.isSafeInteger(readDeadlineMs) || readDeadlineMs < 1 || readDeadlineMs > syntheticReadDeadlineMs) {
+    await rejectBody();
+    throw new Error("invalid synthetic stream timeout");
+  }
   const reader = response.body?.getReader();
   if (!reader) throw new Error("missing response stream");
   const parts = [];
   let total = 0;
+  let timer;
+  // A total read deadline prevents a server that never finishes sending the
+  // body from retaining an open viewer indefinitely. Cancel a pending read
+  // and release the reader on every failure; no authorization is derived here.
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error("synthetic stream timed out")), readDeadlineMs);
+  });
   try {
     for (;;) {
-      const { done, value } = await reader.read();
+      const { done, value } = await Promise.race([reader.read(), deadline]);
       if (done) break;
       if (!(value instanceof Uint8Array)) throw new Error("invalid PDF chunk");
       total += value.byteLength;
@@ -43,6 +56,7 @@ export async function readBoundedSyntheticPDF(response) {
     try { await reader.cancel(); } catch { /* fail closed */ }
     throw err;
   } finally {
+    clearTimeout(timer);
     parts.length = 0;
     reader.releaseLock();
   }
