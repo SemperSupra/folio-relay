@@ -68,7 +68,7 @@ func scopedArtifactDisposition(scope ScopedArtifactRead, name string) (string, e
     kind:="inline"
     if scope==ScopedArtifactOriginal {kind="attachment"}
     value:=mime.FormatMediaType(kind,map[string]string{"filename":name})
-    if value=="" || strings.ContainsAny(value,"\\r\\n") {return "",errors.New("invalid artifact filename encoding")}
+    if value=="" || strings.ContainsAny(value,"\r\n") {return "",errors.New("invalid artifact filename encoding")}
     return value,nil
 }
 
@@ -158,9 +158,9 @@ func newScopedArtifactReadHandler(
         }
         // URF conversion is a *different* admitted derivative worker, not a
         // license to serve raw image/urf as an inline PDF.
-        if (scope==ScopedArtifactPreview && record.MediaType!="application/pdf") ||
-            (scope==ScopedArtifactOriginal && (record.MediaType=="" ||
-                strings.ContainsAny(record.MediaType,"\\r\\n"))) {
+        parsedType,_,mediaErr:=mime.ParseMediaType(record.MediaType)
+        if mediaErr!=nil || parsedType=="" ||
+            (scope==ScopedArtifactPreview && record.MediaType!="application/pdf") {
             writeError(w,http.StatusUnsupportedMediaType,code("format_unsupported"),unavailable)
             return
         }
@@ -204,7 +204,7 @@ func newScopedArtifactReadHandler(
             return
         }
         contentType:="application/pdf"
-        if scope==ScopedArtifactOriginal {contentType=record.MediaType}
+        if scope==ScopedArtifactOriginal {contentType=parsedType}
         w.Header().Set("Content-Type",contentType)
         w.Header().Set("Content-Disposition",disposition)
         w.Header().Set("Content-Length",strconv.FormatInt(snap.Size(),10))
