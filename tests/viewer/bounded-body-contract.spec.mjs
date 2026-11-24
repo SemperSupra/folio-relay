@@ -132,3 +132,37 @@ test("invalid deadline refuses body before first stream pull",async({page})=>{
   expect(result).toHaveLength(4);
   for(const resultItem of result)expect(resultItem).toEqual({pulls:0,cancels:1,denied:true});
 });
+
+test("hostile cancellation promise cannot suspend denial across browser profiles",async({page})=>{
+  await page.goto("/");
+  const result=await page.evaluate(async()=>{
+    const {readBoundedSyntheticPDF}=await import("/bounded_reader.mjs");
+    let cancellations=0;
+    const body=new ReadableStream({
+      cancel(){cancellations++;return new Promise(()=>{});}
+    },{highWaterMark:0});
+    const outcome=await Promise.race([
+      readBoundedSyntheticPDF(new Response(body,{headers:{"Content-Length":"10485761"}}))
+        .then(()=>"ADMITTED",e=>e.message),
+      new Promise(resolve=>setTimeout(()=>resolve("CLEANUP_HUNG"),500))
+    ]);
+    return {outcome,cancellations};
+  });
+  expect(result).toEqual({outcome:"invalid or oversized declared fixture",cancellations:1});
+});
+
+test("empty stream chunks are rejected before clock starvation",async({page})=>{
+  await page.goto("/");
+  const result=await page.evaluate(async()=>{
+    const {readBoundedSyntheticPDF}=await import("/bounded_reader.mjs");
+    let cancels=0;
+    const stream=new ReadableStream({
+      pull(c){c.enqueue(new Uint8Array(0));},
+      cancel(){cancels++;}
+    },{highWaterMark:0});
+    const reason=await readBoundedSyntheticPDF(new Response(stream))
+      .then(()=>"ADMITTED",e=>e.message);
+    return {reason,cancels};
+  });
+  expect(result).toEqual({reason:"empty or excessive streamed fixture chunks",cancels:1});
+});
