@@ -8,6 +8,7 @@
 #include <cups/raster.h>
 #include <cups/pwg.h>
 #include <errno.h>
+#include <sys/stat.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -28,14 +29,26 @@ static int bounded(const cups_page_header2_t *h) {
 }
 
 static int encode(const char *source, const char *target) {
-  FILE *in = fopen(source, "rb");
+  FILE *in = NULL;
+  int sourcefd = -1;
+  struct stat sourceinfo;
   cups_page_header2_t header;
   pwg_media_t *media = pwgMediaForPWG("iso_a4_210x297mm");
   cups_raster_t *out = NULL;
   unsigned width=0,height=0,maxval=0;
   unsigned char *line=NULL;
   int fd=-1, created=0, result=1, separator;
-  if (!in || !media) { fprintf(stderr,"missing PGM/media\n"); goto done; }
+  // The synthetic derivative helper must not follow a final source symlink
+  // or wait indefinitely on FIFO/device input before it can inspect type.
+  sourcefd=open(source,O_RDONLY|O_NOFOLLOW|O_NONBLOCK);
+  if (sourcefd<0 || fstat(sourcefd,&sourceinfo)!=0 ||
+      !S_ISREG(sourceinfo.st_mode)) {
+    fprintf(stderr,"encode source must be a regular non-symlink file\\n");
+    goto done;
+  }
+  in=fdopen(sourcefd,"rb");
+  if (!in || !media) { fprintf(stderr,"missing PGM/media\\n"); goto done; }
+  sourcefd=-1;
   if (fscanf(in, "P5 %u %u %u", &width, &height, &maxval)!=3) {
     fprintf(stderr,"invalid PGM header\n"); goto done;
   }
@@ -79,18 +92,25 @@ done:
   if(out) cupsRasterClose(out);
   if(fd>=0) close(fd);
   if(in) fclose(in);
+  if(sourcefd>=0) close(sourcefd);
   if(result && created) unlink(target);
   return result;
 }
 
 static int decode(const char *source,const char *target) {
-  int fd=open(source,O_RDONLY);
+  int fd=open(source,O_RDONLY|O_NOFOLLOW|O_NONBLOCK);
+  struct stat sourceinfo;
   cups_raster_t *in=NULL;
   cups_page_header2_t header, extra;
   FILE *out=NULL;
   unsigned char *line=NULL;
   int outfd=-1, created=0, result=1;
   if(fd<0){perror("open URF");return result;}
+  if(fstat(fd,&sourceinfo)!=0 || !S_ISREG(sourceinfo.st_mode)) {
+    fprintf(stderr,"decode source must be a regular non-symlink file\\n");
+    close(fd);
+    return result;
+  }
   // The upstream reader accepts some alternate header variants. This source
   // preview profile admits ONLY exact seven-byte Apple "UNIRAST" magic.
   // Inspect the same open fd later passed to libcups (no pathname reopen).
