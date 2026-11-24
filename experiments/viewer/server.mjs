@@ -38,6 +38,7 @@ const files = new Map([
   ["/", ["index.html", "text/html; charset=utf-8"]],
   ["/viewer", ["index.html", "text/html; charset=utf-8"]],
   ["/viewer.mjs", ["viewer.mjs", "text/javascript; charset=utf-8"]],
+  ["/bounded_reader.mjs", ["bounded_reader.mjs", "text/javascript; charset=utf-8"]],
   ["/viewer.css", ["viewer.css", "text/css; charset=utf-8"]],
   ["/vendor/pdf.mjs", ["node_modules/pdfjs-dist/build/pdf.mjs", "text/javascript; charset=utf-8"]],
   ["/vendor/pdf.worker.mjs", ["node_modules/pdfjs-dist/build/pdf.worker.mjs", "text/javascript; charset=utf-8"]]
@@ -59,6 +60,20 @@ http.createServer(async (req, res) => {
   const scoped = /^\/api\/v1\/jobs\/(job-[0-9a-f]{64})\/(preview|artifact)$/.exec(pathname);
   if (scoped) {
     const id = scoped[1];
+    // Synthetic-only hostile body admission oracles; no real custody.
+    if (id === "job-" + "e".repeat(64) && scoped[2] === "preview") {
+      res.writeHead(200, {"Content-Type":"application/pdf",
+        "Content-Length":String(10 * 1024 * 1024 + 1), ...headers});
+      res.end("%PDF-1.7\nTOO SHORT\n");
+      return;
+    }
+    if (id === "job-" + "8".repeat(64) && scoped[2] === "preview") {
+      res.writeHead(200, {"Content-Type":"application/pdf", ...headers});
+      // Node emits chunked transfer encoding because no Content-Length exists.
+      res.write(Buffer.alloc(10 * 1024 * 1024, 0x50));
+      res.end(Buffer.from([0x50]));
+      return;
+    }
     // Fake-source-only redirect, never backed by a real document or actor.
     // The browser fetch must reject this 302 without third-party egress.
     if (id === "job-" + "f".repeat(64) && scoped[2] === "preview") {
