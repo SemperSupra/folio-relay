@@ -16,7 +16,7 @@ def sha(path: pathlib.Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 def run(*args: object) -> subprocess.CompletedProcess[str]:
-    return subprocess.run([str(x) for x in args], capture_output=True, text=True)
+    return subprocess.run([str(x) for x in args], capture_output=True, text=True, timeout=20)
 
 def must_reject(helper: pathlib.Path, source: pathlib.Path, dest: pathlib.Path, label: str):
     if dest.exists():
@@ -125,6 +125,38 @@ def main() -> None:
         if proc.returncode == 0 or not link.is_symlink() or victim.read_bytes() != b"DO-NOT-DELETE-CANONICAL":
             raise RuntimeError("RED: failed encoder unlinked symlink or touched canonical victim")
         print("PASS: pre-existing encoder symlink and its target preserved")
+
+    # urf-source-open-negatives: reject nonregular and symlink sources, and
+    # do not wait on an untrusted FIFO before file-type inspection.
+    with tempfile.TemporaryDirectory(prefix="urf-source-open-negatives-") as d:
+        tmp = pathlib.Path(d)
+        urf_link = tmp / "link.urf"
+        urf_link.symlink_to(valid)
+        must_reject(bridge, urf_link, tmp / "symlink-decoded.pgm", "source-URF-symlink")
+        pgm_link = tmp / "link.pgm"
+        pgm_link.symlink_to(original)
+        encoded_link = tmp / "from-symlink.urf"
+        proc = run(bridge, "encode", pgm_link, encoded_link)
+        if proc.returncode == 0 or encoded_link.exists():
+            raise RuntimeError("RED: symlink PGM source admitted by encoder")
+        print("PASS: source PGM symlink rejected")
+        fifo = tmp / "no-writer.urf"
+        import os
+        os.mkfifo(fifo, 0o600)
+        must_reject(bridge, fifo, tmp / "fifo-decoded.pgm", "source-URF-FIFO-no-writer")
+        encoded_fifo = tmp / "from-fifo.urf"
+        proc = run(bridge, "encode", fifo, encoded_fifo)
+        if proc.returncode == 0 or encoded_fifo.exists():
+            raise RuntimeError("RED: FIFO PGM source admitted or output left behind")
+        print("PASS: source PGM FIFO rejected without waiting for a writer")
+        directory = tmp / "directory-source"
+        directory.mkdir()
+        must_reject(bridge, directory, tmp / "dir-decoded.pgm", "source-URF-directory")
+        encoded_directory = tmp / "from-directory.urf"
+        proc = run(bridge, "encode", directory, encoded_directory)
+        if proc.returncode == 0 or encoded_directory.exists():
+            raise RuntimeError("RED: directory PGM source admitted by encoder")
+        print("PASS: directory sources rejected")
 
     if sha(original) != source_digest:
         raise RuntimeError("canonical fixture was modified")
