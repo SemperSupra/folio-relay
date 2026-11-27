@@ -212,11 +212,13 @@ func newScopedArtifactReadHandler(
         // Midstream revocation cannot recall already transmitted bytes, but
         // this bounded loop checks fresh ACL and stop state before each chunk.
         // An external source of linearizable revocation is still REQUIRED.
-        if err:=copyPreviewWithCurrentAccess(ctx,w,snap,guard);err!=nil {
-            // The 200 and declared length are already on the wire. Returning
-            // silently would misrepresent a partial send as handler success.
-            // Abort the HTTP exchange; clients must still verify complete
-            // length/hash. Runtime actor+record audit is an independent gate.
+        // A successful source read is not enough: count only bytes acknowledged
+        // by ResponseWriter.Write and reject a short write or premature EOF.
+        // This is still only server-side write evidence, NOT client receipt.
+        sent,deliveryErr:=copyPreviewWithCurrentAccessCount(ctx,w,snap,guard)
+        if deliveryErr!=nil || sent!=snap.Size() {
+            // HTTP 200 and a declared length may already be on the wire.
+            // The runtime must not misclassify an aborted send as success.
             panic(http.ErrAbortHandler)
         }
     }),nil
@@ -227,23 +229,43 @@ func newScopedArtifactReadHandler(
 // complete, previously hash-validated canonical bytes.
 const previewDeliveryChunkBytes = 16 << 10
 
+// copyPreviewWithCurrentAccess preserves the legacy source-only helper API.
+// Only the separately verified copyWithCount return path supports measuring
+// how many bytes ResponseWriter actually accepted before cancellation/failure.
 func copyPreviewWithCurrentAccess(ctx context.Context, writer io.Writer, source io.Reader, permitted func() bool) error {
+    _,err:=copyPreviewWithCurrentAccessCount(ctx,writer,source,permitted)
+    return err
+}
+
+// copyPreviewWithCurrentAccessCount reports bytes the writer claimed to accept.
+// It does not establish delivery to a client, provide a durable audit trail,
+// interrupt an in-flight socket Write, or enforce a distributed STOP epoch.
+// Every nonterminal/invalid writer result is an error, never implicit success.
+func copyPreviewWithCurrentAccessCount(ctx context.Context, writer io.Writer, source io.Reader, permitted func() bool) (int64,error) {
     var chunk [previewDeliveryChunkBytes]byte
     defer clear(chunk[:])
+    var accepted int64
     for {
-        if err:=ctx.Err();err!=nil{return err}
+        if err:=ctx.Err();err!=nil{return accepted,err}
         n,readErr:=source.Read(chunk[:])
+        if n<0 || n>len(chunk) {return accepted,errors.New("invalid preview source read count")}
         if n>0 {
             // A revocation during a blocking read also closes the gate.
             if ctx.Err()!=nil || !permitted() {
-                return errors.New("preview delivery revoked or unavailable")
+                return accepted,errors.New("preview delivery revoked or unavailable")
             }
             written,writeErr:=writer.Write(chunk[:n])
-            if writeErr!=nil{return writeErr}
-            if written!=n{return io.ErrShortWrite}
+            if written<0 || written>n {
+                return accepted,io.ErrShortWrite
+            }
+            // Count bytes acknowledged even if the same Write returned an
+            // error. They may already be on the wire and cannot be recalled.
+            accepted+=int64(written)
+            if writeErr!=nil{return accepted,writeErr}
+            if written!=n{return accepted,io.ErrShortWrite}
         }
-        if readErr==io.EOF{return nil}
-        if readErr!=nil{return readErr}
-        if n==0{return io.ErrNoProgress}
+        if readErr==io.EOF{return accepted,nil}
+        if readErr!=nil{return accepted,readErr}
+        if n==0{return accepted,io.ErrNoProgress}
     }
 }
