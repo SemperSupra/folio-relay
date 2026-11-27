@@ -68,7 +68,17 @@ func TestPDFPreviewDoesNotContinueAfterMidstreamAccessRevocation(t *testing.T) {
     mux.Handle("GET /api/v1/jobs/{job_id}/preview",handler)
     output:=&revokingWriter{headers:make(http.Header),revoke:func(){currentAllowed=false}}
     request:=httptest.NewRequest(http.MethodGet,"/api/v1/jobs/"+record.JobID+"/preview",nil)
-    mux.ServeHTTP(output,request)
+    // The handler now propagates a transport abort instead of discarding
+    // the stream error after writing HTTP 200. The synthetic recorder is not
+    // a net/http server and must explicitly observe the abort sentinel.
+    var aborted any
+    func() {
+        defer func(){aborted=recover()}()
+        mux.ServeHTTP(output,request)
+    }()
+    if aborted!=http.ErrAbortHandler {
+        t.Fatalf("midstream revoked handler must abort incomplete HTTP delivery, got %#v",aborted)
+    }
     if output.status!=http.StatusOK || output.chunks!=1 ||
        output.body.Len()>=len(payload) || checks<3 {
         t.Fatalf("preview must halt at first revoked chunk: status=%d chunks=%d bytes=%d total=%d ACLchecks=%d",

@@ -31,3 +31,56 @@ Run pinned Go test/race/vet/fuzz on Ubuntu/macOS/Windows, control amd64/arm64 sc
 ## Next independent reviewer baton
 
 Review this source-only alternative against its predecessor #98 for resource safety, same-UID filesystem threats, zero/100 MiB sizes, cancellation races, process memory limits and per-server vs multi-instance concurrency. Preserve exact first failures/CI receipts. Continue Go-first, $0 hosted source qualification, no cross-stack merge until owner-review and separate deployment/identity gates.
+
+## M1 read-scope parity source experiment (draft #123, not runtime admission)
+
+This document previously described the original in-memory-custody implementation.
+It did **not** mean that a shared management session authenticated the individual
+owner of a document. As of this unmerged source experiment, the **registered**
+`Server.Handler` still sends `GET /api/v1/jobs/{job_id}/artifact` through
+`s.requireAuth` (management Bearer token or management cookie). It is **not**
+equivalent to a human user's independently authenticated issuer+subject,
+per-record read authorization or globally authoritative revocation/STOP.
+
+The unregistered `internal/control/preview_gate.go` now provides two *separate*
+proposed constructors, `NewScopedPDFPreviewHandler` and
+`NewScopedOriginalDownloadHandler`, sharing the same verified snapshot,
+five-minute request context, current-record and emergency-stop checks, and
+16 KiB per-send recheck. Their caller-supplied policy receives a separate
+`ScopedArtifactPreview` or `ScopedArtifactOriginal` purpose: granting
+inline preview cannot automatically grant an original attachment download.
+Neither handler is installed into `Server.Handler`; the older
+`NewPDFPreviewHandler` remains a preview-only compatibility test wrapper and
+cannot authorize originals. No identity provider or STOP service is shipped.
+
+The original-download source experiment also rejects noncanonical media
+metadata and dangerous filenames (path separators, invalid UTF-8, control
+characters and excessive length). `mime.FormatMediaType` produces a standards-
+encoded `Content-Disposition: attachment` for quotes and multilingual names.
+It sends no canonical bytes before a completed digest/length snapshot and
+purpose/STOP rechecks. A failed midstream check or short writer results in
+`http.ErrAbortHandler`, **not** an assertion that an already-issued HTTP 200
+was fully delivered. See `internal/control/scoped_original_read_contract_test.go`
+for synthetic actor, deny/outage, cross-purpose, quoted/Thai filename,
+content-type and partial-transfer counterexamples.
+
+**Nonnegotiable remaining acceptance:**
+- A separately verified user/workload principal with issuer, subject, audience,
+  token expiry and binding to the intended document, not the shared management
+  session or a caller's asserted fields.
+- A single independently authoritative and current per-record policy/STOP
+  source for **both** installed preview and installed original-download routes,
+  with fail-closed authority outage, bounded distributed revocation latency,
+  cheap locally enforceable lease and fresh decision at each delivery chunk.
+- Honest typed transfer outcome/bytes sent at server, proxy and consumer
+  boundary, and client-verified complete length and digest. An abort cannot
+  recall previously sent bytes; a successful write does not prove receipt.
+- A reconciled client/server artifact limit (current synthetic browser 10 MiB
+  versus Go custody 100 MiB), proven memory/cgroup ceilings, backpressure and
+  resource release under blocked network writes.
+- Self-hosted pinned PDF.js worker/assets, SBOM/LICENSE/CSP, actual EN/DE/TH
+  assistive testing, adversarial PDF/URF input, virtual TrueNAS F0–F5, and a
+  **new physical owner grant** before replacing accepted H0–H4 printing images.
+
+This is a scoped-source CI milestone, **not** a reason to merge the draft stack,
+close #87/#96/#112, enable Paperless remote PATCH, or mutate the live site.
