@@ -16,7 +16,7 @@ def sha(path: pathlib.Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 def run(*args: object) -> subprocess.CompletedProcess[str]:
-    return subprocess.run([str(x) for x in args], capture_output=True, text=True)
+    return subprocess.run([str(x) for x in args], capture_output=True, text=True, timeout=20)
 
 def must_reject(helper: pathlib.Path, source: pathlib.Path, dest: pathlib.Path, label: str):
     if dest.exists():
@@ -106,6 +106,98 @@ def main() -> None:
         if proc.returncode == 0 or existing.read_bytes() != b"EXISTING-DATA-RETAINED":
             raise RuntimeError("RED: URF decoder overwrote existing destination")
         print("PASS: existing regular output rejected without mutation")
+
+    # Independent encode-path RED: failed O_EXCL must never unlink an
+    # existing output. The previous cleanup unlinked(target) unconditionally.
+    with tempfile.TemporaryDirectory(prefix="urf-encode-ownership-") as d:
+        tmp = pathlib.Path(d)
+        victim = tmp / "canonical-sentinel.txt"
+        victim.write_bytes(b"DO-NOT-DELETE-CANONICAL")
+        existing = tmp / "pre-existing.urf"
+        existing.write_bytes(b"PREEXISTING-URF-BYTES")
+        proc = run(bridge, "encode", original, existing)
+        if proc.returncode == 0 or not existing.is_file() or existing.read_bytes() != b"PREEXISTING-URF-BYTES":
+            raise RuntimeError("RED: failed encoder removed or overwrote pre-existing output")
+        print("PASS: pre-existing encoder output preserved on exclusive-open failure")
+        link = tmp / "pre-existing-link.urf"
+        link.symlink_to(victim)
+        proc = run(bridge, "encode", original, link)
+        if proc.returncode == 0 or not link.is_symlink() or victim.read_bytes() != b"DO-NOT-DELETE-CANONICAL":
+            raise RuntimeError("RED: failed encoder unlinked symlink or touched canonical victim")
+        print("PASS: pre-existing encoder symlink and its target preserved")
+
+    # urf-source-open-negatives: reject nonregular and symlink sources, and
+    # do not wait on an untrusted FIFO before file-type inspection.
+    with tempfile.TemporaryDirectory(prefix="urf-source-open-negatives-") as d:
+        tmp = pathlib.Path(d)
+        urf_link = tmp / "link.urf"
+        urf_link.symlink_to(valid)
+        must_reject(bridge, urf_link, tmp / "symlink-decoded.pgm", "source-URF-symlink")
+        pgm_link = tmp / "link.pgm"
+        pgm_link.symlink_to(original)
+        encoded_link = tmp / "from-symlink.urf"
+        proc = run(bridge, "encode", pgm_link, encoded_link)
+        if proc.returncode == 0 or encoded_link.exists():
+            raise RuntimeError("RED: symlink PGM source admitted by encoder")
+        print("PASS: source PGM symlink rejected")
+        fifo = tmp / "no-writer.urf"
+        import os
+        os.mkfifo(fifo, 0o600)
+        must_reject(bridge, fifo, tmp / "fifo-decoded.pgm", "source-URF-FIFO-no-writer")
+        encoded_fifo = tmp / "from-fifo.urf"
+        proc = run(bridge, "encode", fifo, encoded_fifo)
+        if proc.returncode == 0 or encoded_fifo.exists():
+            raise RuntimeError("RED: FIFO PGM source admitted or output left behind")
+        print("PASS: source PGM FIFO rejected without waiting for a writer")
+        directory = tmp / "directory-source"
+        directory.mkdir()
+        must_reject(bridge, directory, tmp / "dir-decoded.pgm", "source-URF-directory")
+        encoded_directory = tmp / "from-directory.urf"
+        proc = run(bridge, "encode", directory, encoded_directory)
+        if proc.returncode == 0 or encoded_directory.exists():
+            raise RuntimeError("RED: directory PGM source admitted by encoder")
+        print("PASS: directory sources rejected")
+
+    # urf-output-parent-negative: output paths must not escape through a
+    # symlinked intermediate component or use shared writable directories.
+    # All fixtures are disposable; this is NOT same-UID hostile-rename proof.
+    with tempfile.TemporaryDirectory(prefix="urf-output-parent-negative-") as d:
+        tmp = pathlib.Path(d)
+        owned = tmp / "owned"
+        owned.mkdir(mode=0o700)
+        indirect = tmp / "symlink-parent"
+        indirect.symlink_to(owned, target_is_directory=True)
+        shared = tmp / "world-writable"
+        shared.mkdir()
+        import os
+        os.chmod(shared, 0o777)
+
+        for operation, source, extension in (
+            ("encode", original, "urf"),
+            ("decode", valid, "pgm"),
+        ):
+            for label, destination in (
+                ("symlink-parent", indirect / f"new-{operation}.{extension}"),
+                ("shared-parent", shared / f"new-{operation}.{extension}"),
+                ("dotdot-parent", owned / ".." / f"new-{operation}.{extension}"),
+            ):
+                proc = run(bridge, operation, source, destination)
+                if proc.returncode == 0 or destination.exists():
+                    raise RuntimeError(
+                        f"RED: {operation} followed non-private output path {label}: {proc.stderr}"
+                    )
+                print(f"PASS: {operation} {label} output refused")
+
+        # Positive control proves private descriptor-bound output still works.
+        positive = owned / "owned-output.urf"
+        proc = run(bridge, "encode", original, positive)
+        if proc.returncode or not positive.is_file():
+            raise RuntimeError("private output encode was incorrectly rejected: " + proc.stderr)
+        decoded_owned = owned / "owned-output.pgm"
+        proc = run(bridge, "decode", positive, decoded_owned)
+        if proc.returncode or decoded_owned.read_bytes() != original.read_bytes():
+            raise RuntimeError("private output roundtrip was incorrectly rejected: " + proc.stderr)
+        print("PASS: no-follow private output directory roundtrip and source SHA preserved")
 
     if sha(original) != source_digest:
         raise RuntimeError("canonical fixture was modified")
