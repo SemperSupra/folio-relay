@@ -158,6 +158,47 @@ def main() -> None:
             raise RuntimeError("RED: directory PGM source admitted by encoder")
         print("PASS: directory sources rejected")
 
+    # urf-output-parent-negative: output paths must not escape through a
+    # symlinked intermediate component or use shared writable directories.
+    # All fixtures are disposable; this is NOT same-UID hostile-rename proof.
+    with tempfile.TemporaryDirectory(prefix="urf-output-parent-negative-") as d:
+        tmp = pathlib.Path(d)
+        owned = tmp / "owned"
+        owned.mkdir(mode=0o700)
+        indirect = tmp / "symlink-parent"
+        indirect.symlink_to(owned, target_is_directory=True)
+        shared = tmp / "world-writable"
+        shared.mkdir()
+        import os
+        os.chmod(shared, 0o777)
+
+        for operation, source, extension in (
+            ("encode", original, "urf"),
+            ("decode", valid, "pgm"),
+        ):
+            for label, destination in (
+                ("symlink-parent", indirect / f"new-{operation}.{extension}"),
+                ("shared-parent", shared / f"new-{operation}.{extension}"),
+                ("dotdot-parent", owned / ".." / f"new-{operation}.{extension}"),
+            ):
+                proc = run(bridge, operation, source, destination)
+                if proc.returncode == 0 or destination.exists():
+                    raise RuntimeError(
+                        f"RED: {operation} followed non-private output path {label}: {proc.stderr}"
+                    )
+                print(f"PASS: {operation} {label} output refused")
+
+        # Positive control proves private descriptor-bound output still works.
+        positive = owned / "owned-output.urf"
+        proc = run(bridge, "encode", original, positive)
+        if proc.returncode or not positive.is_file():
+            raise RuntimeError("private output encode was incorrectly rejected: " + proc.stderr)
+        decoded_owned = owned / "owned-output.pgm"
+        proc = run(bridge, "decode", positive, decoded_owned)
+        if proc.returncode or decoded_owned.read_bytes() != original.read_bytes():
+            raise RuntimeError("private output roundtrip was incorrectly rejected: " + proc.stderr)
+        print("PASS: no-follow private output directory roundtrip and source SHA preserved")
+
     if sha(original) != source_digest:
         raise RuntimeError("canonical fixture was modified")
     print("PASS: original fixture unchanged sha256=" + source_digest)
