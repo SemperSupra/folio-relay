@@ -28,6 +28,60 @@ static int bounded(const cups_page_header2_t *h) {
     h->cupsColorSpace == CUPS_CSPACE_SW;
 }
 
+// SOURCE-ONLY improvement: an output parent must be a non-symlink directory
+// reached through descriptor-relative, no-follow traversal and privately
+// writable by this UID. This does not establish a protected process identity
+// or defend against another same-UID actor inside that private directory.
+static int private_output_parent(const char *target, const char **leaf) {
+  if(!target || !*target) return -1;
+  const char *slash=strrchr(target,'/');
+  const char *base=slash?slash+1:target;
+  if(!*base || !strcmp(base,".") || !strcmp(base,"..")) return -1;
+  int dirfd=open(target[0]=='/'?"/":".",O_RDONLY|O_DIRECTORY|O_NOFOLLOW);
+  if(dirfd<0) return -1;
+  if(slash) {
+    char *path=strndup(target,(size_t)(slash-target));
+    if(!path){close(dirfd);return -1;}
+    char *save=NULL;
+    char *part=strtok_r(path,"/",&save);
+    while(part) {
+      if(!strcmp(part,"..")){free(path);close(dirfd);return -1;}
+      if(strcmp(part,".")) {
+        int next=openat(dirfd,part,O_RDONLY|O_DIRECTORY|O_NOFOLLOW);
+        if(next<0){free(path);close(dirfd);return -1;}
+        close(dirfd);
+        dirfd=next;
+      }
+      part=strtok_r(NULL,"/",&save);
+    }
+    free(path);
+  }
+  struct stat st;
+  if(fstat(dirfd,&st)!=0 || !S_ISDIR(st.st_mode) ||
+     st.st_uid!=geteuid() || (st.st_mode&(S_IRWXG|S_IRWXO))!=0 ||
+     (st.st_mode&(S_IWUSR|S_IXUSR))!=(S_IWUSR|S_IXUSR)){
+    close(dirfd);
+    return -1;
+  }
+  *leaf=base;
+  return dirfd;
+}
+
+// Unlink by pinned directory descriptor only if the pathname still refers to
+// the inode we created. This check is not an atomic compare-and-unlink and
+// cannot secure a hostile same-UID collaborator; production requires an
+// independent private worker/staging directory and publication protocol.
+static void discard_partial_if_owned(int parentfd,const char *leaf,
+                                     const struct stat *created_stat,int created){
+  if(!created || parentfd<0 || !leaf)return;
+  struct stat current;
+  if(fstatat(parentfd,leaf,&current,AT_SYMLINK_NOFOLLOW)==0 &&
+     current.st_dev==created_stat->st_dev &&
+     current.st_ino==created_stat->st_ino){
+    (void)unlinkat(parentfd,leaf,0);
+  }
+}
+
 static int encode(const char *source, const char *target) {
   FILE *in = NULL;
   int sourcefd = -1;
@@ -37,7 +91,9 @@ static int encode(const char *source, const char *target) {
   cups_raster_t *out = NULL;
   unsigned width=0,height=0,maxval=0;
   unsigned char *line=NULL;
-  int fd=-1, created=0, result=1, separator;
+  int fd=-1, parentfd=-1, created=0, result=1, separator;
+  const char *leaf=NULL;
+  struct stat owned_output={0};
   // The synthetic derivative helper must not follow a final source symlink
   // or wait indefinitely on FIFO/device input before it can inspect type.
   sourcefd=open(source,O_RDONLY|O_NOFOLLOW|O_NONBLOCK);
@@ -68,10 +124,11 @@ static int encode(const char *source, const char *target) {
     goto done;
   }
   header.cupsInteger[CUPS_RASTER_PWG_TotalPageCount]=1;
-  fd=open(target,O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW,0600);
-  // Only clean up a newly owned output, never a pre-existing destination.
-  // Production workers still require an independently isolated output root.
-  if (fd<0) {perror("open URF");goto done;}
+  parentfd=private_output_parent(target,&leaf);
+  if(parentfd<0){fprintf(stderr,"unsafe encode output directory\n");goto done;}
+  fd=openat(parentfd,leaf,O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW,0600);
+  if(fd<0){perror("exclusive URF output");goto done;}
+  if(fstat(fd,&owned_output)!=0){perror("stat owned URF");goto done;}
   created=1;
   out=cupsRasterOpen(fd,CUPS_RASTER_WRITE_APPLE);
   if (!out || !cupsRasterWriteHeader2(out,&header)) {
@@ -93,7 +150,8 @@ done:
   if(fd>=0) close(fd);
   if(in) fclose(in);
   if(sourcefd>=0) close(sourcefd);
-  if(result && created) unlink(target);
+  if(result)discard_partial_if_owned(parentfd,leaf,&owned_output,created);
+  if(parentfd>=0)close(parentfd);
   return result;
 }
 
@@ -104,7 +162,9 @@ static int decode(const char *source,const char *target) {
   cups_page_header2_t header, extra;
   FILE *out=NULL;
   unsigned char *line=NULL;
-  int outfd=-1, created=0, result=1;
+  int outfd=-1, parentfd=-1, created=0, result=1;
+  const char *leaf=NULL;
+  struct stat owned_output={0};
   if(fd<0){perror("open URF");return result;}
   if(fstat(fd,&sourceinfo)!=0 || !S_ISREG(sourceinfo.st_mode)) {
     fprintf(stderr,"decode source must be a regular non-symlink file\\n");
@@ -129,8 +189,11 @@ static int decode(const char *source,const char *target) {
   // Source-only output must be newly owned: no canonical clobber, no
   // existing file overwrite, and no symlink following. Still NOT a
   // production-safe cross-directory/concurrent-writer protocol.
-  outfd=open(target,O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW,0600);
+  parentfd=private_output_parent(target,&leaf);
+  if(parentfd<0){fprintf(stderr,"unsafe decode output directory\n");goto done;}
+  outfd=openat(parentfd,leaf,O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW,0600);
   if(outfd<0){perror("exclusive preview output");goto done;}
+  if(fstat(outfd,&owned_output)!=0){perror("stat owned preview");goto done;}
   created=1;
   out=fdopen(outfd,"wb");
   if(!out){perror("fdopen preview output");goto done;}
@@ -157,7 +220,8 @@ done:
   if(outfd>=0)close(outfd);
   if(in)cupsRasterClose(in);
   close(fd);
-  if(result && created)unlink(target);
+  if(result)discard_partial_if_owned(parentfd,leaf,&owned_output,created);
+  if(parentfd>=0)close(parentfd);
   return result;
 }
 
